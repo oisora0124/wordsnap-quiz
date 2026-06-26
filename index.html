@@ -2462,29 +2462,33 @@ textarea:focus-visible {
 
 /* ---------- Quiz ---------- */
 
-/* ---------- クイズの出題設定（単語帳・範囲） ---------- */
+/* ---------- クイズの出題設定（単語帳・範囲）コンパクト ---------- */
 .quiz-setup {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 14px 16px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
 
+.quiz-setup-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .quiz-setup-field {
-  display: inline-grid;
-  gap: 0.3rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   color: var(--muted);
   font-size: 0.8rem;
   font-weight: 700;
 }
 
 .quiz-setup-field select {
-  padding: 0.55rem 0.6rem;
+  padding: 0.5rem 0.55rem;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -2492,16 +2496,67 @@ textarea:focus-visible {
   font-size: 16px;
 }
 
-.quiz-range {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--muted);
+.quiz-range-toggle {
+  padding: 0.45rem 0.8rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 0.82rem;
+  font-weight: 650;
 }
 
-.quiz-range input[type="number"] {
-  width: 4.2rem;
-  padding: 0.5rem;
+.quiz-range-toggle[aria-expanded="true"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.quiz-range-toggle::before {
+  content: "▸ ";
+}
+
+.quiz-range-toggle[aria-expanded="true"]::before {
+  content: "▾ ";
+}
+
+.quiz-setup-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.quiz-setup-check input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+
+.quiz-setup-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.quiz-range-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.quiz-range-row input[type="number"] {
+  width: 4rem;
+  padding: 0.45rem;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -2510,25 +2565,9 @@ textarea:focus-visible {
   text-align: center;
 }
 
-.quiz-setup-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--ink);
-  font-size: 0.85rem;
-  font-weight: 650;
-}
-
-.quiz-setup-check input {
-  width: 1.05rem;
-  height: 1.05rem;
-  accent-color: var(--accent);
-}
-
-.quiz-setup-count {
+.quiz-range-hint {
   color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .quiz-card {
@@ -3136,24 +3175,26 @@ accurate 正確な"
         </div>
 
         <div class="quiz-setup">
-          <label class="quiz-setup-field">
-            出題する単語帳
-            <select id="quizDeckSelect"></select>
-          </label>
-          <label class="quiz-setup-field">
-            範囲（番号）
-            <span class="quiz-range">
-              <input id="quizRangeFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
-              <span aria-hidden="true">〜</span>
-              <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
-            </span>
-          </label>
-          <label class="quiz-setup-check">
-            <input id="quizShuffle" type="checkbox" checked />
-            順番をシャッフル
-          </label>
-          <button id="quizRangeStartButton" type="button">この範囲で出題</button>
-          <span id="quizDeckCount" class="quiz-setup-count"></span>
+          <div class="quiz-setup-row">
+            <label class="quiz-setup-field">
+              <span>単語帳</span>
+              <select id="quizDeckSelect"></select>
+            </label>
+            <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false">範囲</button>
+            <label class="quiz-setup-check">
+              <input id="quizShuffle" type="checkbox" checked />
+              シャッフル
+            </label>
+            <button id="quizRangeStartButton" type="button">出題</button>
+            <span id="quizDeckCount" class="quiz-setup-count"></span>
+          </div>
+          <div id="quizRangeRow" class="quiz-range-row" hidden>
+            <span class="quiz-range-label">番号</span>
+            <input id="quizRangeFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
+            <span aria-hidden="true">〜</span>
+            <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
+            <span class="quiz-range-hint">空欄なら全部</span>
+          </div>
         </div>
 
         <div id="quizCard" class="quiz-card">
@@ -3746,6 +3787,8 @@ const elements = {
   generalReviewButton: document.querySelector("#generalReviewButton"),
   exitReviewButton: document.querySelector("#exitReviewButton"),
   quizDeckSelect: document.querySelector("#quizDeckSelect"),
+  quizRangeToggle: document.querySelector("#quizRangeToggle"),
+  quizRangeRow: document.querySelector("#quizRangeRow"),
   quizRangeFrom: document.querySelector("#quizRangeFrom"),
   quizRangeTo: document.querySelector("#quizRangeTo"),
   quizShuffle: document.querySelector("#quizShuffle"),
@@ -6556,8 +6599,10 @@ function startQuizFromRange() {
     setStatus("この単語帳には出題できる単語がありません。");
     return;
   }
-  let from = parseInt(elements.quizRangeFrom.value, 10);
-  let to = parseInt(elements.quizRangeTo.value, 10);
+  // 「範囲」を開いているときだけ番号で絞り込む。閉じている＝全範囲。
+  const useRange = elements.quizRangeRow && !elements.quizRangeRow.hidden;
+  let from = useRange ? parseInt(elements.quizRangeFrom.value, 10) : NaN;
+  let to = useRange ? parseInt(elements.quizRangeTo.value, 10) : NaN;
   if (Number.isNaN(from)) from = 1;
   if (Number.isNaN(to)) to = total;
   if (from > to) [from, to] = [to, from];
@@ -7482,6 +7527,18 @@ elements.generalReviewButton.addEventListener("click", startGeneralReview);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
 elements.quizDeckSelect?.addEventListener("change", updateQuizDeckCount);
+elements.quizRangeToggle?.addEventListener("click", () => {
+  const show = elements.quizRangeRow.hidden;
+  elements.quizRangeRow.hidden = !show;
+  elements.quizRangeToggle.setAttribute("aria-expanded", String(show));
+  if (show) {
+    elements.quizRangeFrom?.focus();
+  } else {
+    // 範囲を閉じたら入力をクリア（＝全範囲に戻す）
+    if (elements.quizRangeFrom) elements.quizRangeFrom.value = "";
+    if (elements.quizRangeTo) elements.quizRangeTo.value = "";
+  }
+});
 
 // 検索ボックス：単語・意味の両方向から絞り込み
 elements.wordSearchInput?.addEventListener("input", () => {
