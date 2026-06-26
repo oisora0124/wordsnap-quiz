@@ -29,9 +29,11 @@ export default async (req) => {
   const syncId = cleanSyncId(url.searchParams.get("sync"));
   if (!syncId) return json({ error: "sync id required" }, 400);
 
-  const store = getStore("wordsnap");
+  // consistency:"strong" にしないと、保存直後の読み取りが古い値を返し（保存が消えたように見える）、
+  // 競合判定(baseRev)も壊れて上書き事故が起きる。強整合にして必ず最新を読む。
+  const store = getStore({ name: "wordsnap", consistency: "strong" });
   const key = `state:${syncId}`;
-  const existing = (await store.get(key, { type: "json" })) || null;
+  const existing = (await store.get(key, { type: "json", consistency: "strong" })) || null;
   const currentRev = Number(existing?.stateRev) || 0;
 
   if (req.method === "GET") {
