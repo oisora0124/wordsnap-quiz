@@ -37,7 +37,7 @@
   --surface-3: #e9ecf6;
 
   --ink: #161a26;
-  --muted: #6b7280;
+  --muted: #5c6470;
   --line: #e5e8f0;
 
   --accent: #6366f1;
@@ -87,7 +87,7 @@
   --surface-3: #273244;
 
   --ink: #e8ebf5;
-  --muted: #98a2b8;
+  --muted: #a8b2c6;
   --line: #30394b;
 
   --accent: #818cf8;
@@ -2032,6 +2032,26 @@ textarea:focus-visible {
   color: var(--muted);
 }
 
+/* 案内付きの空状態（Step 2 など） */
+.word-list.empty-guide {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  padding: 20px 18px;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  line-height: 1.7;
+}
+
+.word-list.empty-guide p {
+  margin: 0;
+}
+
+.word-list.empty-guide strong {
+  color: var(--ink);
+}
+
 /* ---------- 保存した単語の検索 ---------- */
 .word-search {
   position: relative;
@@ -3276,7 +3296,7 @@ accurate 正確な"
               <input id="quizShuffle" type="checkbox" checked />
               シャッフル
             </label>
-            <button id="quizRangeStartButton" type="button">出題</button>
+            <button id="quizRangeStartButton" type="button">この設定で出題</button>
             <span id="quizDeckCount" class="quiz-setup-count"></span>
           </div>
           <div id="quizRangeRow" class="quiz-range-row" hidden>
@@ -3412,9 +3432,13 @@ accurate 正確な"
                   あなたの個人キー
                   <input id="syncIdInput" type="text" inputmode="latin" autocomplete="off" placeholder="自動で発行されます" readonly />
                 </label>
-                <button id="syncCopyLinkButton" type="button">個人リンクをコピー</button>
-                <button id="syncPullButton" class="secondary" type="button">今すぐ読み込む</button>
+                <button id="syncCopyLinkButton" type="button" title="このページのリンクをクリップボードにコピーします。別の端末で開くと同じデータになります。">個人リンクをコピー</button>
+                <button id="syncPullButton" class="secondary" type="button" title="サーバーから最新のデータを取得して、この端末に反映します。">今すぐ読み込む</button>
               </div>
+              <p class="settings-desc">
+                <strong>個人リンクをコピー</strong>＝このページのリンクをコピー（別端末で開くと同じデータに）。
+                <strong>今すぐ読み込む</strong>＝サーバーの最新をこの端末に取り込み。どちらも現在の単語は消えません。
+              </p>
               <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
               <details class="sync-fix">
                 <summary>端末ごとに単語が違うとき（手動で揃える）</summary>
@@ -6346,12 +6370,15 @@ async function runOcr(source) {
 }
 
 function renderCandidates() {
-  elements.candidateCount.textContent = `${candidates.length} candidates`;
+  elements.candidateCount.textContent = `候補 ${candidates.length}件`;
   elements.saveParsedButton.disabled = candidates.length === 0;
 
   if (candidates.length === 0) {
-    elements.candidateList.className = "word-list empty";
-    elements.candidateList.textContent = "候補はまだありません。";
+    elements.candidateList.className = "word-list empty empty-guide";
+    elements.candidateList.innerHTML =
+      '<p>まだ確認する単語がありません。</p>' +
+      '<p>Step 1 で文字を貼り付けるか写真から読み取り、<strong>「単語リストに変換」</strong>を押すと、ここに候補が出ます。</p>' +
+      '<button type="button" class="secondary" data-goto-step="import">Step 1（取り込む）へ</button>';
     return;
   }
 
@@ -7767,7 +7794,14 @@ elements.importJsonInput.addEventListener("change", async () => {
 elements.undoButton.addEventListener("click", performUndo);
 
 elements.clearAllButton.addEventListener("click", () => {
-  const confirmed = window.confirm("保存した単語と成績をすべて削除しますか？");
+  const count = appState.words.length;
+  if (count === 0) {
+    setStatus("削除する単語がありません。");
+    return;
+  }
+  const confirmed = window.confirm(
+    `保存した単語 ${count}語 と成績・単語帳をすべて削除します。\n本当によろしいですか？（直後なら「元に戻す」で取り消せます）`,
+  );
   if (!confirmed) return;
   const snapshot = snapshotState();
   appState = defaultState();
@@ -7776,6 +7810,12 @@ elements.clearAllButton.addEventListener("click", () => {
   saveState();
   offerUndo(snapshot);
   setStatus("保存データを削除しました。「元に戻す」で取り消せます。");
+});
+
+// 空状態などにある「Step 1 へ」等のボタンから、該当ステップへ移動する
+document.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-goto-step]");
+  if (target) setActiveStep(target.dataset.gotoStep, { scroll: true });
 });
 
 elements.themeToggle.addEventListener("click", toggleTheme);
