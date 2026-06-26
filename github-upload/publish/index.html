@@ -1683,6 +1683,101 @@ textarea:focus-visible {
   font-size: 0.78rem !important;
 }
 
+/* ---------- 設定アコーディオン（見出しタブを押すと開く） ---------- */
+.settings-accordion {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-section {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.settings-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 14px 16px;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 760;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.settings-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* 右端の開閉シェブロン */
+.settings-section > summary::after {
+  content: "";
+  margin-left: auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.settings-section[open] > summary::after {
+  transform: rotate(45deg);
+}
+
+.settings-section > summary:hover {
+  background: var(--surface-3);
+}
+
+.settings-section-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+
+.settings-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.usage-steps {
+  margin: 0;
+  padding-left: 1.3rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.75;
+}
+
+.usage-steps li {
+  margin-bottom: 0.45rem;
+}
+
+.usage-steps strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.usage-steps em {
+  color: var(--accent-text);
+  font-style: normal;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+}
+
+.usage-tip {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
 /* ---------- Settings ---------- */
 
 .settings-grid {
@@ -2462,29 +2557,33 @@ textarea:focus-visible {
 
 /* ---------- Quiz ---------- */
 
-/* ---------- クイズの出題設定（単語帳・範囲） ---------- */
+/* ---------- クイズの出題設定（単語帳・範囲）コンパクト ---------- */
 .quiz-setup {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 14px 16px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
 
+.quiz-setup-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .quiz-setup-field {
-  display: inline-grid;
-  gap: 0.3rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   color: var(--muted);
   font-size: 0.8rem;
   font-weight: 700;
 }
 
 .quiz-setup-field select {
-  padding: 0.55rem 0.6rem;
+  padding: 0.5rem 0.55rem;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -2492,16 +2591,67 @@ textarea:focus-visible {
   font-size: 16px;
 }
 
-.quiz-range {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--muted);
+.quiz-range-toggle {
+  padding: 0.45rem 0.8rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 0.82rem;
+  font-weight: 650;
 }
 
-.quiz-range input[type="number"] {
-  width: 4.2rem;
-  padding: 0.5rem;
+.quiz-range-toggle[aria-expanded="true"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.quiz-range-toggle::before {
+  content: "▸ ";
+}
+
+.quiz-range-toggle[aria-expanded="true"]::before {
+  content: "▾ ";
+}
+
+.quiz-setup-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.quiz-setup-check input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+
+.quiz-setup-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.quiz-range-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.quiz-range-row input[type="number"] {
+  width: 4rem;
+  padding: 0.45rem;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -2510,25 +2660,9 @@ textarea:focus-visible {
   text-align: center;
 }
 
-.quiz-setup-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--ink);
-  font-size: 0.85rem;
-  font-weight: 650;
-}
-
-.quiz-setup-check input {
-  width: 1.05rem;
-  height: 1.05rem;
-  accent-color: var(--accent);
-}
-
-.quiz-setup-count {
+.quiz-range-hint {
   color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .quiz-card {
@@ -2874,14 +3008,10 @@ textarea:focus-visible {
       </div>
       <section class="hero">
         <div>
-          <p class="eyebrow">Photo to vocabulary quiz</p>
           <div class="hero-title">
             <span class="brand-mark" aria-hidden="true"><span class="brand-lines"></span></span>
             <h1>WordSnap Quiz</h1>
           </div>
-          <p class="lead">
-            英単語帳の写真から単語を取り込み、意味クイズとして保存・復習できる小さな学習ツールです。
-          </p>
           <figure id="learningQuote" class="learning-quote" aria-label="学習にまつわる名言" hidden>
             <blockquote class="quote-text"></blockquote>
             <figcaption class="quote-author"></figcaption>
@@ -3136,24 +3266,26 @@ accurate 正確な"
         </div>
 
         <div class="quiz-setup">
-          <label class="quiz-setup-field">
-            出題する単語帳
-            <select id="quizDeckSelect"></select>
-          </label>
-          <label class="quiz-setup-field">
-            範囲（番号）
-            <span class="quiz-range">
-              <input id="quizRangeFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
-              <span aria-hidden="true">〜</span>
-              <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
-            </span>
-          </label>
-          <label class="quiz-setup-check">
-            <input id="quizShuffle" type="checkbox" checked />
-            順番をシャッフル
-          </label>
-          <button id="quizRangeStartButton" type="button">この範囲で出題</button>
-          <span id="quizDeckCount" class="quiz-setup-count"></span>
+          <div class="quiz-setup-row">
+            <label class="quiz-setup-field">
+              <span>単語帳</span>
+              <select id="quizDeckSelect"></select>
+            </label>
+            <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false">範囲</button>
+            <label class="quiz-setup-check">
+              <input id="quizShuffle" type="checkbox" checked />
+              シャッフル
+            </label>
+            <button id="quizRangeStartButton" type="button">出題</button>
+            <span id="quizDeckCount" class="quiz-setup-count"></span>
+          </div>
+          <div id="quizRangeRow" class="quiz-range-row" hidden>
+            <span class="quiz-range-label">番号</span>
+            <input id="quizRangeFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
+            <span aria-hidden="true">〜</span>
+            <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
+            <span class="quiz-range-hint">空欄なら全部</span>
+          </div>
         </div>
 
         <div id="quizCard" class="quiz-card">
@@ -3252,102 +3384,116 @@ accurate 正確な"
           <span class="pill subtle">この端末に保存</span>
         </div>
 
-        <div class="settings-grid">
-          <div class="sync-panel" aria-labelledby="syncTitle">
-            <div>
-              <h3 id="syncTitle">データの保存・引き継ぎ</h3>
-              <p>追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。</p>
+        <div class="settings-accordion">
+          <details class="settings-section">
+            <summary>📖 ツールの使い方</summary>
+            <div class="settings-section-body">
+              <ol class="usage-steps">
+                <li><strong>取り込む</strong>：英単語帳の写真（OCR）や、テキストの貼り付けで単語を取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。</li>
+                <li><strong>確認</strong>：取り込んだ候補をチェックして「保存」。保存先の単語帳も選べます。</li>
+                <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
+                <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲削除。<strong>JSONを書き出す</strong>でバックアップできます。</li>
+                <li><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
+              </ol>
+              <p class="usage-tip">💡 Safariで開いて「ホーム画面に追加」しておくと、データが消えにくく、ワンタップで起動できます。</p>
+            </div>
+          </details>
+
+          <details class="settings-section">
+            <summary>🔄 データの保存・引き継ぎ</summary>
+            <div class="settings-section-body" aria-labelledby="syncTitle">
+              <p id="syncTitle">追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。</p>
               <ol class="sync-steps">
                 <li><strong>ホーム画面に追加して使う</strong>：このページを「ホーム画面に追加」し、そのアイコンから開いてください。ブラウザの保存が消えても、開き直せばサーバーから自動で元に戻ります。</li>
                 <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。</li>
               </ol>
-            </div>
-            <div class="sync-controls">
-              <label class="sync-field">
-                あなたの個人キー
-                <input id="syncIdInput" type="text" inputmode="latin" autocomplete="off" placeholder="自動で発行されます" readonly />
-              </label>
-              <button id="syncCopyLinkButton" type="button">個人リンクをコピー</button>
-              <button id="syncPullButton" class="secondary" type="button">今すぐ読み込む</button>
-            </div>
-            <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
-            <details class="sync-fix">
-              <summary>端末ごとに単語が違うとき（手動で揃える）</summary>
-              <div class="sync-fix-body">
-                <p>
-                  同じ個人リンクなのに端末で内容が食い違うときは、<strong>どちらかを「正しい方」に決めて</strong>揃えます。
-                  （例：片方で削除した単語が、もう片方から戻ってきてしまう場合など）
-                </p>
-                <div class="sync-fix-actions">
-                  <button id="syncForcePushButton" class="secondary" type="button">この端末を正にする（送信）</button>
-                  <button id="syncForcePullButton" class="secondary" type="button">他の端末に合わせる（取得）</button>
-                </div>
-                <p class="sync-fix-hint">
-                  手順：①正しい端末で「この端末を正にする」を押す → ②もう一方の端末で「他の端末に合わせる」を押す。
-                  どちらも上書きなので、押す前に確認が出ます。
-                </p>
+              <div class="sync-controls">
+                <label class="sync-field">
+                  あなたの個人キー
+                  <input id="syncIdInput" type="text" inputmode="latin" autocomplete="off" placeholder="自動で発行されます" readonly />
+                </label>
+                <button id="syncCopyLinkButton" type="button">個人リンクをコピー</button>
+                <button id="syncPullButton" class="secondary" type="button">今すぐ読み込む</button>
               </div>
-            </details>
-          </div>
+              <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
+              <details class="sync-fix">
+                <summary>端末ごとに単語が違うとき（手動で揃える）</summary>
+                <div class="sync-fix-body">
+                  <p>
+                    同じ個人リンクなのに端末で内容が食い違うときは、<strong>どちらかを「正しい方」に決めて</strong>揃えます。
+                    （例：片方で削除した単語が、もう片方から戻ってきてしまう場合など）
+                  </p>
+                  <div class="sync-fix-actions">
+                    <button id="syncForcePushButton" class="secondary" type="button">この端末を正にする（送信）</button>
+                    <button id="syncForcePullButton" class="secondary" type="button">他の端末に合わせる（取得）</button>
+                  </div>
+                  <p class="sync-fix-hint">
+                    手順：①正しい端末で「この端末を正にする」を押す → ②もう一方の端末で「他の端末に合わせる」を押す。
+                    どちらも上書きなので、押す前に確認が出ます。
+                  </p>
+                </div>
+              </details>
+            </div>
+          </details>
 
-          <div class="settings-card">
-            <div>
-              <h3>音</h3>
-              <p>操作やクイズ結果に短い効果音を鳴らします。</p>
-            </div>
-            <div class="settings-row">
-              <button id="soundToggle" class="sound-toggle" type="button" aria-pressed="true">
-                <span class="sound-icon" aria-hidden="true"></span>
-                <span class="sound-toggle-text">音 ON</span>
-              </button>
-              <button id="soundTestButton" class="secondary" type="button">音を試す</button>
-            </div>
-            <label class="settings-field">
-              <span>音量 <output id="soundVolumeValue">70%</output></span>
-              <input id="soundVolumeSlider" type="range" min="0" max="100" step="5" value="70" />
-            </label>
-          </div>
-
-          <div class="settings-card">
-            <div>
-              <h3>表示</h3>
-              <p>画面テーマと、クイズ画面の補助表示を調整します。</p>
-            </div>
-            <label class="settings-field">
-              テーマ
-              <select id="themeModeSelect">
-                <option value="light">ライト</option>
-                <option value="dark">ダーク</option>
-              </select>
-            </label>
-            <label class="settings-check">
-              <input id="keyboardHintsToggle" type="checkbox" />
-              <span>クイズ画面にキーボード操作のヒントを表示する</span>
-            </label>
-          </div>
-
-          <div class="settings-card wide">
-            <div>
-              <h3>クイズ</h3>
-              <p>反復練習のテンポを調整します。自動送りをオンにすると、答えたあと少し待って次の問題へ進みます。</p>
-            </div>
-            <div class="settings-row">
-              <label class="settings-check">
-                <input id="autoNextToggle" type="checkbox" />
-                <span>答えたあと自動で次の問題へ進む</span>
-              </label>
+          <details class="settings-section">
+            <summary>🔊 音</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">操作やクイズ結果に短い効果音を鳴らします。</p>
+              <div class="settings-row">
+                <button id="soundToggle" class="sound-toggle" type="button" aria-pressed="true">
+                  <span class="sound-icon" aria-hidden="true"></span>
+                  <span class="sound-toggle-text">音 ON</span>
+                </button>
+                <button id="soundTestButton" class="secondary" type="button">音を試す</button>
+              </div>
               <label class="settings-field">
-                待ち時間
-                <select id="autoNextDelaySelect">
-                  <option value="1000">1秒</option>
-                  <option value="2000">2秒</option>
-                  <option value="3000">3秒</option>
-                  <option value="4000">4秒</option>
-                  <option value="5000">5秒</option>
+                <span>音量 <output id="soundVolumeValue">70%</output></span>
+                <input id="soundVolumeSlider" type="range" min="0" max="100" step="5" value="70" />
+              </label>
+            </div>
+          </details>
+
+          <details class="settings-section">
+            <summary>🎨 表示</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">画面テーマと、クイズ画面の補助表示を調整します。</p>
+              <label class="settings-field">
+                テーマ
+                <select id="themeModeSelect">
+                  <option value="light">ライト</option>
+                  <option value="dark">ダーク</option>
                 </select>
               </label>
+              <label class="settings-check">
+                <input id="keyboardHintsToggle" type="checkbox" />
+                <span>クイズ画面にキーボード操作のヒントを表示する</span>
+              </label>
             </div>
-          </div>
+          </details>
+
+          <details class="settings-section">
+            <summary>📝 クイズ</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">反復練習のテンポを調整します。自動送りをオンにすると、答えたあと少し待って次の問題へ進みます。</p>
+              <div class="settings-row">
+                <label class="settings-check">
+                  <input id="autoNextToggle" type="checkbox" />
+                  <span>答えたあと自動で次の問題へ進む</span>
+                </label>
+                <label class="settings-field">
+                  待ち時間
+                  <select id="autoNextDelaySelect">
+                    <option value="1000">1秒</option>
+                    <option value="2000">2秒</option>
+                    <option value="3000">3秒</option>
+                    <option value="4000">4秒</option>
+                    <option value="5000">5秒</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
     </main>
@@ -3746,6 +3892,8 @@ const elements = {
   generalReviewButton: document.querySelector("#generalReviewButton"),
   exitReviewButton: document.querySelector("#exitReviewButton"),
   quizDeckSelect: document.querySelector("#quizDeckSelect"),
+  quizRangeToggle: document.querySelector("#quizRangeToggle"),
+  quizRangeRow: document.querySelector("#quizRangeRow"),
   quizRangeFrom: document.querySelector("#quizRangeFrom"),
   quizRangeTo: document.querySelector("#quizRangeTo"),
   quizShuffle: document.querySelector("#quizShuffle"),
@@ -6556,8 +6704,10 @@ function startQuizFromRange() {
     setStatus("この単語帳には出題できる単語がありません。");
     return;
   }
-  let from = parseInt(elements.quizRangeFrom.value, 10);
-  let to = parseInt(elements.quizRangeTo.value, 10);
+  // 「範囲」を開いているときだけ番号で絞り込む。閉じている＝全範囲。
+  const useRange = elements.quizRangeRow && !elements.quizRangeRow.hidden;
+  let from = useRange ? parseInt(elements.quizRangeFrom.value, 10) : NaN;
+  let to = useRange ? parseInt(elements.quizRangeTo.value, 10) : NaN;
   if (Number.isNaN(from)) from = 1;
   if (Number.isNaN(to)) to = total;
   if (from > to) [from, to] = [to, from];
@@ -7482,6 +7632,18 @@ elements.generalReviewButton.addEventListener("click", startGeneralReview);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
 elements.quizDeckSelect?.addEventListener("change", updateQuizDeckCount);
+elements.quizRangeToggle?.addEventListener("click", () => {
+  const show = elements.quizRangeRow.hidden;
+  elements.quizRangeRow.hidden = !show;
+  elements.quizRangeToggle.setAttribute("aria-expanded", String(show));
+  if (show) {
+    elements.quizRangeFrom?.focus();
+  } else {
+    // 範囲を閉じたら入力をクリア（＝全範囲に戻す）
+    if (elements.quizRangeFrom) elements.quizRangeFrom.value = "";
+    if (elements.quizRangeTo) elements.quizRangeTo.value = "";
+  }
+});
 
 // 検索ボックス：単語・意味の両方向から絞り込み
 elements.wordSearchInput?.addEventListener("input", () => {
