@@ -1882,6 +1882,100 @@ textarea:focus-visible {
   color: var(--muted);
 }
 
+/* ---------- 保存した単語の検索 ---------- */
+.word-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 12px;
+  padding: 0 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.word-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.word-search-icon {
+  position: relative;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+}
+
+.word-search-icon::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0.72rem;
+  height: 0.72rem;
+  border: 2px solid var(--muted);
+  border-radius: 999px;
+}
+
+.word-search-icon::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0.34rem;
+  height: 2px;
+  background: var(--muted);
+  transform: rotate(45deg);
+  transform-origin: right center;
+}
+
+.word-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.7rem 0;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: none;
+  font-size: 16px;
+}
+
+.word-search input::placeholder {
+  color: var(--muted);
+}
+
+/* ブラウザ標準の検索クリアボタンは独自ボタンに統一するため隠す */
+.word-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.word-search-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.word-search-clear {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  color: var(--muted);
+  background: var(--surface-3);
+  border: 0;
+  border-radius: 999px;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.word-search-clear:hover {
+  color: var(--ink);
+  background: var(--surface-3);
+}
+
 .word-row {
   position: relative;
   overflow: hidden;
@@ -2937,6 +3031,19 @@ accurate 正確な"
           </button>
           <button id="clearSelectionButton" class="ghost mini" type="button">選択解除</button>
         </div>
+        <div class="word-search">
+          <span class="word-search-icon" aria-hidden="true"></span>
+          <input
+            id="wordSearchInput"
+            type="search"
+            inputmode="search"
+            autocomplete="off"
+            placeholder="単語・意味で検索（例: apple / りんご）"
+            aria-label="保存した単語を、単語と意味の両方から検索"
+          />
+          <span id="wordSearchCount" class="word-search-count" hidden></span>
+          <button id="wordSearchClear" class="word-search-clear" type="button" aria-label="検索をクリア" hidden>×</button>
+        </div>
         <div id="savedList" class="word-list empty">保存済みの単語はまだありません。</div>
       </section>
 
@@ -3413,6 +3520,9 @@ const elements = {
   candidateList: document.querySelector("#candidateList"),
   candidateCount: document.querySelector("#candidateCount"),
   savedList: document.querySelector("#savedList"),
+  wordSearchInput: document.querySelector("#wordSearchInput"),
+  wordSearchClear: document.querySelector("#wordSearchClear"),
+  wordSearchCount: document.querySelector("#wordSearchCount"),
   deckBar: document.querySelector("#deckBar"),
   deckStats: document.querySelector("#deckStats"),
   quizScope: document.querySelector("#quizScope"),
@@ -3775,6 +3885,7 @@ const clientId = loadClientId();
 let STORAGE_KEY = storageKeyFor(clientId);
 let appState = loadState();
 let candidates = [];
+let wordSearchQuery = "";
 let currentQuiz = null;
 let reviewSession = null;
 let quizStarted = false;
@@ -5782,14 +5893,33 @@ function renderCandidates() {
   resolveCefrBadges(elements.candidateList);
 }
 
+// 単語・意味の両方向から検索（部分一致・大文字小文字を無視）
+function wordMatchesQuery(word, needle) {
+  if (!needle) return true;
+  return (
+    word.term.toLowerCase().includes(needle) ||
+    word.meaning.toLowerCase().includes(needle)
+  );
+}
+
 function renderSavedWords() {
   elements.wordCount.textContent = appState.words.length;
-  const words = scopedWords();
+  const scoped = scopedWords();
+  const needle = wordSearchQuery.trim().toLowerCase();
+  const words = needle ? scoped.filter((word) => wordMatchesQuery(word, needle)) : scoped;
+
+  // 検索ボックスの状態（クリアボタン・件数）を更新
+  if (elements.wordSearchClear) elements.wordSearchClear.hidden = !needle;
+  if (elements.wordSearchCount) {
+    elements.wordSearchCount.hidden = !needle;
+    if (needle) elements.wordSearchCount.textContent = `${words.length}件`;
+  }
 
   if (words.length === 0) {
     elements.savedList.className = "word-list empty";
-    elements.savedList.textContent =
-      appState.words.length === 0
+    elements.savedList.textContent = needle
+      ? `「${wordSearchQuery.trim()}」に一致する単語はありません。`
+      : appState.words.length === 0
         ? "保存済みの単語はまだありません。"
         : "この単語帳にはまだ単語がありません。";
     return;
@@ -6951,8 +7081,22 @@ elements.nextQuizButton.addEventListener("click", () => {
 elements.generalReviewButton.addEventListener("click", startGeneralReview);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 
+// 検索ボックス：単語・意味の両方向から絞り込み
+elements.wordSearchInput?.addEventListener("input", () => {
+  wordSearchQuery = elements.wordSearchInput.value;
+  renderSavedWords();
+});
+elements.wordSearchClear?.addEventListener("click", () => {
+  wordSearchQuery = "";
+  elements.wordSearchInput.value = "";
+  renderSavedWords();
+  elements.wordSearchInput.focus();
+});
+
 elements.selectAllCheckbox.addEventListener("change", () => {
-  const scoped = scopedWords();
+  // 検索中は「表示されている（絞り込み後の）単語」だけを対象にする
+  const needle = wordSearchQuery.trim().toLowerCase();
+  const scoped = scopedWords().filter((word) => wordMatchesQuery(word, needle));
   if (elements.selectAllCheckbox.checked) {
     scoped.forEach((word) => selectedIds.add(word.id));
   } else {
