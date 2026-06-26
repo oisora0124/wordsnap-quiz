@@ -1628,6 +1628,61 @@ textarea:focus-visible {
   font-weight: 700;
 }
 
+/* ---------- 端末がずれたときの手動修復 ---------- */
+.sync-fix {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.sync-fix > summary {
+  color: var(--accent-text);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.sync-fix > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sync-fix > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+
+.sync-fix[open] > summary::before {
+  content: "▾ ";
+}
+
+.sync-fix-body {
+  margin-top: 10px;
+}
+
+.sync-fix-body p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.sync-fix-body strong {
+  color: var(--ink);
+}
+
+.sync-fix-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sync-fix-hint {
+  font-size: 0.78rem !important;
+}
+
 /* ---------- Settings ---------- */
 
 .settings-grid {
@@ -3126,6 +3181,23 @@ accurate 正確な"
               <button id="syncPullButton" class="secondary" type="button">今すぐ読み込む</button>
             </div>
             <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
+            <details class="sync-fix">
+              <summary>端末ごとに単語が違うとき（手動で揃える）</summary>
+              <div class="sync-fix-body">
+                <p>
+                  同じ個人リンクなのに端末で内容が食い違うときは、<strong>どちらかを「正しい方」に決めて</strong>揃えます。
+                  （例：片方で削除した単語が、もう片方から戻ってきてしまう場合など）
+                </p>
+                <div class="sync-fix-actions">
+                  <button id="syncForcePushButton" class="secondary" type="button">この端末を正にする（送信）</button>
+                  <button id="syncForcePullButton" class="secondary" type="button">他の端末に合わせる（取得）</button>
+                </div>
+                <p class="sync-fix-hint">
+                  手順：①正しい端末で「この端末を正にする」を押す → ②もう一方の端末で「他の端末に合わせる」を押す。
+                  どちらも上書きなので、押す前に確認が出ます。
+                </p>
+              </div>
+            </details>
           </div>
 
           <div class="settings-card">
@@ -3597,6 +3669,8 @@ const elements = {
   syncGenerateButton: document.querySelector("#syncGenerateButton"),
   syncCopyLinkButton: document.querySelector("#syncCopyLinkButton"),
   syncPullButton: document.querySelector("#syncPullButton"),
+  syncForcePushButton: document.querySelector("#syncForcePushButton"),
+  syncForcePullButton: document.querySelector("#syncForcePullButton"),
   syncBadge: document.querySelector("#syncBadge"),
   syncBadgeText: document.querySelector("#syncBadge .sync-badge-text"),
   syncStatus: document.querySelector("#syncStatus"),
@@ -4582,6 +4656,68 @@ async function pullWordsnapState(options = {}) {
   }
 }
 
+// 【この端末を正にする】端末の内容でサーバーを丸ごと上書き（baseRev無し＝無条件上書き）。
+// 端末ごとに内容が食い違ったとき、正しい方の端末から実行する。
+async function forcePushOverwrite() {
+  if (!syncState.id || !syncServerAvailable()) {
+    setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
+    return;
+  }
+  const ok = window.confirm(
+    `この端末の単語（${appState.words.length}語）で、サーバーと他の端末の内容を上書きします。\n` +
+      "他の端末は次に「他の端末に合わせる」を押すとこの内容になります。よろしいですか？",
+  );
+  if (!ok) return;
+  setSyncBusy(true);
+  setSyncStatus("この端末の内容でサーバーを上書きしています…");
+  try {
+    const result = await syncRequest("PUT", { state: appState }); // baseRev無し＝強制上書き
+    syncState.rev = Number(result.stateRev) || syncState.rev;
+    syncState.connected = true;
+    setSyncStatus("✓ この端末の内容でサーバーを更新しました。他の端末で「他の端末に合わせる」を押してください。", "live");
+  } catch (error) {
+    syncState.connected = false;
+    setSyncStatus(error.message || "上書きに失敗しました。", "error");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+// 【他の端末に合わせる】サーバーの内容でこの端末を丸ごと置き換え（マージせず置換）。
+// 通常の同期はマージ（合算）なので削除が伝わらないが、これは置換なので確実に揃う。
+async function forcePullReplace() {
+  if (!syncState.id || !syncServerAvailable()) {
+    setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
+    return;
+  }
+  const ok = window.confirm(
+    "サーバー（他の端末で『正にする』を押した内容）で、この端末の単語をすべて置き換えます。\n" +
+      "この端末だけにある変更は消えます。よろしいですか？",
+  );
+  if (!ok) return;
+  setSyncBusy(true);
+  setSyncStatus("サーバーの内容で置き換えています…");
+  try {
+    const remote = await syncRequest("GET");
+    syncState.rev = Number(remote.stateRev) || syncState.rev;
+    syncState.connected = true;
+    // applyingRemote 中の persist は再プッシュしない（サーバー内容をそのまま採用するため）
+    syncState.applyingRemote = true;
+    appState = normalizeState(remote.state || defaultState());
+    currentQuiz = null;
+    selectedIds.clear();
+    persistAppState();
+    syncState.applyingRemote = false;
+    renderAll();
+    setSyncStatus(`✓ サーバーの内容に置き換えました（${appState.words.length}語）。`, "live");
+  } catch (error) {
+    syncState.connected = false;
+    setSyncStatus(error.message || "置き換えに失敗しました。", "error");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
 // 推測されにくいランダムな個人キー（約110ビット）を発行する。
 // これがその人専用のサーバー保管場所の名前になる＝他人と混ざらない。
 function generatePrivateKey() {
@@ -4647,6 +4783,8 @@ function initWordsnapSync() {
     setSyncStatus(`同期ID「${id}」を発行しました。「同期を開始」を押し、別の端末でも同じIDを入力してください。`);
   });
   elements.syncPullButton?.addEventListener("click", () => pullWordsnapState());
+  elements.syncForcePushButton?.addEventListener("click", () => forcePushOverwrite());
+  elements.syncForcePullButton?.addEventListener("click", () => forcePullReplace());
   elements.syncCopyLinkButton?.addEventListener("click", async () => {
     rememberSyncIdInUrl(syncState.id);
     try {
