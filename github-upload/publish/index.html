@@ -4363,9 +4363,17 @@ function initWordsnapSync() {
     elements.syncPullButton.disabled = !id;
     syncState.connected = false;
   });
-  window.addEventListener("focus", () => {
+  // 別端末の変更を素早く取り込むため、アプリに戻ってきたタイミングで毎回サーバーから読む。
+  // モバイルでは window の focus が発火しないことがあるので、visibilitychange / pageshow も使う。
+  const pullIfConnected = () => {
     if (syncState.connected) pullWordsnapState({ silent: true });
+  };
+  window.addEventListener("focus", pullIfConnected);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) pullIfConnected();
   });
+  window.addEventListener("pageshow", pullIfConnected);
+  window.addEventListener("online", pullIfConnected);
 
   if (!syncServerAvailable()) {
     setSyncStatus("ファイルを直接開いているため、サーバー保存は使えません。https のリンクから開くと自動で保存されます。");
