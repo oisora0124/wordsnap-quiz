@@ -1976,6 +1976,43 @@ textarea:focus-visible {
   background: var(--surface-3);
 }
 
+/* ---------- 番号で範囲削除 ---------- */
+.range-delete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.range-delete-label {
+  flex: none;
+}
+
+.range-delete input[type="number"] {
+  width: 4.5rem;
+  padding: 0.45rem 0.5rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 16px;
+  text-align: center;
+}
+
+.range-delete input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.range-delete-dash {
+  flex: none;
+}
+
 .word-row {
   position: relative;
   overflow: hidden;
@@ -3044,6 +3081,13 @@ accurate 正確な"
           <span id="wordSearchCount" class="word-search-count" hidden></span>
           <button id="wordSearchClear" class="word-search-clear" type="button" aria-label="検索をクリア" hidden>×</button>
         </div>
+        <div class="range-delete">
+          <span class="range-delete-label">番号で範囲削除</span>
+          <input id="rangeDeleteFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="削除する開始番号" />
+          <span class="range-delete-dash" aria-hidden="true">〜</span>
+          <input id="rangeDeleteTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="削除する終了番号" />
+          <button id="rangeDeleteButton" class="ghost mini danger" type="button">削除</button>
+        </div>
         <div id="savedList" class="word-list empty">保存済みの単語はまだありません。</div>
       </section>
 
@@ -3523,6 +3567,9 @@ const elements = {
   wordSearchInput: document.querySelector("#wordSearchInput"),
   wordSearchClear: document.querySelector("#wordSearchClear"),
   wordSearchCount: document.querySelector("#wordSearchCount"),
+  rangeDeleteFrom: document.querySelector("#rangeDeleteFrom"),
+  rangeDeleteTo: document.querySelector("#rangeDeleteTo"),
+  rangeDeleteButton: document.querySelector("#rangeDeleteButton"),
   deckBar: document.querySelector("#deckBar"),
   deckStats: document.querySelector("#deckStats"),
   quizScope: document.querySelector("#quizScope"),
@@ -5902,6 +5949,14 @@ function wordMatchesQuery(word, needle) {
   );
 }
 
+// 「保存した単語」画面に今表示されている単語（デッキ＋検索で絞り込んだ順）。
+// 番号で範囲削除する際の「番号」は、この並びの1始まりの位置に対応する。
+function visibleSavedWords() {
+  const needle = wordSearchQuery.trim().toLowerCase();
+  const scoped = scopedWords();
+  return needle ? scoped.filter((word) => wordMatchesQuery(word, needle)) : scoped;
+}
+
 function renderSavedWords() {
   elements.wordCount.textContent = appState.words.length;
   const scoped = scopedWords();
@@ -7091,6 +7146,47 @@ elements.wordSearchClear?.addEventListener("click", () => {
   elements.wordSearchInput.value = "";
   renderSavedWords();
   elements.wordSearchInput.focus();
+});
+
+// 番号で範囲削除：表示中の並びの「開始番号〜終了番号」をまとめて削除
+elements.rangeDeleteButton?.addEventListener("click", () => {
+  const visible = visibleSavedWords();
+  const total = visible.length;
+  if (total === 0) {
+    setStatus("削除できる単語がありません。");
+    return;
+  }
+  let from = parseInt(elements.rangeDeleteFrom.value, 10);
+  let to = parseInt(elements.rangeDeleteTo.value, 10);
+  // 片方だけ入力ならその1件だけを対象にする
+  if (Number.isNaN(from) && Number.isNaN(to)) {
+    setStatus("削除する番号を入力してください（例: 開始3 〜 終了8）。");
+    return;
+  }
+  if (Number.isNaN(from)) from = to;
+  if (Number.isNaN(to)) to = from;
+  if (from > to) [from, to] = [to, from];
+  from = Math.max(1, from);
+  to = Math.min(total, to);
+  if (from > total || to < from) {
+    setStatus(`その範囲には単語がありません（今は1〜${total}番まで表示中です）。`);
+    return;
+  }
+
+  const targets = visible.slice(from - 1, to); // 1始まり・終了番号を含む
+  const ok = window.confirm(`${from}〜${to}番の ${targets.length}件 を削除します。よろしいですか？`);
+  if (!ok) return;
+
+  const ids = new Set(targets.map((word) => word.id));
+  const snapshot = snapshotState();
+  appState.words = appState.words.filter((word) => !ids.has(word.id));
+  if (currentQuiz && ids.has(currentQuiz.answer.id)) currentQuiz = null;
+  ids.forEach((id) => selectedIds.delete(id));
+  saveState();
+  offerUndo(snapshot);
+  setStatus(`${targets.length}件を削除しました。「元に戻す」で取り消せます。`);
+  elements.rangeDeleteFrom.value = "";
+  elements.rangeDeleteTo.value = "";
 });
 
 elements.selectAllCheckbox.addEventListener("change", () => {
