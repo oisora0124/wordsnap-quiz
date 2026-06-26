@@ -2462,6 +2462,75 @@ textarea:focus-visible {
 
 /* ---------- Quiz ---------- */
 
+/* ---------- クイズの出題設定（単語帳・範囲） ---------- */
+.quiz-setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.quiz-setup-field {
+  display: inline-grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.quiz-setup-field select {
+  padding: 0.55rem 0.6rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 16px;
+}
+
+.quiz-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+}
+
+.quiz-range input[type="number"] {
+  width: 4.2rem;
+  padding: 0.5rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 16px;
+  text-align: center;
+}
+
+.quiz-setup-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.quiz-setup-check input {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--accent);
+}
+
+.quiz-setup-count {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
 .quiz-card {
   position: relative;
   overflow: hidden;
@@ -3066,6 +3135,27 @@ accurate 正確な"
           </div>
         </div>
 
+        <div class="quiz-setup">
+          <label class="quiz-setup-field">
+            出題する単語帳
+            <select id="quizDeckSelect"></select>
+          </label>
+          <label class="quiz-setup-field">
+            範囲（番号）
+            <span class="quiz-range">
+              <input id="quizRangeFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
+              <span aria-hidden="true">〜</span>
+              <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
+            </span>
+          </label>
+          <label class="quiz-setup-check">
+            <input id="quizShuffle" type="checkbox" checked />
+            順番をシャッフル
+          </label>
+          <button id="quizRangeStartButton" type="button">この範囲で出題</button>
+          <span id="quizDeckCount" class="quiz-setup-count"></span>
+        </div>
+
         <div id="quizCard" class="quiz-card">
           <p class="quiz-label">出題単語</p>
           <h3 id="quizWord">クイズを始めましょう</h3>
@@ -3655,6 +3745,12 @@ const elements = {
   dontKnowButton: document.querySelector("#dontKnowButton"),
   generalReviewButton: document.querySelector("#generalReviewButton"),
   exitReviewButton: document.querySelector("#exitReviewButton"),
+  quizDeckSelect: document.querySelector("#quizDeckSelect"),
+  quizRangeFrom: document.querySelector("#quizRangeFrom"),
+  quizRangeTo: document.querySelector("#quizRangeTo"),
+  quizShuffle: document.querySelector("#quizShuffle"),
+  quizRangeStartButton: document.querySelector("#quizRangeStartButton"),
+  quizDeckCount: document.querySelector("#quizDeckCount"),
   accuracy: document.querySelector("#accuracy"),
   selectAllCheckbox: document.querySelector("#selectAllCheckbox"),
   selectionCount: document.querySelector("#selectionCount"),
@@ -4085,11 +4181,41 @@ function persistAppState() {
 function defaultState() {
   return {
     words: [],
-    decks: [{ id: createId(), name: "単語帳1" }],
+    decks: [{ id: createId(), name: "単語帳1", updatedAt: 0 }],
     quizCounter: 0,
     activeDeckId: "all",
     savedAt: 0,
+    deletions: {},
   };
+}
+
+// 削除した単語の墓標（term→削除時刻）。これを同期で共有することで、
+// 片方で消した単語が、もう片方から「合算」で復活するのを防ぐ。
+const DELETION_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90日で掃除
+
+function sanitizeDeletions(raw, now) {
+  const out = {};
+  if (raw && typeof raw === "object") {
+    const cutoff = (now || 0) - DELETION_TTL_MS;
+    for (const [term, value] of Object.entries(raw)) {
+      const ts = Number(value);
+      if (term && ts > 0 && ts >= cutoff) out[term] = ts;
+    }
+  }
+  return out;
+}
+
+// 単語の追加時刻をミリ秒で返す（削除時刻との新旧比較に使う）
+function wordAddedMs(word) {
+  const ms = Date.parse(word.addedAt);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+// この端末で単語を削除したことを記録する
+function recordDeletion(word) {
+  if (!word || !word.term) return;
+  if (!appState.deletions || typeof appState.deletions !== "object") appState.deletions = {};
+  appState.deletions[normalizeTerm(word.term)] = Date.now();
 }
 
 function loadState() {
@@ -4110,10 +4236,11 @@ function normalizeState(state) {
         .map((deck) => ({
           id: deck?.id || createId(),
           name: String(deck?.name || "").trim() || "単語帳",
+          updatedAt: Number(deck?.updatedAt || 0),
         }))
         .filter((deck) => deck.id)
     : [];
-  if (decks.length === 0) decks = [{ id: createId(), name: "単語帳1" }];
+  if (decks.length === 0) decks = [{ id: createId(), name: "単語帳1", updatedAt: 0 }];
 
   const deckIds = new Set(decks.map((deck) => deck.id));
   const fallbackDeckId = decks[0].id;
@@ -4130,6 +4257,7 @@ function normalizeState(state) {
     quizCounter: Number(state.quizCounter || 0),
     activeDeckId,
     savedAt: Number(state.savedAt || 0),
+    deletions: sanitizeDeletions(state.deletions, Date.now()),
   };
 }
 
@@ -4386,6 +4514,11 @@ function mergeAppStates(localState, remoteState) {
     const nameKey = deck.name.trim().toLowerCase();
     const existingById = decks.find((item) => item.id === deck.id);
     if (existingById) {
+      // 同じデッキ：改名時刻(updatedAt)が新しい方の名前を採用（最後の改名が勝つ）
+      if ((deck.updatedAt || 0) > (existingById.updatedAt || 0)) {
+        existingById.name = deck.name || existingById.name;
+        existingById.updatedAt = deck.updatedAt || existingById.updatedAt;
+      }
       deckIdMap.set(deck.id, existingById.id);
       return existingById.id;
     }
@@ -4394,7 +4527,7 @@ function mergeAppStates(localState, remoteState) {
       deckIdMap.set(deck.id, existingByName);
       return existingByName;
     }
-    const next = { id: deck.id || createId(), name: deck.name || "単語帳" };
+    const next = { id: deck.id || createId(), name: deck.name || "単語帳", updatedAt: deck.updatedAt || 0 };
     decks.push(next);
     deckIdMap.set(deck.id, next.id);
     deckNameMap.set(nameKey, next.id);
@@ -4411,8 +4544,19 @@ function mergeAppStates(localState, remoteState) {
   const remapDeckId = (id) => deckIdMap.get(id) || decks[0].id;
   const wordKey = (word) => `${word.deckId}:${normalizeTerm(word.term)}`;
 
+  // 両端末の削除記録を統合（単語ごとに新しい削除時刻を採用）
+  const mergedDeletions = {};
+  for (const src of [local.deletions, remote.deletions]) {
+    for (const [term, ts] of Object.entries(src || {})) {
+      if (!mergedDeletions[term] || ts > mergedDeletions[term]) mergedDeletions[term] = ts;
+    }
+  }
+
   const addWord = (word, source) => {
     const next = normalizeWord({ ...word, deckId: remapDeckId(word.deckId) });
+    // 追加時刻より後に削除された単語は、合算で復活させない（削除を確実に反映）
+    const deletedAt = mergedDeletions[normalizeTerm(next.term)];
+    if (deletedAt && deletedAt >= wordAddedMs(next)) return;
     const existing =
       wordById.get(next.id) ||
       wordByTermDeck.get(wordKey(next));
@@ -4444,6 +4588,7 @@ function mergeAppStates(localState, remoteState) {
     quizCounter: Math.max(local.quizCounter, remote.quizCounter),
     activeDeckId,
     savedAt: Math.max(local.savedAt, remote.savedAt),
+    deletions: mergedDeletions,
   });
 }
 
@@ -4894,7 +5039,7 @@ function setActiveDeck(id) {
 function addDeck() {
   const name = (window.prompt("新しい単語帳の名前を入力してください。") || "").trim();
   if (!name) return;
-  const deck = { id: createId(), name };
+  const deck = { id: createId(), name, updatedAt: Date.now() };
   appState.decks.push(deck);
   appState.activeDeckId = deck.id;
   currentQuiz = null;
@@ -4908,6 +5053,7 @@ function renameDeck() {
   const name = (window.prompt("単語帳の名前を変更します。", deck.name) || "").trim();
   if (!name) return;
   deck.name = name;
+  deck.updatedAt = Date.now(); // 改名時刻を記録（同期時に新しい名前が勝つ）
   saveState();
 }
 
@@ -6376,6 +6522,65 @@ function startGeneralReview() {
   startReview(ids, { order: "priority", label: "総復習" });
 }
 
+// クイズの「出題する単語帳」プルダウンを最新の単語帳で作り直す（選択は保持）。
+function populateQuizDeckSelect() {
+  const select = elements.quizDeckSelect;
+  if (!select) return;
+  const prev = select.value;
+  const options = ['<option value="all">すべての単語帳</option>'].concat(
+    appState.decks.map((deck) => `<option value="${deck.id}">${escapeHtml(deck.name)}</option>`),
+  );
+  select.innerHTML = options.join("");
+  const ids = new Set([...select.options].map((opt) => opt.value));
+  select.value = ids.has(prev) ? prev : ids.has(appState.activeDeckId) ? appState.activeDeckId : "all";
+  updateQuizDeckCount();
+}
+
+// クイズ設定で選ばれている単語帳の単語（保存順＝ライブラリの番号と同じ並び）
+function quizSelectedDeckWords() {
+  const id = elements.quizDeckSelect ? elements.quizDeckSelect.value : "all";
+  return id === "all" ? appState.words : appState.words.filter((word) => word.deckId === id);
+}
+
+function updateQuizDeckCount() {
+  if (!elements.quizDeckCount) return;
+  const n = quizSelectedDeckWords().length;
+  elements.quizDeckCount.textContent = n ? `この単語帳: ${n}語` : "単語なし";
+}
+
+// 選んだ単語帳・番号の範囲でクイズ（出題セッション）を開始する
+function startQuizFromRange() {
+  const words = quizSelectedDeckWords();
+  const total = words.length;
+  if (total === 0) {
+    setStatus("この単語帳には出題できる単語がありません。");
+    return;
+  }
+  let from = parseInt(elements.quizRangeFrom.value, 10);
+  let to = parseInt(elements.quizRangeTo.value, 10);
+  if (Number.isNaN(from)) from = 1;
+  if (Number.isNaN(to)) to = total;
+  if (from > to) [from, to] = [to, from];
+  from = Math.max(1, from);
+  to = Math.min(total, to);
+  if (from > total) {
+    setStatus(`範囲が単語数（${total}語）を超えています。`);
+    return;
+  }
+  const selected = words.slice(from - 1, to);
+  if (selected.length === 0) {
+    setStatus("その範囲に単語がありません。");
+    return;
+  }
+  const deckLabel =
+    elements.quizDeckSelect.value === "all" ? "すべて" : deckName(elements.quizDeckSelect.value);
+  const rangeLabel = from === 1 && to === total ? "全部" : `${from}〜${to}番`;
+  startReview(selected.map((word) => word.id), {
+    label: `${deckLabel}・${rangeLabel}`,
+    shuffle: elements.quizShuffle ? elements.quizShuffle.checked : true,
+  });
+}
+
 function endReview(message) {
   reviewSession = null;
   currentQuiz = null;
@@ -6568,6 +6773,7 @@ function renderAll() {
   renderCandidates();
   renderSavedWords();
   renderQuiz();
+  populateQuizDeckSelect();
   // Fill in missing CEFR/品詞 badges via the network here (not on every saved-list
   // render). Both are guarded against overlapping runs and skip already-resolved
   // words, so repeated calls are cheap.
@@ -7148,6 +7354,7 @@ elements.savedList.addEventListener("click", async (event) => {
     const id = deleteButton.dataset.deleteWord;
     const word = appState.words.find((item) => item.id === id);
     const snapshot = snapshotState();
+    if (word) recordDeletion(word);
     appState.words = appState.words.filter((item) => item.id !== id);
     if (currentQuiz?.answer.id === id) currentQuiz = null;
     saveState();
@@ -7273,6 +7480,8 @@ elements.nextQuizButton.addEventListener("click", () => {
 
 elements.generalReviewButton.addEventListener("click", startGeneralReview);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
+elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
+elements.quizDeckSelect?.addEventListener("change", updateQuizDeckCount);
 
 // 検索ボックス：単語・意味の両方向から絞り込み
 elements.wordSearchInput?.addEventListener("input", () => {
@@ -7317,6 +7526,7 @@ elements.rangeDeleteButton?.addEventListener("click", () => {
 
   const ids = new Set(targets.map((word) => word.id));
   const snapshot = snapshotState();
+  targets.forEach((word) => recordDeletion(word));
   appState.words = appState.words.filter((word) => !ids.has(word.id));
   if (currentQuiz && ids.has(currentQuiz.answer.id)) currentQuiz = null;
   ids.forEach((id) => selectedIds.delete(id));
