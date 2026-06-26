@@ -338,6 +338,80 @@ h2 {
   justify-content: flex-end;
 }
 
+/* ---------- 同期インジケーター（常時表示・タップで今すぐ同期）---------- */
+.sync-badge {
+  gap: 0.45rem;
+  padding: 0.5rem 0.8rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.sync-badge:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.sync-badge-dot {
+  width: 0.62rem;
+  height: 0.62rem;
+  flex: none;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+/* 同期済み：緑＋やわらかな脈動 */
+.sync-badge[data-state="live"] {
+  color: var(--accent-2);
+  border-color: color-mix(in srgb, var(--accent-2) 45%, var(--line));
+  background: var(--accent-2-soft);
+}
+.sync-badge[data-state="live"] .sync-badge-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 70%, transparent);
+  animation: sync-pulse 2s ease-out infinite;
+}
+
+/* 通信中：オレンジ＋点滅 */
+.sync-badge[data-state="busy"] {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  background: var(--accent-3-soft);
+}
+.sync-badge[data-state="busy"] .sync-badge-dot {
+  background: var(--warning);
+  animation: sync-blink 0.9s ease-in-out infinite;
+}
+
+/* 未同期/エラー：赤 */
+.sync-badge[data-state="error"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: var(--danger-soft);
+}
+.sync-badge[data-state="error"] .sync-badge-dot {
+  background: var(--danger);
+}
+
+/* サーバー保存なし（file://等）：グレー */
+.sync-badge[data-state="off"] .sync-badge-dot {
+  background: var(--muted);
+}
+
+@keyframes sync-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 70%, transparent); }
+  70% { box-shadow: 0 0 0 0.5rem color-mix(in srgb, var(--success) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 0%, transparent); }
+}
+
+@keyframes sync-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .hero-card {
   position: relative;
   overflow: hidden;
@@ -2560,6 +2634,10 @@ textarea:focus-visible {
         </div>
         <div class="hero-side">
           <div class="hero-controls">
+            <button id="syncBadge" class="sync-badge" type="button" data-state="idle" title="タップで今すぐ同期">
+              <span class="sync-badge-dot" aria-hidden="true"></span>
+              <span class="sync-badge-text">同期の確認中…</span>
+            </button>
             <button id="themeToggle" class="theme-toggle" type="button" aria-pressed="false">
               <span class="theme-toggle-icon" aria-hidden="true"></span>
               <span class="theme-toggle-text">ダーク</span>
@@ -3362,6 +3440,8 @@ const elements = {
   syncGenerateButton: document.querySelector("#syncGenerateButton"),
   syncCopyLinkButton: document.querySelector("#syncCopyLinkButton"),
   syncPullButton: document.querySelector("#syncPullButton"),
+  syncBadge: document.querySelector("#syncBadge"),
+  syncBadgeText: document.querySelector("#syncBadge .sync-badge-text"),
   syncStatus: document.querySelector("#syncStatus"),
   themeToggle: document.querySelector("#themeToggle"),
   themeModeSelect: document.querySelector("#themeModeSelect"),
@@ -3709,6 +3789,9 @@ const syncState = {
   pushTimer: 0,
   pollTimer: 0,
   accessKey: "",
+  busy: false,
+  errored: false,
+  lastSyncedAt: 0,
 };
 
 // IndexedDB mirror: a second, more durable copy so data survives even if
@@ -3983,15 +4066,72 @@ async function syncRequest(method, body = null) {
 }
 
 function setSyncStatus(message, mode = "") {
-  if (!elements.syncStatus) return;
-  elements.syncStatus.textContent = message;
-  elements.syncStatus.classList.toggle("is-live", mode === "live");
-  elements.syncStatus.classList.toggle("is-error", mode === "error");
+  if (mode === "live") {
+    syncState.lastSyncedAt = Date.now();
+    syncState.errored = false;
+  } else if (mode === "error") {
+    syncState.errored = true;
+  }
+  if (elements.syncStatus) {
+    elements.syncStatus.textContent = message;
+    elements.syncStatus.classList.toggle("is-live", mode === "live");
+    elements.syncStatus.classList.toggle("is-error", mode === "error");
+  }
+  updateSyncBadge();
 }
 
 function setSyncBusy(busy) {
+  syncState.busy = busy;
   if (elements.syncConnectButton) elements.syncConnectButton.disabled = busy;
   if (elements.syncPullButton) elements.syncPullButton.disabled = busy || !syncState.id;
+  updateSyncBadge();
+}
+
+// 経過時間を「たった今 / ○分前 / HH:MM」で表す
+function describeSyncedAt(ts) {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  if (diff < 60000) return "たった今";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}分前`;
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+// ヘッダーの同期インジケーターを、現在の状態に合わせて更新する
+function updateSyncBadge() {
+  const badge = elements.syncBadge;
+  if (!badge) return;
+  let state;
+  let text;
+  let title;
+  if (!syncServerAvailable()) {
+    state = "off";
+    text = "ローカル保存のみ";
+    title = "このページではサーバー保存は使えません。https のリンクから開くと自動保存されます。";
+  } else if (syncState.busy) {
+    state = "busy";
+    text = "同期中…";
+    title = "サーバーと通信しています。";
+  } else if (syncState.errored || (syncState.id && !syncState.connected)) {
+    state = "error";
+    text = "未同期";
+    title = "サーバーに同期できていません。タップで再試行します。";
+  } else if (syncState.connected) {
+    state = "live";
+    const when = describeSyncedAt(syncState.lastSyncedAt);
+    text = when ? `同期済み・${when}` : "同期済み";
+    title = "サーバーに保存・共有されています。タップで今すぐ同期。";
+  } else {
+    state = "idle";
+    text = "準備中…";
+    title = "";
+  }
+  badge.dataset.state = state;
+  if (elements.syncBadgeText) elements.syncBadgeText.textContent = text;
+  badge.title = title;
+  badge.setAttribute("aria-label", `同期状態: ${text}`);
 }
 
 function stateSignature(state) {
@@ -4374,6 +4514,19 @@ function initWordsnapSync() {
   });
   window.addEventListener("pageshow", pullIfConnected);
   window.addEventListener("online", pullIfConnected);
+  window.addEventListener("offline", updateSyncBadge);
+
+  // ヘッダーの同期バッジ：タップで今すぐ同期（サーバー利用不可なら設定の説明へ）
+  elements.syncBadge?.addEventListener("click", () => {
+    if (syncServerAvailable()) {
+      pullWordsnapState();
+    } else {
+      setActiveStep("settings", { scroll: true });
+    }
+  });
+  // 「同期済み・○分前」の経過表示を定期的に更新
+  window.setInterval(updateSyncBadge, 30000);
+  updateSyncBadge();
 
   if (!syncServerAvailable()) {
     setSyncStatus("ファイルを直接開いているため、サーバー保存は使えません。https のリンクから開くと自動で保存されます。");
@@ -6987,7 +7140,9 @@ function pickQuoteIndex(bucket, len) {
   let x = (bucket ^ 0x9e3779b9) >>> 0;
   x = Math.imul(x, 2654435761) >>> 0;
   x ^= x >>> 15;
-  return x % len;
+  // x ^= ... は符号付き32bitになり負になりうる。>>> 0 で必ず非負にしてから剰余を取る
+  // （負だと LEARNING_QUOTES[負index] が undefined になり初期化全体が止まる）。
+  return (x >>> 0) % len;
 }
 
 function initLearningQuote() {
@@ -6999,7 +7154,9 @@ function initLearningQuote() {
 
   function render() {
     const bucket = Math.floor(Date.now() / FOUR_HOURS);
-    const quote = LEARNING_QUOTES[pickQuoteIndex(bucket, LEARNING_QUOTES.length)];
+    const quote =
+      LEARNING_QUOTES[pickQuoteIndex(bucket, LEARNING_QUOTES.length)] || LEARNING_QUOTES[0];
+    if (!quote) return;
     textEl.textContent = quote.text;
     authorEl.textContent = quote.author;
     figure.hidden = false;
@@ -7038,7 +7195,16 @@ initStepTabs();
 initLearningQuote();
 initStorageWarning();
 renderAll();
-recoverPersisted().then(initWordsnapSync);
+// 保存データの復元(recoverPersisted)を待ってから同期を開始する。
+// 復元が遅い/失敗してもサーバー同期が始まるよう、フォールバックも用意する。
+let syncInitStarted = false;
+const startWordsnapSync = () => {
+  if (syncInitStarted) return;
+  syncInitStarted = true;
+  initWordsnapSync();
+};
+recoverPersisted().then(startWordsnapSync).catch(startWordsnapSync);
+window.setTimeout(startWordsnapSync, 4000);
 
 </script>
   </body>
