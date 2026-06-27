@@ -1629,6 +1629,17 @@ textarea:focus-visible {
 }
 
 /* ---------- 端末がずれたときの手動修復 ---------- */
+/* 他人にツールを共有するブロック */
+.share-tool {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.share-tool > button {
+  margin-bottom: 6px;
+}
+
 .sync-fix {
   grid-column: 1 / -1;
   margin-top: 4px;
@@ -3570,6 +3581,13 @@ accurate 正確な"
                 <strong>今すぐ読み込む</strong>＝サーバーの最新をこの端末に取り込み。どちらも現在の単語は消えません。
               </p>
               <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
+              <div class="share-tool">
+                <button id="shareToolButton" type="button">🤝 このツールを他の人に共有</button>
+                <p class="settings-desc">
+                  相手は<strong>空の状態</strong>から始まります。あなたの単語データは渡りません
+                  （個人キーの付かない“共有用リンク”をコピー／共有します）。
+                </p>
+              </div>
               <details class="sync-fix">
                 <summary>端末ごとに単語が違うとき（手動で揃える）</summary>
                 <div class="sync-fix-body">
@@ -4094,6 +4112,7 @@ const elements = {
   autoNextToggle: document.querySelector("#autoNextToggle"),
   autoNextDelaySelect: document.querySelector("#autoNextDelaySelect"),
   downloadToolButton: document.querySelector("#downloadToolButton"),
+  shareToolButton: document.querySelector("#shareToolButton"),
 };
 
 const THEME_KEY = "wordsnap-theme"; // "light" | "dark" | "auto"
@@ -8324,6 +8343,29 @@ if (document.querySelector('link[rel="stylesheet"]')) {
 } else {
   elements.downloadToolButton.hidden = true;
 }
+
+// 他人に渡すための「共有用リンク」（個人キー ?w= を含まないURL）をワンタップで共有/コピー
+function shareTool() {
+  const url = location.origin + location.pathname;
+  if (navigator.share) {
+    navigator
+      .share({ title: "WordBank", text: "英単語クイズ学習ツール WordBank", url })
+      .then(() => setSyncStatus("✓ 共有しました（相手は空の状態から始まります）。", "live"))
+      .catch(() => {
+        /* ユーザーがキャンセルした等。何もしない */
+      });
+    return;
+  }
+  if (navigator.clipboard) {
+    navigator.clipboard
+      .writeText(url)
+      .then(() => setSyncStatus(`✓ 共有用リンクをコピーしました：${url}`, "live"))
+      .catch(() => setSyncStatus(`このURLを共有してください：${url}`, "error"));
+    return;
+  }
+  setSyncStatus(`このURLを共有してください：${url}`);
+}
+elements.shareToolButton?.addEventListener("click", shareTool);
 
 const HIACC_KEY = "wordsnap-ocr-hiacc";
 elements.hiAccToggle.checked = localStorage.getItem(HIACC_KEY) === "1";
