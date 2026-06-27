@@ -1008,6 +1008,28 @@ button.ghost.danger:hover {
   padding: 4px 16px 16px;
 }
 
+/* OCRの精度が低いことを伝える注意書き */
+.ocr-notice {
+  margin: 6px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--warning);
+  border-radius: var(--r-md);
+  background: var(--accent-3-soft);
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.7;
+}
+
+.ocr-notice strong {
+  font-weight: 750;
+}
+
+.ocr-notice em {
+  font-style: normal;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--accent-text);
+}
+
 .ai-settings {
   margin-top: 12px;
   border: 1px solid var(--line);
@@ -3298,11 +3320,16 @@ accurate 正確な"
             <select id="saveDeckSelect" aria-label="保存先の単語帳"></select>
           </label>
         </div>
-        <p id="status" class="status" role="status">単語リストを貼り付けるか、下の「写真から読み取る」で取り込めます。</p>
+        <p id="status" class="status" role="status">単語と訳をまとめて貼り付けてください（1行に「英単語 意味」）。写真からの読み取りは精度が低く非推奨です。</p>
 
         <details class="ocr-details">
-          <summary><span class="summary-icon camera-icon" aria-hidden="true"></span>写真から読み取る（任意・OCR）</summary>
+          <summary><span class="summary-icon camera-icon" aria-hidden="true"></span>写真から読み取る（任意・OCR｜精度が低く非推奨）</summary>
           <div class="ocr-body">
+            <p class="ocr-notice">
+              ⚠️ 写真からの読み取り（OCR）は<strong>現状かなり精度が低く、実用的ではありません</strong>。
+              お手数ですが、<strong>単語と訳はご自分でまとめて</strong>、上の入力欄に貼り付けてください
+              （1行に「英単語<span aria-hidden="true"> </span>意味」、例: <em>apple りんご</em>）。
+            </p>
             <div class="import-grid">
               <label class="drop-zone" for="imageInput">
                 <input id="imageInput" type="file" accept="image/*" />
@@ -3550,7 +3577,7 @@ accurate 正確な"
             <summary>📖 ツールの使い方</summary>
             <div class="settings-section-body">
               <ol class="usage-steps">
-                <li><strong>取り込む</strong>：英単語帳の写真（OCR）や、テキストの貼り付けで単語を取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。</li>
+                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。※写真からの読み取り(OCR)は精度が低く非推奨です。</li>
                 <li><strong>確認</strong>：取り込んだ候補をチェックして「保存」。保存先の単語帳も選べます。</li>
                 <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
                 <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲削除。<strong>JSONを書き出す</strong>でバックアップできます。</li>
