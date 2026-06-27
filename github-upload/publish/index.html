@@ -3617,8 +3617,12 @@ accurate 正確な"
                 <select id="themeModeSelect">
                   <option value="light">ライト</option>
                   <option value="dark">ダーク</option>
+                  <option value="auto">自動（日の出・日の入り）</option>
                 </select>
               </label>
+              <p id="themeAutoHint" class="settings-desc" hidden>
+                自動：昼はライト、夜はダークに切り替わります。正確な日の出・日の入りには位置情報を使います（許可しない場合は6時〜18時を目安にします）。
+              </p>
               <label class="settings-check">
                 <input id="keyboardHintsToggle" type="checkbox" />
                 <span>クイズ画面にキーボード操作のヒントを表示する</span>
@@ -4081,6 +4085,7 @@ const elements = {
   syncStatus: document.querySelector("#syncStatus"),
   themeToggle: document.querySelector("#themeToggle"),
   themeModeSelect: document.querySelector("#themeModeSelect"),
+  themeAutoHint: document.querySelector("#themeAutoHint"),
   soundToggle: document.querySelector("#soundToggle"),
   soundVolumeSlider: document.querySelector("#soundVolumeSlider"),
   soundVolumeValue: document.querySelector("#soundVolumeValue"),
@@ -4091,7 +4096,8 @@ const elements = {
   downloadToolButton: document.querySelector("#downloadToolButton"),
 };
 
-const THEME_KEY = "wordsnap-theme";
+const THEME_KEY = "wordsnap-theme"; // "light" | "dark" | "auto"
+const GEO_KEY = "wordsnap-geo:v1"; // 自動テーマ用の緯度経度
 const ACTIVE_STEP_KEY = "wordsnap-active-step";
 const SOUND_KEY = "wordsnap-sound-enabled";
 const SOUND_VOLUME_KEY = "wordsnap-sound-volume";
@@ -4103,16 +4109,119 @@ const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
 let audioContext = null;
 let autoNextTimer = 0;
+let themeAutoTimer = 0;
 
 function initTheme() {
-  const saved = localStorage.getItem(THEME_KEY);
-  const prefersDark =
-    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  applyTheme(saved || (prefersDark ? "dark" : "light"));
+  let mode = localStorage.getItem(THEME_KEY);
+  if (mode !== "light" && mode !== "dark" && mode !== "auto") {
+    const prefersDark =
+      window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    mode = prefersDark ? "dark" : "light";
+  }
+  applyTheme(mode);
+  refreshAutoThemeWatch(mode);
 }
 
-function applyTheme(theme) {
-  const isDark = theme === "dark";
+// 保存した緯度経度を取り出す（自動テーマの日の出・日の入り計算に使う）
+function getStoredGeo() {
+  try {
+    const v = JSON.parse(localStorage.getItem(GEO_KEY));
+    if (v && Number.isFinite(v.lat) && Number.isFinite(v.lng)) return v;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+// 指定地点・日付の日の出/日の入りを計算（SunCalc系アルゴリズムの簡易版）
+function getSunTimes(date, lat, lng) {
+  const rad = Math.PI / 180;
+  const J1970 = 2440588;
+  const J2000 = 2451545;
+  const dayMs = 86400000;
+  const J0 = 0.0009;
+  const toDays = (d) => d.valueOf() / dayMs - 0.5 + J1970 - J2000;
+  const fromJulian = (j) => new Date((j + 0.5 - J1970) * dayMs);
+  const d = toDays(date);
+  const lw = rad * -lng;
+  const phi = rad * lat;
+  const n = Math.round(d - J0 - lw / (2 * Math.PI));
+  const ds = J0 + lw / (2 * Math.PI) + n;
+  const M = rad * (357.5291 + 0.98560028 * ds);
+  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const P = rad * 102.9372;
+  const L = M + C + P + Math.PI;
+  const Jtransit = J2000 + ds + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+  const dec = Math.asin(Math.sin(L) * Math.sin(rad * 23.4397));
+  const cosH = (Math.sin(rad * -0.833) - Math.sin(phi) * Math.sin(dec)) / (Math.cos(phi) * Math.cos(dec));
+  if (cosH >= 1) return { alwaysNight: true };
+  if (cosH <= -1) return { alwaysDay: true };
+  const H = Math.acos(cosH);
+  const Jset = J2000 + (J0 + (H + lw) / (2 * Math.PI) + n) + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+  const Jrise = Jtransit - (Jset - Jtransit);
+  return { sunrise: fromJulian(Jrise), sunset: fromJulian(Jset) };
+}
+
+// 今が昼か夜かで "light"/"dark" を返す（位置情報が無ければ6〜18時で代用）
+function autoThemeNow() {
+  const geo = getStoredGeo();
+  const now = new Date();
+  if (geo) {
+    const t = getSunTimes(now, geo.lat, geo.lng);
+    if (t.alwaysDay) return "light";
+    if (t.alwaysNight) return "dark";
+    return now >= t.sunrise && now < t.sunset ? "light" : "dark";
+  }
+  const h = now.getHours();
+  return h >= 6 && h < 18 ? "light" : "dark";
+}
+
+// モード(light/dark/auto)から、実際に表示する見た目(light/dark)を決める
+function resolveTheme(mode) {
+  if (mode === "auto") return autoThemeNow();
+  return mode === "dark" ? "dark" : "light";
+}
+
+// 自動モードのときだけ、定期的に日の出・日の入りを再判定する
+function refreshAutoThemeWatch(mode) {
+  window.clearInterval(themeAutoTimer);
+  themeAutoTimer = 0;
+  if (elements.themeAutoHint) elements.themeAutoHint.hidden = mode !== "auto";
+  if (mode === "auto") {
+    themeAutoTimer = window.setInterval(() => {
+      if (localStorage.getItem(THEME_KEY) === "auto") applyTheme("auto");
+    }, 5 * 60 * 1000);
+  }
+}
+
+// 自動モード選択時に現在地を取得して、正確な日の出・日の入りで判定する
+function requestGeoForAutoTheme() {
+  if (!navigator.geolocation) {
+    setStatus("この端末では位置情報が使えないため、6時〜18時を目安に自動切替します。");
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      try {
+        localStorage.setItem(
+          GEO_KEY,
+          JSON.stringify({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        );
+      } catch {
+        /* ignore */
+      }
+      if (localStorage.getItem(THEME_KEY) === "auto") applyTheme("auto");
+      setStatus("現在地の日の出・日の入りに合わせて自動で切り替えます。");
+    },
+    () => {
+      setStatus("位置情報が取得できないため、6時〜18時を目安に自動切替します。");
+    },
+    { timeout: 8000, maximumAge: 24 * 60 * 60 * 1000 },
+  );
+}
+
+function applyTheme(mode) {
+  const isDark = resolveTheme(mode) === "dark";
   document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
   // ファビコンもテーマに合わせて切り替える
   const favicon = document.getElementById("favicon");
@@ -4128,14 +4237,17 @@ function applyTheme(theme) {
       ? "ライト"
       : "ダーク";
   }
-  if (elements.themeModeSelect) elements.themeModeSelect.value = isDark ? "dark" : "light";
+  if (elements.themeModeSelect) elements.themeModeSelect.value = mode;
+  if (elements.themeAutoHint) elements.themeAutoHint.hidden = mode !== "auto";
 }
 
 function toggleTheme() {
+  // トグルは手動切替：自動モードを解除して、今と逆の見た目に固定する
   const next =
     document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
   localStorage.setItem(THEME_KEY, next);
   applyTheme(next);
+  refreshAutoThemeWatch(next);
   playSound("tap");
 }
 
@@ -8174,9 +8286,12 @@ document.addEventListener("click", (event) => {
 
 elements.themeToggle.addEventListener("click", toggleTheme);
 elements.themeModeSelect.addEventListener("change", () => {
-  const theme = elements.themeModeSelect.value === "dark" ? "dark" : "light";
-  localStorage.setItem(THEME_KEY, theme);
-  applyTheme(theme);
+  const value = elements.themeModeSelect.value;
+  const mode = value === "dark" ? "dark" : value === "auto" ? "auto" : "light";
+  localStorage.setItem(THEME_KEY, mode);
+  applyTheme(mode);
+  refreshAutoThemeWatch(mode);
+  if (mode === "auto" && !getStoredGeo()) requestGeoForAutoTheme(); // 初回だけ位置情報を取得
   playSound("tap");
 });
 elements.soundToggle.addEventListener("click", toggleSound);
