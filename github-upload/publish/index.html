@@ -2183,6 +2183,78 @@ textarea:focus-visible {
   flex: none;
 }
 
+.trash-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.trash-panel-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.trash-panel-heading h3 {
+  margin: 0 0 0.18rem;
+  color: var(--ink);
+  font-size: 0.98rem;
+}
+
+.trash-panel-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.trash-list {
+  display: grid;
+  gap: 8px;
+}
+
+.trash-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.trash-item strong {
+  display: block;
+  color: var(--ink);
+}
+
+.trash-item span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.trash-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.trash-item .mini-button {
+  white-space: nowrap;
+}
+
+.mini-button.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+
 .word-row {
   position: relative;
   overflow: hidden;
@@ -3345,6 +3417,7 @@ accurate 正確な"
           </div>
           <div class="actions compact">
             <button id="undoButton" class="ghost" type="button" hidden>元に戻す</button>
+            <button id="trashToggleButton" class="ghost" type="button" aria-expanded="false">削除済み 0</button>
             <button id="exportButton" class="secondary" type="button">JSONを書き出す</button>
             <label class="import-json">
               JSONを読み込む
@@ -3384,6 +3457,16 @@ accurate 正確な"
           <span class="range-delete-dash" aria-hidden="true">〜</span>
           <input id="rangeDeleteTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="削除する終了番号" />
           <button id="rangeDeleteButton" class="ghost mini danger" type="button">削除</button>
+        </div>
+        <div id="trashPanel" class="trash-panel" hidden>
+          <div class="trash-panel-heading">
+            <div>
+              <h3>削除済み単語</h3>
+              <p id="trashSummary">30日以内に削除した単語を保管しています。</p>
+            </div>
+            <button id="trashEmptyButton" class="ghost mini danger" type="button">ゴミ箱を空にする</button>
+          </div>
+          <div id="trashList" class="trash-list"></div>
         </div>
         <div id="savedList" class="word-list empty">保存済みの単語はまだありません。</div>
       </section>
@@ -3902,6 +3985,11 @@ const elements = {
   rangeDeleteFrom: document.querySelector("#rangeDeleteFrom"),
   rangeDeleteTo: document.querySelector("#rangeDeleteTo"),
   rangeDeleteButton: document.querySelector("#rangeDeleteButton"),
+  trashToggleButton: document.querySelector("#trashToggleButton"),
+  trashPanel: document.querySelector("#trashPanel"),
+  trashSummary: document.querySelector("#trashSummary"),
+  trashList: document.querySelector("#trashList"),
+  trashEmptyButton: document.querySelector("#trashEmptyButton"),
   deckBar: document.querySelector("#deckBar"),
   deckStats: document.querySelector("#deckStats"),
   quizScope: document.querySelector("#quizScope"),
@@ -4339,6 +4427,8 @@ const idb = {
 // Writes the app state to localStorage AND the IndexedDB mirror, stamped with
 // a save time so we can tell which copy is newer when recovering.
 function persistAppState() {
+  appState.deletions = sanitizeDeletions(appState.deletions, Date.now());
+  appState.trash = sanitizeTrash(appState.trash, Date.now());
   appState.savedAt = Date.now();
   const json = JSON.stringify(appState);
   try {
@@ -4358,12 +4448,15 @@ function defaultState() {
     activeDeckId: "all",
     savedAt: 0,
     deletions: {},
+    trash: [],
   };
 }
 
 // 削除した単語の墓標（term→削除時刻）。これを同期で共有することで、
 // 片方で消した単語が、もう片方から「合算」で復活するのを防ぐ。
-const DELETION_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90日で掃除
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DELETION_TTL_MS = 90 * DAY_MS; // 90日で掃除
+const TRASH_TTL_MS = 30 * DAY_MS; // 30日で削除済みから掃除
 
 function sanitizeDeletions(raw, now) {
   const out = {};
@@ -4377,6 +4470,44 @@ function sanitizeDeletions(raw, now) {
   return out;
 }
 
+function trashKeyForWord(word) {
+  return `${word.deckId || ""}:${normalizeTerm(word.term)}`;
+}
+
+function sanitizeTrash(raw, now) {
+  if (!Array.isArray(raw)) return [];
+  const cutoff = (now || 0) - TRASH_TTL_MS;
+  const entries = new Map();
+  for (const item of raw) {
+    const deletedAt = Number(item?.deletedAt || 0);
+    if (!deletedAt || deletedAt < cutoff) continue;
+    const word = normalizeWord(item?.word || item);
+    if (!word.term || !word.meaning) continue;
+    const key = trashKeyForWord(word);
+    const existing = entries.get(key);
+    if (!existing || deletedAt > existing.deletedAt) {
+      entries.set(key, {
+        id: item?.id || `${key}:${deletedAt}`,
+        word,
+        deletedAt,
+      });
+    }
+  }
+  return [...entries.values()].sort((a, b) => b.deletedAt - a.deletedAt);
+}
+
+function addWordToTrash(word, deletedAt = Date.now()) {
+  if (!word || !word.term) return;
+  const item = {
+    id: createId(),
+    word: normalizeWord(JSON.parse(JSON.stringify(word))),
+    deletedAt,
+  };
+  const key = trashKeyForWord(item.word);
+  const existing = (appState.trash || []).filter((entry) => trashKeyForWord(entry.word) !== key);
+  appState.trash = sanitizeTrash([item, ...existing], deletedAt);
+}
+
 // 単語の追加時刻をミリ秒で返す（削除時刻との新旧比較に使う）
 function wordAddedMs(word) {
   const ms = Date.parse(word.addedAt);
@@ -4386,8 +4517,10 @@ function wordAddedMs(word) {
 // この端末で単語を削除したことを記録する
 function recordDeletion(word) {
   if (!word || !word.term) return;
+  const deletedAt = Date.now();
   if (!appState.deletions || typeof appState.deletions !== "object") appState.deletions = {};
-  appState.deletions[normalizeTerm(word.term)] = Date.now();
+  appState.deletions[normalizeTerm(word.term)] = deletedAt;
+  addWordToTrash(word, deletedAt);
 }
 
 function loadState() {
@@ -4430,6 +4563,7 @@ function normalizeState(state) {
     activeDeckId,
     savedAt: Number(state.savedAt || 0),
     deletions: sanitizeDeletions(state.deletions, Date.now()),
+    trash: sanitizeTrash(state.trash, Date.now()),
   };
 }
 
@@ -4672,6 +4806,8 @@ function stateSignature(state) {
     decks: state.decks,
     quizCounter: state.quizCounter,
     activeDeckId: state.activeDeckId,
+    deletions: Object.entries(state.deletions || {}).sort((a, b) => a[0].localeCompare(b[0])),
+    trash: state.trash || [],
   });
 }
 
@@ -4747,6 +4883,10 @@ function mergeAppStates(localState, remoteState) {
   local.words.forEach((word) => addWord(word, "local"));
   remote.words.forEach((word) => addWord(word, "remote"));
 
+  const mergedTrash = mergeTrashEntries([local.trash, remote.trash], remapDeckId).filter(
+    (entry) => !mergedWords.some((word) => wordKey(word) === trashKeyForWord(entry.word)),
+  );
+
   const localDeckIds = new Set(decks.map((deck) => deck.id));
   const remoteActive = remote.activeDeckId === "all" ? "all" : remapDeckId(remote.activeDeckId);
   const activeDeckId =
@@ -4761,7 +4901,22 @@ function mergeAppStates(localState, remoteState) {
     activeDeckId,
     savedAt: Math.max(local.savedAt, remote.savedAt),
     deletions: mergedDeletions,
+    trash: mergedTrash,
   });
+}
+
+function mergeTrashEntries(sources, remapDeckId) {
+  const byKey = new Map();
+  const now = Date.now();
+  for (const source of sources) {
+    for (const entry of sanitizeTrash(source, now)) {
+      entry.word.deckId = remapDeckId(entry.word.deckId);
+      const key = trashKeyForWord(entry.word);
+      const existing = byKey.get(key);
+      if (!existing || entry.deletedAt > existing.deletedAt) byKey.set(key, entry);
+    }
+  }
+  return [...byKey.values()].sort((a, b) => b.deletedAt - a.deletedAt);
 }
 
 function mergeWord(localWord, remoteWord, source) {
@@ -6484,6 +6639,111 @@ function renderSavedWords() {
   renderSelection();
 }
 
+function formatTrashTime(ts) {
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return "";
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${mm}`;
+}
+
+function trashDaysLeft(deletedAt) {
+  return Math.max(1, Math.ceil((deletedAt + TRASH_TTL_MS - Date.now()) / DAY_MS));
+}
+
+function renderTrash() {
+  if (!elements.trashToggleButton || !elements.trashPanel || !elements.trashList) return;
+  appState.trash = sanitizeTrash(appState.trash, Date.now());
+  const trash = appState.trash;
+  elements.trashToggleButton.textContent = `削除済み ${trash.length}`;
+  elements.trashToggleButton.title = "30日以内に削除した単語を確認・復元します。";
+
+  if (elements.trashSummary) {
+    elements.trashSummary.textContent = trash.length
+      ? "30日以内に削除した単語を保管しています。必要な単語はここから戻せます。"
+      : "削除済み単語はありません。削除した単語は30日間ここに表示されます。";
+  }
+
+  if (trash.length === 0) {
+    elements.trashList.className = "trash-list word-list empty";
+    elements.trashList.textContent = "削除済み単語はありません。";
+    return;
+  }
+
+  elements.trashList.className = "trash-list";
+  elements.trashList.innerHTML = trash
+    .map((entry) => {
+      const word = entry.word;
+      const deck = deckName(word.deckId);
+      const meta = `${escapeHtml(word.meaning)} / ${escapeHtml(deck)} / 削除 ${formatTrashTime(entry.deletedAt)} / あと${trashDaysLeft(entry.deletedAt)}日`;
+      return `
+        <div class="trash-item" data-trash-id="${escapeHtml(entry.id)}">
+          <div>
+            <strong>${escapeHtml(word.term)}</strong>
+            <span>${meta}</span>
+          </div>
+          <div class="trash-item-actions">
+            <button class="mini-button info" type="button" data-restore-trash="${escapeHtml(entry.id)}">戻す</button>
+            <button class="mini-button danger" type="button" data-purge-trash="${escapeHtml(entry.id)}">完全削除</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function restoreTrashWord(trashId) {
+  const item = (appState.trash || []).find((entry) => entry.id === trashId);
+  if (!item) return;
+  const word = normalizeWord(item.word);
+  const deckIds = new Set(appState.decks.map((deck) => deck.id));
+  word.deckId = deckIds.has(word.deckId) ? word.deckId : appState.decks[0]?.id;
+  if (!word.deckId) return;
+
+  const duplicate = appState.words.some(
+    (entry) => entry.deckId === word.deckId && normalizeTerm(entry.term) === normalizeTerm(word.term),
+  );
+  if (duplicate) {
+    setStatus(`「${word.term}」はすでに単語帳「${deckName(word.deckId)}」にあります。`);
+    return;
+  }
+
+  const now = new Date().toISOString();
+  word.id = appState.words.some((entry) => entry.id === word.id) ? createId() : word.id;
+  word.addedAt = now;
+  appState.words.push(word);
+  appState.trash = (appState.trash || []).filter((entry) => entry.id !== trashId);
+  if (appState.deletions) delete appState.deletions[normalizeTerm(word.term)];
+  appState.activeDeckId = word.deckId;
+  currentQuiz = null;
+  selectedIds.delete(word.id);
+  saveState();
+  setStatus(`「${word.term}」を単語帳「${deckName(word.deckId)}」に戻しました。`);
+}
+
+// 削除済みから1件だけ完全に削除する（復元不可。削除の記録は残すので同期で復活しない）
+function permanentlyDeleteTrash(trashId) {
+  const item = (appState.trash || []).find((entry) => entry.id === trashId);
+  if (!item) return;
+  const term = item.word?.term || "この単語";
+  if (!window.confirm(`「${term}」を完全に削除します。\nもう元に戻せません。よろしいですか？`)) return;
+  appState.trash = (appState.trash || []).filter((entry) => entry.id !== trashId);
+  saveState();
+  setStatus(`「${term}」を完全に削除しました。`);
+}
+
+// 削除済みをすべて完全に削除する（復元不可）
+function emptyTrash() {
+  const n = (appState.trash || []).length;
+  if (n === 0) {
+    setStatus("削除済みは空です。");
+    return;
+  }
+  if (!window.confirm(`削除済みの ${n}件 を完全に削除します。\nもう元に戻せません。よろしいですか？`)) return;
+  appState.trash = [];
+  saveState();
+  setStatus(`削除済みの${n}件を完全に削除しました。`);
+}
+
 function pruneSelection() {
   for (const id of [...selectedIds]) {
     if (!appState.words.some((word) => word.id === id)) selectedIds.delete(id);
@@ -6949,6 +7209,7 @@ function renderAll() {
   renderDecks();
   renderCandidates();
   renderSavedWords();
+  renderTrash();
   renderQuiz();
   populateQuizDeckSelect();
   // Fill in missing CEFR/品詞 badges via the network here (not on every saved-list
@@ -7518,6 +7779,24 @@ elements.saveParsedButton.addEventListener("click", () => {
   if (cleaned.length > 0) setActiveStep("quiz", { sound: false });
 });
 
+elements.trashToggleButton?.addEventListener("click", () => {
+  const open = elements.trashPanel.hidden;
+  elements.trashPanel.hidden = !open;
+  elements.trashToggleButton.setAttribute("aria-expanded", String(open));
+  renderTrash();
+});
+
+elements.trashList?.addEventListener("click", (event) => {
+  const restoreBtn = event.target.closest("[data-restore-trash]");
+  if (restoreBtn) {
+    restoreTrashWord(restoreBtn.dataset.restoreTrash);
+    return;
+  }
+  const purgeBtn = event.target.closest("[data-purge-trash]");
+  if (purgeBtn) permanentlyDeleteTrash(purgeBtn.dataset.purgeTrash);
+});
+elements.trashEmptyButton?.addEventListener("click", emptyTrash);
+
 elements.savedList.addEventListener("click", async (event) => {
   const speakButton = event.target.closest("[data-speak-word]");
   if (speakButton) {
@@ -7536,7 +7815,7 @@ elements.savedList.addEventListener("click", async (event) => {
     if (currentQuiz?.answer.id === id) currentQuiz = null;
     saveState();
     offerUndo(snapshot);
-    setStatus(`「${word ? word.term : "単語"}」を削除しました。「元に戻す」で取り消せます。`);
+    setStatus(`「${word ? word.term : "単語"}」を削除しました。削除済みに30日間保存されます。`);
     return;
   }
 
@@ -7710,7 +7989,9 @@ elements.rangeDeleteButton?.addEventListener("click", () => {
   }
 
   const targets = visible.slice(from - 1, to); // 1始まり・終了番号を含む
-  const ok = window.confirm(`${from}〜${to}番の ${targets.length}件 を削除します。よろしいですか？`);
+  const ok = window.confirm(
+    `${from}〜${to}番の ${targets.length}件 を削除します。よろしいですか？\n削除した単語は30日間「削除済み」から戻せます。`,
+  );
   if (!ok) return;
 
   const ids = new Set(targets.map((word) => word.id));
@@ -7721,7 +8002,7 @@ elements.rangeDeleteButton?.addEventListener("click", () => {
   ids.forEach((id) => selectedIds.delete(id));
   saveState();
   offerUndo(snapshot);
-  setStatus(`${targets.length}件を削除しました。「元に戻す」で取り消せます。`);
+  setStatus(`${targets.length}件を削除しました。削除済みに30日間保存されます。`);
   elements.rangeDeleteFrom.value = "";
   elements.rangeDeleteTo.value = "";
 });
@@ -7800,16 +8081,29 @@ elements.clearAllButton.addEventListener("click", () => {
     return;
   }
   const confirmed = window.confirm(
-    `保存した単語 ${count}語 と成績・単語帳をすべて削除します。\n本当によろしいですか？（直後なら「元に戻す」で取り消せます）`,
+    `保存した単語 ${count}語 と成績・単語帳をすべて削除します。\n削除した単語は30日間「削除済み」から戻せます。\n本当によろしいですか？`,
   );
   if (!confirmed) return;
   const snapshot = snapshotState();
+  const deletedAt = Date.now();
+  const trash = [
+    ...(appState.trash || []),
+    ...appState.words.map((word) => ({
+      id: createId(),
+      word: normalizeWord(JSON.parse(JSON.stringify(word))),
+      deletedAt,
+    })),
+  ];
+  const deletions = sanitizeDeletions(appState.deletions, deletedAt);
+  for (const word of appState.words) deletions[normalizeTerm(word.term)] = deletedAt;
   appState = defaultState();
+  appState.deletions = deletions;
+  appState.trash = sanitizeTrash(trash, deletedAt);
   candidates = [];
   currentQuiz = null;
   saveState();
   offerUndo(snapshot);
-  setStatus("保存データを削除しました。「元に戻す」で取り消せます。");
+  setStatus("保存データを削除しました。単語は削除済みに30日間保存されます。");
 });
 
 // 空状態などにある「Step 1 へ」等のボタンから、該当ステップへ移動する
