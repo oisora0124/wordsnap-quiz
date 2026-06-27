@@ -3438,6 +3438,13 @@ accurate 正確な"
           </button>
           <button id="clearSelectionButton" class="ghost mini" type="button">選択解除</button>
         </div>
+        <div class="range-delete">
+          <span class="range-delete-label">番号で範囲削除</span>
+          <input id="rangeDeleteFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="削除する開始番号" />
+          <span class="range-delete-dash" aria-hidden="true">〜</span>
+          <input id="rangeDeleteTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="削除する終了番号" />
+          <button id="rangeDeleteButton" class="ghost mini danger" type="button">削除</button>
+        </div>
         <div class="word-search">
           <span class="word-search-icon" aria-hidden="true"></span>
           <input
@@ -3450,13 +3457,6 @@ accurate 正確な"
           />
           <span id="wordSearchCount" class="word-search-count" hidden></span>
           <button id="wordSearchClear" class="word-search-clear" type="button" aria-label="検索をクリア" hidden>×</button>
-        </div>
-        <div class="range-delete">
-          <span class="range-delete-label">番号で範囲削除</span>
-          <input id="rangeDeleteFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="削除する開始番号" />
-          <span class="range-delete-dash" aria-hidden="true">〜</span>
-          <input id="rangeDeleteTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="削除する終了番号" />
-          <button id="rangeDeleteButton" class="ghost mini danger" type="button">削除</button>
         </div>
         <div id="trashPanel" class="trash-panel" hidden>
           <div class="trash-panel-heading">
