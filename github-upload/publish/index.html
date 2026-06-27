@@ -1976,16 +1976,23 @@ textarea:focus-visible {
 
 /* ---------- Selection bar ---------- */
 
-.selection-bar {
+/* ① 単語を選ぶバー */
+.select-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px 14px;
   align-items: center;
   padding: 10px 14px;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
+}
+
+.select-bar-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
 }
 
 .select-all {
@@ -1997,14 +2004,50 @@ textarea:focus-visible {
   font-weight: 650;
 }
 
-.selection-count {
+.range-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 0.82rem;
+  font-weight: 650;
 }
 
-.selection-bar .secondary {
-  margin-left: auto;
+.range-select input[type="number"] {
+  width: 4rem;
+  padding: 0.45rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 16px;
+  text-align: center;
+}
+
+.range-select input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ② 選んだ単語への操作（選択があるときだけ表示・目立たせる） */
+.selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+}
+
+.selection-count {
+  margin-right: auto;
+  color: var(--accent-text);
+  font-size: 0.84rem;
+  font-weight: 700;
 }
 
 .ghost.mini {
@@ -3427,23 +3470,27 @@ accurate 正確な"
         </div>
         <div id="deckBar" class="deck-bar"></div>
         <div id="deckStats" class="deck-stats" hidden></div>
-        <div class="selection-bar">
+        <!-- ① 単語を選ぶ -->
+        <div class="select-bar">
+          <span class="select-bar-label">選ぶ</span>
           <label class="select-all">
             <input type="checkbox" id="selectAllCheckbox" />
-            全選択
+            全部
           </label>
-          <span id="selectionCount" class="selection-count">0 件選択</span>
-          <button id="reviewSelectedButton" class="secondary" type="button" disabled>
-            選択した単語を解く
-          </button>
-          <button id="clearSelectionButton" class="ghost mini" type="button">選択解除</button>
+          <span class="range-select">
+            <span class="range-select-label">番号で</span>
+            <input id="rangeSelectFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="選択する開始番号" />
+            <span class="range-select-dash" aria-hidden="true">〜</span>
+            <input id="rangeSelectTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="選択する終了番号" />
+            <button id="rangeSelectButton" class="ghost mini" type="button">選択に追加</button>
+          </span>
         </div>
-        <div class="range-delete">
-          <span class="range-delete-label">番号で範囲削除</span>
-          <input id="rangeDeleteFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="削除する開始番号" />
-          <span class="range-delete-dash" aria-hidden="true">〜</span>
-          <input id="rangeDeleteTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="削除する終了番号" />
-          <button id="rangeDeleteButton" class="ghost mini danger" type="button">削除</button>
+        <!-- ② 選んだ単語に対して操作（選択があるときだけ表示） -->
+        <div id="selectionActions" class="selection-actions" hidden>
+          <span id="selectionCount" class="selection-count">0件 選択中</span>
+          <button id="reviewSelectedButton" class="secondary" type="button">選んだ単語を解く</button>
+          <button id="deleteSelectedButton" class="ghost mini danger" type="button">選んだ単語を削除</button>
+          <button id="clearSelectionButton" class="ghost mini" type="button">選択解除</button>
         </div>
         <div class="word-search">
           <span class="word-search-icon" aria-hidden="true"></span>
@@ -3982,9 +4029,9 @@ const elements = {
   wordSearchInput: document.querySelector("#wordSearchInput"),
   wordSearchClear: document.querySelector("#wordSearchClear"),
   wordSearchCount: document.querySelector("#wordSearchCount"),
-  rangeDeleteFrom: document.querySelector("#rangeDeleteFrom"),
-  rangeDeleteTo: document.querySelector("#rangeDeleteTo"),
-  rangeDeleteButton: document.querySelector("#rangeDeleteButton"),
+  rangeSelectFrom: document.querySelector("#rangeSelectFrom"),
+  rangeSelectTo: document.querySelector("#rangeSelectTo"),
+  rangeSelectButton: document.querySelector("#rangeSelectButton"),
   trashToggleButton: document.querySelector("#trashToggleButton"),
   trashPanel: document.querySelector("#trashPanel"),
   trashSummary: document.querySelector("#trashSummary"),
@@ -4013,8 +4060,10 @@ const elements = {
   quizDeckCount: document.querySelector("#quizDeckCount"),
   accuracy: document.querySelector("#accuracy"),
   selectAllCheckbox: document.querySelector("#selectAllCheckbox"),
+  selectionActions: document.querySelector("#selectionActions"),
   selectionCount: document.querySelector("#selectionCount"),
   reviewSelectedButton: document.querySelector("#reviewSelectedButton"),
+  deleteSelectedButton: document.querySelector("#deleteSelectedButton"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   exportButton: document.querySelector("#exportButton"),
   importJsonInput: document.querySelector("#importJsonInput"),
@@ -6754,10 +6803,10 @@ function renderSelection() {
   pruneSelection();
   const scoped = scopedWords();
   const scopedSelected = scoped.filter((word) => selectedIds.has(word.id)).length;
-  if (elements.selectionCount) elements.selectionCount.textContent = `${selectedIds.size} 件選択`;
-  if (elements.reviewSelectedButton) {
-    elements.reviewSelectedButton.disabled = selectedIds.size === 0;
-  }
+  const n = selectedIds.size;
+  // 操作ボタン群は、何か選ばれているときだけ表示する
+  if (elements.selectionActions) elements.selectionActions.hidden = n === 0;
+  if (elements.selectionCount) elements.selectionCount.textContent = `${n}件 選択中`;
   if (elements.selectAllCheckbox) {
     elements.selectAllCheckbox.checked = scoped.length > 0 && scopedSelected === scoped.length;
     elements.selectAllCheckbox.indeterminate = scopedSelected > 0 && scopedSelected < scoped.length;
@@ -7964,18 +8013,18 @@ elements.wordSearchClear?.addEventListener("click", () => {
 });
 
 // 番号で範囲削除：表示中の並びの「開始番号〜終了番号」をまとめて削除
-elements.rangeDeleteButton?.addEventListener("click", () => {
+// 番号で範囲を「選択に追加」する（直接削除せず、選択に入れてから 解く/削除 する）
+elements.rangeSelectButton?.addEventListener("click", () => {
   const visible = visibleSavedWords();
   const total = visible.length;
   if (total === 0) {
-    setStatus("削除できる単語がありません。");
+    setStatus("単語がありません。");
     return;
   }
-  let from = parseInt(elements.rangeDeleteFrom.value, 10);
-  let to = parseInt(elements.rangeDeleteTo.value, 10);
-  // 片方だけ入力ならその1件だけを対象にする
+  let from = parseInt(elements.rangeSelectFrom.value, 10);
+  let to = parseInt(elements.rangeSelectTo.value, 10);
   if (Number.isNaN(from) && Number.isNaN(to)) {
-    setStatus("削除する番号を入力してください（例: 開始3 〜 終了8）。");
+    setStatus("選択する番号を入力してください（例: 開始3 〜 終了8）。");
     return;
   }
   if (Number.isNaN(from)) from = to;
@@ -7984,27 +8033,15 @@ elements.rangeDeleteButton?.addEventListener("click", () => {
   from = Math.max(1, from);
   to = Math.min(total, to);
   if (from > total || to < from) {
-    setStatus(`その範囲には単語がありません（今は1〜${total}番まで表示中です）。`);
+    setStatus(`その範囲に単語がありません（今は1〜${total}番まで表示中です）。`);
     return;
   }
-
-  const targets = visible.slice(from - 1, to); // 1始まり・終了番号を含む
-  const ok = window.confirm(
-    `${from}〜${to}番の ${targets.length}件 を削除します。よろしいですか？\n削除した単語は30日間「削除済み」から戻せます。`,
-  );
-  if (!ok) return;
-
-  const ids = new Set(targets.map((word) => word.id));
-  const snapshot = snapshotState();
-  targets.forEach((word) => recordDeletion(word));
-  appState.words = appState.words.filter((word) => !ids.has(word.id));
-  if (currentQuiz && ids.has(currentQuiz.answer.id)) currentQuiz = null;
-  ids.forEach((id) => selectedIds.delete(id));
-  saveState();
-  offerUndo(snapshot);
-  setStatus(`${targets.length}件を削除しました。削除済みに30日間保存されます。`);
-  elements.rangeDeleteFrom.value = "";
-  elements.rangeDeleteTo.value = "";
+  const targets = visible.slice(from - 1, to);
+  targets.forEach((word) => selectedIds.add(word.id));
+  elements.rangeSelectFrom.value = "";
+  elements.rangeSelectTo.value = "";
+  renderSavedWords();
+  setStatus(`${from}〜${to}番の${targets.length}件を選択しました。下の「解く」か「削除」を押してください。`);
 });
 
 elements.selectAllCheckbox.addEventListener("change", () => {
@@ -8022,6 +8059,29 @@ elements.selectAllCheckbox.addEventListener("change", () => {
 elements.reviewSelectedButton.addEventListener("click", () =>
   startReview([...selectedIds], { order: "priority" }),
 );
+
+// 選んだ単語をまとめて削除（ゴミ箱に30日保管・元に戻せる）
+elements.deleteSelectedButton?.addEventListener("click", () => {
+  const ids = [...selectedIds].filter((id) => appState.words.some((word) => word.id === id));
+  if (ids.length === 0) {
+    setStatus("削除する単語が選択されていません。");
+    return;
+  }
+  const targets = appState.words.filter((word) => ids.includes(word.id));
+  const ok = window.confirm(
+    `選んだ ${targets.length}件 を削除します。\n削除した単語は30日間「削除済み」から戻せます。よろしいですか？`,
+  );
+  if (!ok) return;
+  const idSet = new Set(ids);
+  const snapshot = snapshotState();
+  targets.forEach((word) => recordDeletion(word));
+  appState.words = appState.words.filter((word) => !idSet.has(word.id));
+  if (currentQuiz && idSet.has(currentQuiz.answer.id)) currentQuiz = null;
+  selectedIds.clear();
+  saveState();
+  offerUndo(snapshot);
+  setStatus(`${targets.length}件を削除しました。削除済みに30日間保存されます。`);
+});
 
 elements.clearSelectionButton.addEventListener("click", () => {
   selectedIds.clear();
