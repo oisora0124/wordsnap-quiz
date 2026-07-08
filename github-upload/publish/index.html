@@ -2439,6 +2439,71 @@ textarea:focus-visible {
   align-items: center;
 }
 
+/* お気に入り（★）ボタン。オフはグレー、オンは黄色の星 */
+.favorite-button {
+  padding: 0.15rem 0.35rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  font-size: 1.15rem;
+  line-height: 1;
+  opacity: 0.4;
+  cursor: pointer;
+}
+
+.favorite-button:hover {
+  opacity: 0.8;
+}
+
+.favorite-button.is-favorite {
+  color: #f5b301;
+  opacity: 1;
+}
+
+/* 一覧の並び替え・お気に入り絞り込みツールバー */
+.list-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 12px;
+}
+
+.sort-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.sort-field select {
+  padding: 0.45rem 0.6rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 0.9rem;
+}
+
+.favorite-filter {
+  padding: 0.45rem 0.75rem;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.favorite-filter[aria-pressed="true"] {
+  color: #c99400;
+  background: rgba(245, 179, 1, 0.16);
+  border-color: #f5b301;
+}
+
 .saved-index {
   display: inline-flex;
   align-items: center;
@@ -3200,11 +3265,6 @@ textarea:focus-visible {
               <span>ツールを保存</span>
             </button>
           </div>
-          <div class="hero-card">
-            <span id="wordCount">0</span>
-            <small>保存済み単語</small>
-            <div class="stat-caption"><span class="stat-dot" aria-hidden="true"></span>この端末に保存</div>
-          </div>
         </div>
       </section>
 
@@ -3438,7 +3498,7 @@ accurate 正確な"
           </div>
         </div>
 
-        <div class="quiz-setup">
+        <div id="quizSetup" class="quiz-setup">
           <div class="quiz-setup-row">
             <label class="quiz-setup-field">
               <span>単語帳</span>
@@ -3475,6 +3535,7 @@ accurate 正確な"
           <button id="showAnswerButton" class="secondary" type="button" hidden>答えを見る</button>
           <button id="generalReviewButton" class="secondary" type="button">総復習</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
+          <button id="exitQuizButton" class="ghost" type="button" hidden>クイズをやめる</button>
           <span class="kbd-hint">キー 1–4＝解答 / N＝次へ / S＝答え / 0＝わからない</span>
         </div>
       </section>
@@ -3542,6 +3603,17 @@ accurate 正確な"
           />
           <span id="wordSearchCount" class="word-search-count" hidden></span>
           <button id="wordSearchClear" class="word-search-clear" type="button" aria-label="検索をクリア" hidden>×</button>
+        </div>
+        <div class="list-tools">
+          <label class="sort-field">
+            並び替え
+            <select id="wordSortSelect" aria-label="単語一覧の並び替え">
+              <option value="added">追加順</option>
+              <option value="accuracy">正答率が低い順</option>
+              <option value="wrong">間違えた回数が多い順</option>
+            </select>
+          </label>
+          <button id="favoriteFilterButton" class="favorite-filter" type="button" aria-pressed="false">★ お気に入りだけ</button>
         </div>
         <div id="trashPanel" class="trash-panel" hidden>
           <div class="trash-panel-heading">
@@ -4089,7 +4161,10 @@ const elements = {
   deckBar: document.querySelector("#deckBar"),
   deckStats: document.querySelector("#deckStats"),
   quizScope: document.querySelector("#quizScope"),
-  wordCount: document.querySelector("#wordCount"),
+  quizSetup: document.querySelector("#quizSetup"),
+  exitQuizButton: document.querySelector("#exitQuizButton"),
+  wordSortSelect: document.querySelector("#wordSortSelect"),
+  favoriteFilterButton: document.querySelector("#favoriteFilterButton"),
   quizWord: document.querySelector("#quizWord"),
   choices: document.querySelector("#choices"),
   quizFeedback: document.querySelector("#quizFeedback"),
@@ -4570,6 +4645,10 @@ let STORAGE_KEY = storageKeyFor(clientId);
 let appState = loadState();
 let candidates = [];
 let wordSearchQuery = "";
+// 一覧の並び替えモード（added=追加順 / accuracy=正答率が低い順 / wrong=間違えた回数が多い順）
+let wordSortMode = "added";
+// お気に入り（★）だけを表示するかどうか
+let favoritesOnly = false;
 let currentQuiz = null;
 let reviewSession = null;
 let quizStarted = false;
@@ -4784,6 +4863,7 @@ function normalizeWord(word) {
     cefr: normalizeCefr(word.cefr),
     pos: normalizePos(word.pos),
     enrich: normalizeEnrich(word.enrich),
+    favorite: Boolean(word.favorite),
     stats: {
       correct: Number(word.stats?.correct || 0),
       wrong: Number(word.stats?.wrong || 0),
@@ -6770,19 +6850,33 @@ function wordMatchesQuery(word, needle) {
   );
 }
 
-// 「保存した単語」画面に今表示されている単語（デッキ＋検索で絞り込んだ順）。
+// 「保存した単語」画面に今表示されている単語（デッキ＋お気に入り＋検索＋並び替え後の順）。
 // 番号で範囲削除する際の「番号」は、この並びの1始まりの位置に対応する。
 function visibleSavedWords() {
   const needle = wordSearchQuery.trim().toLowerCase();
-  const scoped = scopedWords();
-  return needle ? scoped.filter((word) => wordMatchesQuery(word, needle)) : scoped;
+  let words = scopedWords();
+  if (favoritesOnly) words = words.filter((word) => word.favorite);
+  if (needle) words = words.filter((word) => wordMatchesQuery(word, needle));
+  return sortWordsForList(words);
+}
+
+// 一覧用の並び替え。追加順＝保存された順（従来どおり）。同点は元の並びで安定させる。
+function sortWordsForList(words) {
+  if (wordSortMode === "added") return words;
+  const indexed = words.map((word, index) => ({ word, index }));
+  indexed.sort((a, b) => {
+    const diff =
+      wordSortMode === "accuracy"
+        ? wordAccuracy(a.word) - wordAccuracy(b.word)
+        : b.word.stats.wrong - a.word.stats.wrong;
+    return diff !== 0 ? diff : a.index - b.index;
+  });
+  return indexed.map((entry) => entry.word);
 }
 
 function renderSavedWords() {
-  elements.wordCount.textContent = appState.words.length;
-  const scoped = scopedWords();
   const needle = wordSearchQuery.trim().toLowerCase();
-  const words = needle ? scoped.filter((word) => wordMatchesQuery(word, needle)) : scoped;
+  const words = visibleSavedWords();
 
   // 検索ボックスの状態（クリアボタン・件数）を更新
   if (elements.wordSearchClear) elements.wordSearchClear.hidden = !needle;
@@ -6795,9 +6889,11 @@ function renderSavedWords() {
     elements.savedList.className = "word-list empty";
     elements.savedList.textContent = needle
       ? `「${wordSearchQuery.trim()}」に一致する単語はありません。`
-      : appState.words.length === 0
-        ? "保存済みの単語はまだありません。"
-        : "この単語帳にはまだ単語がありません。";
+      : favoritesOnly
+        ? "お気に入り（★）の単語はまだありません。単語の★を押すと登録できます。"
+        : appState.words.length === 0
+          ? "保存済みの単語はまだありません。"
+          : "この単語帳にはまだ単語がありません。";
     return;
   }
 
@@ -6816,6 +6912,7 @@ function renderSavedWords() {
               selectedIds.has(word.id) ? " checked" : ""
             } aria-label="この単語を選択" />
             <span class="saved-index">${index + 1}</span>
+            <button class="favorite-button${word.favorite ? " is-favorite" : ""}" type="button" data-favorite-word="${word.id}" aria-pressed="${word.favorite}" aria-label="お気に入り" title="お気に入りに追加/解除">★</button>
             <strong>${escapeHtml(word.term)}</strong>
             ${posBadgeMarkup(word)}
             <button class="speak-button" type="button" data-speak-word="${word.id}" aria-label="発音を聞く" title="発音を聞く">🔊</button>
@@ -7083,11 +7180,15 @@ function updateQuizControls() {
     !currentQuiz.answered &&
     (inReview ? reviewSession.queue.length > 0 : quizStarted);
 
-  elements.startQuizButton.hidden = inReview || quizStarted;
-  elements.nextQuizButton.hidden = !(inReview || quizStarted);
+  const quizActive = inReview || quizStarted;
+  // 出題中はクイズ設定欄を隠して、問題と選択肢を上に表示する
+  if (elements.quizSetup) elements.quizSetup.hidden = quizActive;
+  elements.startQuizButton.hidden = quizActive;
+  elements.nextQuizButton.hidden = !quizActive;
   elements.showAnswerButton.hidden = !hasQuestion;
   elements.dontKnowButton.hidden = !questionActive;
   elements.exitReviewButton.hidden = !inReview;
+  if (elements.exitQuizButton) elements.exitQuizButton.hidden = !(quizStarted && !inReview);
 }
 
 function renderAccuracy() {
@@ -8012,6 +8113,21 @@ elements.savedList.addEventListener("click", async (event) => {
     return;
   }
 
+  const favoriteButton = event.target.closest("[data-favorite-word]");
+  if (favoriteButton) {
+    const word = appState.words.find((item) => item.id === favoriteButton.dataset.favoriteWord);
+    if (word) {
+      word.favorite = !word.favorite;
+      saveState();
+      setStatus(
+        word.favorite
+          ? `「${word.term}」をお気に入りに追加しました。`
+          : `「${word.term}」をお気に入りから外しました。`,
+      );
+    }
+    return;
+  }
+
   const deleteButton = event.target.closest("[data-delete-word]");
   if (deleteButton) {
     const id = deleteButton.dataset.deleteWord;
@@ -8109,6 +8225,17 @@ elements.startQuizButton.addEventListener("click", () => {
   currentQuiz = availableQuizWords().length > 0 ? buildQuiz() : null;
   playSound(currentQuiz ? "next" : "wrong");
   renderQuiz();
+  // 設定欄が消えたぶん、問題カードを画面の上に持ってくる
+  elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+// 通常クイズを途中でやめて、設定欄に戻る
+elements.exitQuizButton?.addEventListener("click", () => {
+  clearAutoNextTimer();
+  quizStarted = false;
+  currentQuiz = null;
+  renderQuiz();
+  setStatus("クイズをやめました。設定を変えて再開できます。");
 });
 
 elements.dontKnowButton.addEventListener("click", () => {
@@ -8170,6 +8297,19 @@ elements.wordSearchClear?.addEventListener("click", () => {
   elements.wordSearchInput.focus();
 });
 
+// 並び替え（追加順・正答率が低い順・間違えた回数が多い順）
+elements.wordSortSelect?.addEventListener("change", () => {
+  wordSortMode = elements.wordSortSelect.value;
+  renderSavedWords();
+});
+
+// お気に入り（★）だけ表示の切り替え
+elements.favoriteFilterButton?.addEventListener("click", () => {
+  favoritesOnly = !favoritesOnly;
+  elements.favoriteFilterButton.setAttribute("aria-pressed", String(favoritesOnly));
+  renderSavedWords();
+});
+
 // 番号で範囲削除：表示中の並びの「開始番号〜終了番号」をまとめて削除
 // 番号で範囲を「選択に追加」する（直接削除せず、選択に入れてから 解く/削除 する）
 elements.rangeSelectButton?.addEventListener("click", () => {
@@ -8203,13 +8343,12 @@ elements.rangeSelectButton?.addEventListener("click", () => {
 });
 
 elements.selectAllCheckbox.addEventListener("change", () => {
-  // 検索中は「表示されている（絞り込み後の）単語」だけを対象にする
-  const needle = wordSearchQuery.trim().toLowerCase();
-  const scoped = scopedWords().filter((word) => wordMatchesQuery(word, needle));
+  // 「表示されている（お気に入り・検索で絞り込み後の）単語」だけを対象にする
+  const visible = visibleSavedWords();
   if (elements.selectAllCheckbox.checked) {
-    scoped.forEach((word) => selectedIds.add(word.id));
+    visible.forEach((word) => selectedIds.add(word.id));
   } else {
-    scoped.forEach((word) => selectedIds.delete(word.id));
+    visible.forEach((word) => selectedIds.delete(word.id));
   }
   renderSavedWords();
 });
