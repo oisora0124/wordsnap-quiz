@@ -2949,7 +2949,7 @@ textarea:focus-visible {
 .quiz-card {
   position: relative;
   overflow: hidden;
-  padding: clamp(22px, 4vw, 34px);
+  padding: clamp(16px, 3vw, 26px);
   border-radius: var(--r-lg);
   background: var(--quiz-grad);
   color: #fff;
@@ -2982,8 +2982,8 @@ textarea:focus-visible {
 }
 
 .quiz-card h3 {
-  margin: 0 0 24px;
-  font-size: clamp(1.9rem, 5.5vw, 3.4rem);
+  margin: 0 0 14px;
+  font-size: clamp(1.6rem, 5vw, 2.6rem);
   font-weight: 800;
   letter-spacing: -0.03em;
 }
@@ -3068,8 +3068,8 @@ textarea:focus-visible {
 }
 
 .feedback {
-  min-height: 1.5rem;
-  margin: 18px 0 0;
+  min-height: 1.2rem;
+  margin: 12px 0 0;
   color: rgba(255, 255, 255, 0.92);
 }
 
@@ -3183,6 +3183,37 @@ textarea:focus-visible {
   .choices,
   .colloc-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* クイズカードを縦に詰めてスクロール量を減らす（スマホ） */
+  .quiz-card {
+    padding: 14px 14px 12px;
+  }
+
+  .quiz-label {
+    margin-bottom: 0.15rem;
+  }
+
+  .quiz-card h3 {
+    margin: 0 0 10px;
+    font-size: clamp(1.35rem, 6vw, 1.7rem);
+  }
+
+  .choices {
+    gap: 6px;
+  }
+
+  .choice-button {
+    padding: 0.55rem 0.7rem;
+  }
+
+  .dont-know {
+    margin-top: 8px;
+    padding: 0.5rem 0.7rem;
+  }
+
+  .feedback {
+    margin: 8px 0 0;
   }
 
   .saved-actions {
@@ -3635,11 +3666,10 @@ accurate 正確な"
         <div class="actions">
           <button id="startQuizButton" type="button">クイズを始める</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
-          <button id="showAnswerButton" class="secondary" type="button" hidden>答えを見る</button>
           <button id="generalReviewButton" class="secondary" type="button">総復習</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
           <button id="exitQuizButton" class="ghost" type="button" hidden>クイズをやめる</button>
-          <span class="kbd-hint">キー 1–4＝解答 / N＝次へ / S＝答え / 0＝わからない</span>
+          <span class="kbd-hint">キー 1–4＝解答 / N＝次へ / 0＝わからない</span>
         </div>
       </section>
 
@@ -4418,7 +4448,6 @@ const elements = {
   quizFeedback: document.querySelector("#quizFeedback"),
   startQuizButton: document.querySelector("#startQuizButton"),
   nextQuizButton: document.querySelector("#nextQuizButton"),
-  showAnswerButton: document.querySelector("#showAnswerButton"),
   dontKnowButton: document.querySelector("#dontKnowButton"),
   generalReviewButton: document.querySelector("#generalReviewButton"),
   exitReviewButton: document.querySelector("#exitReviewButton"),
@@ -7521,7 +7550,6 @@ function updateQuizControls() {
   if (elements.quizSetup) elements.quizSetup.hidden = quizActive;
   elements.startQuizButton.hidden = quizActive;
   elements.nextQuizButton.hidden = !quizActive;
-  elements.showAnswerButton.hidden = !hasQuestion;
   elements.dontKnowButton.hidden = !questionActive;
   elements.exitReviewButton.hidden = !inReview;
   if (elements.exitQuizButton) elements.exitQuizButton.hidden = !(quizStarted && !inReview);
@@ -8862,9 +8890,6 @@ document.addEventListener("keydown", (event) => {
   if ((key === "n" || event.key === "Enter") && !elements.nextQuizButton.hidden) {
     elements.nextQuizButton.click();
     event.preventDefault();
-  } else if (key === "s" && !elements.showAnswerButton.hidden) {
-    elements.showAnswerButton.click();
-    event.preventDefault();
   } else if (event.key === "0" && !elements.dontKnowButton.hidden) {
     elements.dontKnowButton.click();
     event.preventDefault();
@@ -9047,15 +9072,6 @@ elements.deleteSelectedButton?.addEventListener("click", () => {
 elements.clearSelectionButton.addEventListener("click", () => {
   selectedIds.clear();
   renderSavedWords();
-});
-
-elements.showAnswerButton.addEventListener("click", () => {
-  if (!currentQuiz || currentQuiz.answered) return;
-  // Revealing the answer counts as "わからない" (skip): it grades the question
-  // as not-correct and marks it answered, so a choice clicked afterwards can't
-  // be scored as a correct answer / mastered.
-  gradeQuiz(null, true);
-  elements.quizFeedback.textContent = `答え: ${currentQuiz.answer.meaning}`;
 });
 
 elements.exportButton.addEventListener("click", () => {
