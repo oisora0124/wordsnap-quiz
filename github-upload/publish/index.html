@@ -2694,6 +2694,28 @@ textarea:focus-visible {
   margin-bottom: 0.35rem;
 }
 
+/* 例文・定義・語源の和訳行 */
+.enrich-ja {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.enrich-ja-fail {
+  font-style: italic;
+}
+
+.enrich-ja-loading {
+  font-style: italic;
+  opacity: 0.75;
+}
+
+/* 類義語チップの「word（和訳）」表記 */
+.enrich-ja-inline {
+  color: var(--muted);
+  font-weight: 500;
+}
+
 .colloc-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3632,10 +3654,6 @@ accurate 正確な"
           <div>
             <p class="eyebrow">Library</p>
             <h2 id="savedTitle">保存した単語</h2>
-            <p class="ai-hint">
-              CEFRレベル・品詞・「詳しく」（例文・類義語・コロケーション・語源）の表示には、
-              対象の英単語のみを無料辞書API（Datamuse / dictionaryapi.dev）へ送信します。
-            </p>
           </div>
           <div class="actions compact">
             <button id="undoButton" class="ghost" type="button" hidden>元に戻す</button>
@@ -4059,6 +4077,125 @@ window.Cefr = Cefr;
 
 </script>
     <script>
+// 英→日翻訳。まずGoogle翻訳の非公式エンドポイント(gtx)を試し、
+// 失敗したらMyMemoryにフォールバックする。両方失敗してもnullを返すだけで例外は投げない。
+const Translate = (() => {
+  const cache = new Map(); // 原文(trim) -> 訳文 or null(失敗)
+  const BATCH_MARKER = "⁣"; // 訳文の分割に使う不可視セパレータ
+
+  async function getText(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) return null;
+      return await res.text();
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function viaGtx(text) {
+    const raw = await getText(
+      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ja&dt=t&q=${encodeURIComponent(text)}`,
+    );
+    if (!raw) return null;
+    try {
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
+      const joined = data[0].map((seg) => seg[0] || "").join("");
+      return joined.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function viaMyMemory(text) {
+    const raw = await getText(
+      `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ja`,
+    );
+    if (!raw) return null;
+    try {
+      const data = JSON.parse(raw);
+      const translated = data?.responseData?.translatedText;
+      return typeof translated === "string" && translated.trim() ? translated.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // 1件だけ翻訳。gtx→MyMemoryの順に試し、両方失敗ならnull。
+  async function translateOne(text) {
+    const key = String(text || "").trim();
+    if (!key) return null;
+    if (cache.has(key)) return cache.get(key);
+    let result = null;
+    try {
+      result = await viaGtx(key);
+      if (!result) result = await viaMyMemory(key);
+    } catch {
+      result = null;
+    }
+    cache.set(key, result);
+    return result;
+  }
+
+  // 複数件をできるだけ1回のAPI呼び出しにまとめて翻訳する。
+  // 不可視セパレータで連結してgtxに投げ、返ってきた訳文を同じセパレータで分割。
+  // 件数がズレた場合（分割に失敗した場合）は1件ずつのフォールバックに切り替える。
+  async function translateBatch(texts) {
+    const list = texts.map((t) => String(t || "").trim());
+    if (!list.length) return [];
+    if (list.length === 1) return [await translateOne(list[0])];
+
+    const uncached = [];
+    const results = new Array(list.length).fill(null);
+    list.forEach((text, i) => {
+      if (!text) return;
+      if (cache.has(text)) {
+        results[i] = cache.get(text);
+      } else {
+        uncached.push({ text, i });
+      }
+    });
+    if (uncached.length === 0) return results;
+
+    const joined = uncached.map((item) => item.text).join(`\n${BATCH_MARKER}\n`);
+    let batchOk = false;
+    try {
+      const translatedJoined = await viaGtx(joined);
+      if (translatedJoined) {
+        const parts = translatedJoined
+          .split(BATCH_MARKER)
+          .map((s) => s.replace(/^[\s\n]+|[\s\n]+$/g, ""));
+        if (parts.length === uncached.length) {
+          uncached.forEach((item, idx) => {
+            results[item.i] = parts[idx] || null;
+            cache.set(item.text, parts[idx] || null);
+          });
+          batchOk = true;
+        }
+      }
+    } catch {
+      batchOk = false;
+    }
+
+    if (!batchOk) {
+      // 一括分割がズレた場合は1件ずつ翻訳し直す（呼び出し回数は増えるが確実）。
+      for (const item of uncached) {
+        results[item.i] = await translateOne(item.text);
+      }
+    }
+    return results;
+  }
+
+  return { translateOne, translateBatch };
+})();
+
+window.Translate = Translate;
+
 // Fetches word enrichment (collocations, examples, etymology, synonyms) from
 // free dictionary APIs: Datamuse for synonyms/collocations and
 // dictionaryapi.dev for definitions, examples, and (when available) origin.
@@ -4097,14 +4234,22 @@ const Enrich = (() => {
   }
 
   async function synonyms(term) {
-    const data = await getJson(`${DM}?rel_syn=${encodeURIComponent(clean(term))}&md=d&max=10`);
-    const items = (data || []).map((entry) => ({
+    const data = await getJson(`${DM}?rel_syn=${encodeURIComponent(clean(term))}&md=d&max=8`);
+    const items = (data || []).slice(0, 8).map((entry) => ({
       word: entry.word,
       def:
         Array.isArray(entry.defs) && entry.defs.length
           ? entry.defs[0].replace(/^[a-z]+\t/, "")
           : "",
+      ja: null,
     }));
+    // 類義語の和訳は呼び出し回数を抑えるため1回のAPIコールにまとめる。
+    if (items.length) {
+      const translated = await window.Translate.translateBatch(items.map((item) => item.word));
+      items.forEach((item, i) => {
+        item.ja = translated[i] || null;
+      });
+    }
     return { items };
   }
 
@@ -4136,7 +4281,20 @@ const Enrich = (() => {
         }
       }
     }
-    return { examples: exampleList.slice(0, 5), definitions };
+    const slicedExamples = exampleList.slice(0, 5);
+
+    // 例文と定義の和訳をそれぞれ1回のAPIコールにまとめて取得し、キャッシュに一緒に保存する。
+    const exampleJa = slicedExamples.length
+      ? await window.Translate.translateBatch(slicedExamples)
+      : [];
+    const examples = slicedExamples.map((en, i) => ({ en, ja: exampleJa[i] || null }));
+
+    const defJa = definitions.length
+      ? await window.Translate.translateBatch(definitions.map((d) => d.def))
+      : [];
+    const definitionsWithJa = definitions.map((d, i) => ({ ...d, ja: defJa[i] || null }));
+
+    return { examples, definitions: definitionsWithJa };
   }
 
   async function etymology(term) {
@@ -4150,7 +4308,8 @@ const Enrich = (() => {
         }
       }
     }
-    return { text };
+    const ja = text ? await window.Translate.translateOne(text) : null;
+    return { text, ja };
   }
 
   function fetchType(type, term) {
@@ -8004,6 +8163,95 @@ function enrichEmpty(message) {
   return `<p class="enrich-empty">${escapeHtml(message)}</p>`;
 }
 
+// dictionaryapi.dev由来の品詞表記(英語)を日本語に変換する。
+const DICT_POS_JA = {
+  noun: "名詞",
+  verb: "動詞",
+  adjective: "形容詞",
+  adverb: "副詞",
+  pronoun: "代名詞",
+  preposition: "前置詞",
+  conjunction: "接続詞",
+  interjection: "感動詞",
+  exclamation: "感動詞",
+  determiner: "限定詞",
+  article: "冠詞",
+  numeral: "数詞",
+  auxiliary: "助動詞",
+  "phrasal verb": "句動詞",
+};
+
+function dictPosJa(pos) {
+  const key = String(pos || "").trim().toLowerCase();
+  return DICT_POS_JA[key] || pos || "";
+}
+
+// 和訳を1行の<p>として描画する。ja=文字列なら訳文、null なら取得失敗、
+// undefined（未取得＝古いキャッシュ等）ならバックフィル待ちとして控えめに表示する。
+function jaLine(ja) {
+  if (typeof ja === "string" && ja) {
+    return `<p class="enrich-ja">${escapeHtml(ja)}</p>`;
+  }
+  if (ja === null) {
+    return `<p class="enrich-ja enrich-ja-fail">和訳を取得できませんでした</p>`;
+  }
+  return `<p class="enrich-ja enrich-ja-loading">和訳を取得中…</p>`;
+}
+
+// 類義語チップ用: 「word（和訳）」の（和訳）部分だけを返す。未取得時は何も出さない。
+function jaSuffix(ja) {
+  if (typeof ja === "string" && ja) {
+    return ` <span class="enrich-ja-inline">（${escapeHtml(ja)}）</span>`;
+  }
+  if (ja === null) {
+    return ` <span class="enrich-ja-inline enrich-ja-fail">（和訳なし）</span>`;
+  }
+  return "";
+}
+
+// 例文・定義データを新形式に正規化する。
+// 旧キャッシュ（examplesが文字列配列、definitionsにjaが無い等）が来てもクラッシュしない。
+function normalizeExamplesData(data) {
+  if (!data) return { examples: [], definitions: [] };
+  const examples = Array.isArray(data.examples)
+    ? data.examples
+        .map((item) => {
+          if (typeof item === "string") return { en: item, ja: undefined };
+          if (item && typeof item === "object") {
+            return { en: String(item.en || item.text || ""), ja: item.ja };
+          }
+          return null;
+        })
+        .filter((item) => item && item.en)
+    : [];
+  const definitions = Array.isArray(data.definitions)
+    ? data.definitions.map((item) => ({
+        pos: item?.pos || "",
+        def: item?.def || "",
+        ja: item?.ja,
+      }))
+    : [];
+  return { examples, definitions };
+}
+
+// 語源データを新形式に正規化する。旧キャッシュ（ja無し）にも対応。
+function normalizeEtymologyData(data) {
+  if (!data) return { text: null, ja: undefined };
+  return { text: data.text || null, ja: data.ja };
+}
+
+// 類義語データを新形式に正規化する。旧キャッシュ（itemが文字列やja無し）にも対応。
+function normalizeSynonymsData(data) {
+  if (!data) return { items: [] };
+  const items = Array.isArray(data.items)
+    ? data.items.slice(0, 8).map((item) => {
+        if (typeof item === "string") return { word: item, def: "", ja: undefined };
+        return { word: item?.word || "", def: item?.def || "", ja: item?.ja };
+      })
+    : [];
+  return { items };
+}
+
 function etymologyLinks(term) {
   const word = encodeURIComponent(String(term).trim());
   const query = encodeURIComponent(`${String(term).trim()} etymology`);
@@ -8022,10 +8270,10 @@ function etymologyLinks(term) {
 
 function enrichBody(type, data, term) {
   if (type === "etymology") {
-    const note =
-      data && data.text
-        ? `<p class="enrich-text">${escapeHtml(data.text)}</p>`
-        : enrichEmpty("辞書APIには語源が未収録でした。下のリンクから調べられます。");
+    const norm = normalizeEtymologyData(data);
+    const note = norm.text
+      ? `<p class="enrich-text">${escapeHtml(norm.text)}</p>${jaLine(norm.ja)}`
+      : enrichEmpty("辞書APIには語源が未収録でした。下のリンクから調べられます。");
     return `${note}${etymologyLinks(term)}`;
   }
 
@@ -8048,17 +8296,18 @@ function enrichBody(type, data, term) {
   }
 
   if (type === "examples") {
+    const norm = normalizeExamplesData(data);
     let html = "";
-    if (data.examples?.length) {
-      html += `<ul class="enrich-list example-list">${data.examples
-        .map((example) => `<li>${escapeHtml(example)}</li>`)
+    if (norm.examples.length) {
+      html += `<ul class="enrich-list example-list">${norm.examples
+        .map((example) => `<li>${escapeHtml(example.en)}${jaLine(example.ja)}</li>`)
         .join("")}</ul>`;
     }
-    if (data.definitions?.length) {
-      html += `<div class="def-list">${data.definitions
+    if (norm.definitions.length) {
+      html += `<div class="def-list">${norm.definitions
         .map(
           (def) =>
-            `<p><em>${escapeHtml(def.pos)}</em> ${escapeHtml(def.def)}</p>`,
+            `<p><em>${escapeHtml(dictPosJa(def.pos))}</em> ${escapeHtml(def.def)}</p>${jaLine(def.ja)}`,
         )
         .join("")}</div>`;
     }
@@ -8066,10 +8315,11 @@ function enrichBody(type, data, term) {
   }
 
   if (type === "synonyms") {
-    return `<ul class="enrich-list syn-list">${data.items
+    const norm = normalizeSynonymsData(data);
+    return `<ul class="enrich-list syn-list">${norm.items
       .map(
         (item) =>
-          `<li><strong>${escapeHtml(item.word)}</strong>${
+          `<li><strong>${escapeHtml(item.word)}</strong>${jaSuffix(item.ja)}${
             item.def ? ` — <span>${escapeHtml(item.def)}</span>` : ""
           }</li>`,
       )
@@ -8113,6 +8363,8 @@ async function handleEnrichChip(chip) {
 
   if (word.enrich[type]) {
     section.innerHTML = enrichSectionShell(type, enrichBody(type, word.enrich[type], word.term));
+    // 旧形式のキャッシュ（和訳が未取得）でも表示は即座に行い、和訳だけ裏側で追いかけて補う。
+    backfillTranslations(type, word, section, chip);
     return;
   }
 
@@ -8124,6 +8376,67 @@ async function handleEnrichChip(chip) {
   }
   if (chip.getAttribute("aria-pressed") !== "true") return;
   section.innerHTML = enrichSectionShell(type, enrichBody(type, data, word.term));
+}
+
+// 表示済みの例文・語源・類義語のうち和訳が未取得のものを裏側でまとめて翻訳し、
+// 成功したらキャッシュ更新＆再描画する。失敗しても既存表示はそのまま維持する（クラッシュしない）。
+async function backfillTranslations(type, word, section, chip) {
+  try {
+    const raw = word.enrich[type];
+    if (!raw) return;
+
+    let normalized;
+    if (type === "examples") normalized = normalizeExamplesData(raw);
+    else if (type === "etymology") normalized = normalizeEtymologyData(raw);
+    else if (type === "synonyms") normalized = normalizeSynonymsData(raw);
+    else return; // collocationsは和訳対象外
+
+    const texts = [];
+    const targets = [];
+    if (type === "examples") {
+      for (const item of normalized.examples) {
+        if (item.en && item.ja === undefined) {
+          texts.push(item.en);
+          targets.push(item);
+        }
+      }
+      for (const item of normalized.definitions) {
+        if (item.def && item.ja === undefined) {
+          texts.push(item.def);
+          targets.push(item);
+        }
+      }
+    } else if (type === "etymology") {
+      if (normalized.text && normalized.ja === undefined) {
+        texts.push(normalized.text);
+        targets.push(normalized);
+      }
+    } else if (type === "synonyms") {
+      for (const item of normalized.items) {
+        if (item.word && item.ja === undefined) {
+          texts.push(item.word);
+          targets.push(item);
+        }
+      }
+    }
+
+    // 正規化した内容をキャッシュへ書き戻しておく（旧形式のまま残さない）。
+    word.enrich[type] = normalized;
+    if (texts.length === 0) return;
+
+    const translated = await window.Translate.translateBatch(texts);
+    targets.forEach((target, i) => {
+      target.ja = translated[i] !== undefined ? translated[i] : null;
+    });
+    persistAppState();
+
+    // チップが開いたままであれば和訳を反映して再描画する。
+    if (chip.getAttribute("aria-pressed") === "true" && section.isConnected) {
+      section.innerHTML = enrichSectionShell(type, enrichBody(type, word.enrich[type], word.term));
+    }
+  } catch {
+    // 通信・パース失敗時は何もしない（既存表示を維持）
+  }
 }
 
 function historyEntryTitle(entry) {
