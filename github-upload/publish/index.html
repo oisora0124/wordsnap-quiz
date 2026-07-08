@@ -17,6 +17,8 @@
     <meta name="theme-color" content="#6366f1" />
     <!-- ホーム画面アイコンはダーク版（背景が濃く、どの壁紙でも映える） -->
     <link rel="apple-touch-icon" href="assets/wordsnap-icon-dark.png" />
+    <!-- PWA: マニフェスト（ホーム画面インストール・オフライン起動用）。file:// では無視されるだけで害はない -->
+    <link rel="manifest" href="wordsnap.webmanifest" />
     <title>WordBank</title>
     <style>
 /* ============================================================
@@ -399,6 +401,29 @@ h2 {
 /* サーバー保存なし（file://等）：グレー */
 .sync-badge[data-state="off"] .sync-badge-dot {
   background: var(--muted);
+}
+
+/* ---------- 連続学習日数（🔥ストリーク）ピル ---------- */
+/* hero-controls の1行に収める前提。iPhone幅でも折り返さないよう横幅は最小限にする */
+.streak-badge {
+  gap: 0.15rem;
+  padding: 0.5rem 0.55rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.streak-badge:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+/* 今日まだ解いていない：薄く表示して「今日やれば継続」が分かるようにする */
+.streak-badge.is-stale {
+  opacity: 0.5;
 }
 
 @keyframes sync-pulse {
@@ -3228,6 +3253,56 @@ textarea:focus-visible {
   }
 }
 
+/* スマホ: 上部タブを画面下部固定のボトムナビに変える（デスクトップ表示は不変）。
+   アイコン＋小ラベルの縦積み5タブ。iPhoneのホームバーは safe-area で回避する。 */
+@media (max-width: 640px) {
+  .step-tabs {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    gap: 2px;
+    margin: 0;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    border: none;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    /* ダークモードでも下のコンテンツが透けないよう不透明のsurfaceを使う */
+    background: var(--surface);
+    box-shadow: 0 -6px 20px rgba(17, 24, 39, 0.1);
+  }
+
+  .step-tab {
+    flex-direction: column;
+    gap: 3px;
+    min-height: 52px;
+    padding: 0.3rem 0.1rem;
+    text-align: center;
+  }
+
+  .step-icon {
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 9px;
+  }
+
+  /* 縦積みでは「Step 1」等の小ラベルは省き、機能名だけを出す */
+  .step-tab small {
+    display: none;
+  }
+
+  .step-tab strong {
+    font-size: 0.62rem;
+    line-height: 1.2;
+  }
+
+  /* ボトムナビにコンテンツが隠れないよう、下端に余白を確保する */
+  .shell {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 </style>
   </head>
   <body>
@@ -3252,6 +3327,9 @@ textarea:focus-visible {
         </div>
         <div class="hero-side">
           <div class="hero-controls">
+            <button id="streakBadge" class="streak-badge" type="button" hidden aria-label="連続学習日数">
+              <span aria-hidden="true">🔥</span><span id="streakBadgeCount">0</span>
+            </button>
             <button id="syncBadge" class="sync-badge" type="button" data-state="idle" title="タップで今すぐ同期">
               <span class="sync-badge-dot" aria-hidden="true"></span>
               <span class="sync-badge-text">同期の確認中…</span>
@@ -3499,6 +3577,8 @@ accurate 正確な"
         </div>
 
         <div id="quizSetup" class="quiz-setup">
+          <!-- リロード等で中断したクイズがあるときだけ表示される再開ボタン -->
+          <button id="resumeQuizButton" class="secondary" type="button" hidden>▶ 前回の続きから</button>
           <div class="quiz-setup-row">
             <label class="quiz-setup-field">
               <span>単語帳</span>
@@ -3722,6 +3802,10 @@ accurate 正確な"
                 <span>音量 <output id="soundVolumeValue">70%</output></span>
                 <input id="soundVolumeSlider" type="range" min="0" max="100" step="5" value="70" />
               </label>
+              <label class="settings-check">
+                <input id="vibrateToggle" type="checkbox" />
+                <span>振動（対応端末のみ）</span>
+              </label>
             </div>
           </details>
 
@@ -3767,6 +3851,10 @@ accurate 正確な"
                   </select>
                 </label>
               </div>
+              <label class="settings-check">
+                <input id="autoSpeakToggle" type="checkbox" />
+                <span>出題時に発音を自動再生する</span>
+              </label>
             </div>
           </details>
         </div>
@@ -4213,6 +4301,11 @@ const elements = {
   keyboardHintsToggle: document.querySelector("#keyboardHintsToggle"),
   autoNextToggle: document.querySelector("#autoNextToggle"),
   autoNextDelaySelect: document.querySelector("#autoNextDelaySelect"),
+  autoSpeakToggle: document.querySelector("#autoSpeakToggle"),
+  vibrateToggle: document.querySelector("#vibrateToggle"),
+  streakBadge: document.querySelector("#streakBadge"),
+  streakBadgeCount: document.querySelector("#streakBadgeCount"),
+  resumeQuizButton: document.querySelector("#resumeQuizButton"),
   downloadToolButton: document.querySelector("#downloadToolButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
 };
@@ -4225,6 +4318,10 @@ const SOUND_VOLUME_KEY = "wordsnap-sound-volume";
 const KBD_HINTS_KEY = "wordsnap-keyboard-hints";
 const AUTO_NEXT_KEY = "wordsnap-auto-next";
 const AUTO_NEXT_DELAY_KEY = "wordsnap-auto-next-delay";
+const AUTO_SPEAK_KEY = "wordsnap-auto-speak"; // 出題時に発音を自動再生するか
+const VIBRATE_KEY = "wordsnap-vibrate"; // 正解/不正解の振動フィードバック
+const QUIZ_RESUME_KEY = "wordsnap-quiz-resume:v1"; // 進行中クイズの再開用スナップショット
+const QUIZ_LAST_SETTINGS_KEY = "wordsnap-quiz-last-settings:v1"; // 前回のクイズ設定（単語帳・範囲・シャッフル）
 const SYNC_ID_KEY = "wordsnap-sync-id:v1";
 const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
@@ -4488,9 +4585,45 @@ function autoNextDelay() {
   return [1000, 2000, 3000, 4000, 5000].includes(delay) ? delay : 2000;
 }
 
+// 出題時の発音自動再生（デフォルトOFF）
+function autoSpeakEnabled() {
+  return localStorage.getItem(AUTO_SPEAK_KEY) === "1";
+}
+
+// 新しい問題が表示された瞬間に出題単語を1回だけ読み上げる。
+// 再描画のたびに鳴らないよう、再生済みフラグを問題オブジェクト自体に立てておく。
+function autoSpeakCurrentQuiz() {
+  if (!autoSpeakEnabled() || !currentQuiz || currentQuiz.answered) return;
+  if (!("speechSynthesis" in window)) return; // 非対応端末では黙ってスキップ
+  if (currentQuiz.autoSpoken) return;
+  currentQuiz.autoSpoken = true;
+  try {
+    speakWord(currentQuiz.answer.term);
+  } catch {
+    // 読み上げは補助機能。失敗しても出題は続ける
+  }
+}
+
+// 振動フィードバック（デフォルトON）
+function vibrationEnabled() {
+  return localStorage.getItem(VIBRATE_KEY) !== "0";
+}
+
+// 正解/不正解の振動。navigator.vibrate が無い環境（iOS Safari等）では何もしない
+function vibrateFeedback(pattern) {
+  if (!vibrationEnabled()) return;
+  try {
+    if (typeof navigator.vibrate === "function") navigator.vibrate(pattern);
+  } catch {
+    // 振動は補助機能
+  }
+}
+
 function applyQuizSettings() {
   if (elements.autoNextToggle) elements.autoNextToggle.checked = autoNextEnabled();
   if (elements.autoNextDelaySelect) elements.autoNextDelaySelect.value = String(autoNextDelay());
+  if (elements.autoSpeakToggle) elements.autoSpeakToggle.checked = autoSpeakEnabled();
+  if (elements.vibrateToggle) elements.vibrateToggle.checked = vibrationEnabled();
 }
 
 function clearAutoNextTimer() {
@@ -4735,7 +4868,32 @@ function defaultState() {
     savedAt: 0,
     deletions: {},
     trash: [],
+    streak: { count: 0, last: "" },
   };
+}
+
+// 端末ローカルタイムの日付を YYYY-MM-DD で返す（ストリーク判定用）
+function localDateString(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// 連続学習日数の形を正規化する。count と last（YYYY-MM-DD）が揃っていなければ未学習扱い。
+function normalizeStreak(raw) {
+  const count = Math.max(0, Math.floor(Number(raw?.count) || 0));
+  const last = /^\d{4}-\d{2}-\d{2}$/.test(String(raw?.last || "")) ? String(raw.last) : "";
+  return count > 0 && last ? { count, last } : { count: 0, last: "" };
+}
+
+// ストリークの同期マージ：学習日(last)が新しい方を採用。同日なら count が大きい方。
+// 同じ2つを何度マージしても結果は変わらない（冪等）。
+function mergeStreaks(a, b) {
+  const x = normalizeStreak(a);
+  const y = normalizeStreak(b);
+  if (x.last === y.last) return x.count >= y.count ? x : y;
+  return x.last > y.last ? x : y;
 }
 
 // 削除した単語の墓標（term→削除時刻）。これを同期で共有することで、
@@ -4850,6 +5008,7 @@ function normalizeState(state) {
     savedAt: Number(state.savedAt || 0),
     deletions: sanitizeDeletions(state.deletions, Date.now()),
     trash: sanitizeTrash(state.trash, Date.now()),
+    streak: normalizeStreak(state.streak),
   };
 }
 
@@ -5095,6 +5254,7 @@ function stateSignature(state) {
     activeDeckId: state.activeDeckId,
     deletions: Object.entries(state.deletions || {}).sort((a, b) => a[0].localeCompare(b[0])),
     trash: state.trash || [],
+    streak: normalizeStreak(state.streak),
   });
 }
 
@@ -5189,6 +5349,7 @@ function mergeAppStates(localState, remoteState) {
     savedAt: Math.max(local.savedAt, remote.savedAt),
     deletions: mergedDeletions,
     trash: mergedTrash,
+    streak: mergeStreaks(local.streak, remote.streak),
   });
 }
 
@@ -5568,7 +5729,20 @@ function initWordsnapSync() {
     if (!document.hidden) pullIfConnected();
   });
   window.addEventListener("pageshow", pullIfConnected);
-  window.addEventListener("online", pullIfConnected);
+  // オフライン復帰時：オフライン中に解いた進捗（stats・history・streak等）を即サーバーへ反映する。
+  // 未接続(connected=false)でも force で押し込む。pull→push の順にして、他端末が先に
+  // 送った進捗をマージしてから自分の分を送る（多重実行は pulling/pushing ガードが防ぐ）。
+  const syncOnReconnect = async () => {
+    if (!syncState.id || !syncServerAvailable()) return;
+    try {
+      await pullWordsnapState({ silent: true });
+      await pushWordsnapState({ force: true });
+    } catch {
+      // 失敗しても次のポーリング/保存時に再試行される
+    }
+    updateSyncBadge();
+  };
+  window.addEventListener("online", syncOnReconnect);
   window.addEventListener("offline", updateSyncBadge);
 
   // ヘッダーの同期バッジ：タップで今すぐ同期（サーバー利用不可なら設定の説明へ）
@@ -7101,6 +7275,7 @@ function learningLabel(word) {
 
 function renderQuiz() {
   renderAccuracy();
+  updateResumeButton();
 
   if (elements.generalReviewButton) {
     elements.generalReviewButton.disabled = appState.words.length === 0;
@@ -7132,6 +7307,7 @@ function renderQuiz() {
 
   elements.quizWord.textContent = currentQuiz.answer.term;
   renderChoices(currentQuiz.choices);
+  autoSpeakCurrentQuiz(); // 設定ONなら新しい問題の単語を1回だけ読み上げる
   updateQuizControls();
 }
 
@@ -7232,6 +7408,79 @@ function orderIdsByPriority(ids) {
     .map((entry) => entry.id);
 }
 
+// 進行中の復習/範囲クイズを保存する。ページを閉じたりリロードしても
+// 「前回の続きから」で再開できるようにするための仕組み（ストレージ不可環境では黙って諦める）。
+function persistReviewProgress() {
+  if (!reviewSession) return;
+  try {
+    localStorage.setItem(
+      QUIZ_RESUME_KEY,
+      JSON.stringify({
+        allIds: reviewSession.allIds,
+        queue: reviewSession.queue,
+        label: reviewSession.label,
+        total: reviewSession.total,
+        savedAt: Date.now(),
+      }),
+    );
+  } catch {
+    // 保存できない環境（file:// のiPhone等）では再開機能なしで動かす
+  }
+}
+
+function clearSavedReviewProgress() {
+  try {
+    localStorage.removeItem(QUIZ_RESUME_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+// 保存済みの再開スナップショットを読む。残りがあり、全IDが現存するときだけ返す。
+function readSavedReviewProgress() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(QUIZ_RESUME_KEY));
+    if (!saved || !Array.isArray(saved.allIds) || !Array.isArray(saved.queue)) return null;
+    if (saved.queue.length === 0 || saved.allIds.length === 0) return null;
+    const ids = new Set(appState.words.map((word) => word.id));
+    if (!saved.allIds.every((id) => ids.has(id))) return null;
+    if (!saved.queue.every((id) => ids.has(id))) return null;
+    return saved;
+  } catch {
+    return null;
+  }
+}
+
+// クイズ設定欄の「▶ 前回の続きから」ボタンの表示を最新状態に合わせる
+function updateResumeButton() {
+  const button = elements.resumeQuizButton;
+  if (!button) return;
+  const saved = !reviewSession && !quizStarted ? readSavedReviewProgress() : null;
+  button.hidden = !saved;
+  if (saved) button.textContent = `▶ 前回の続きから（残り${saved.queue.length}語）`;
+}
+
+// 保存済みスナップショットから reviewSession を復元して再開する
+function resumeSavedReview() {
+  const saved = readSavedReviewProgress();
+  if (!saved) {
+    setStatus("再開できる前回のクイズが見つかりませんでした。");
+    updateResumeButton();
+    return;
+  }
+  reviewSession = {
+    allIds: saved.allIds,
+    queue: saved.queue,
+    total: Number(saved.total) || saved.allIds.length,
+    label: String(saved.label || "復習"),
+  };
+  currentQuiz = null;
+  persistReviewProgress();
+  renderQuiz();
+  elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  setStatus(`前回の続きから再開しました（残り${reviewSession.queue.length}語）。`);
+}
+
 function startReview(ids, options = {}) {
   const valid = ids.filter((id) => appState.words.some((word) => word.id === id));
   if (valid.length === 0) return;
@@ -7250,6 +7499,7 @@ function startReview(ids, options = {}) {
     label: options.label || "復習",
   };
   currentQuiz = null;
+  persistReviewProgress(); // 新しいセッションで上書き（古い再開データは破棄される）
   renderQuiz();
   elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
   setStatus(`${valid.length}語の${reviewSession.label}を開始しました。`);
@@ -7320,13 +7570,61 @@ function startQuizFromRange() {
   const deckLabel =
     elements.quizDeckSelect.value === "all" ? "すべて" : deckName(elements.quizDeckSelect.value);
   const rangeLabel = from === 1 && to === total ? "全部" : `${from}〜${to}番`;
+  persistLastQuizSettings(); // 次回起動時に同じ設定から始められるよう保存する
   startReview(selected.map((word) => word.id), {
     label: `${deckLabel}・${rangeLabel}`,
     shuffle: elements.quizShuffle ? elements.quizShuffle.checked : true,
   });
 }
 
+// 「前回の設定」（単語帳・範囲・シャッフル）を保存する
+function persistLastQuizSettings() {
+  try {
+    const useRange = !!(elements.quizRangeRow && !elements.quizRangeRow.hidden);
+    localStorage.setItem(
+      QUIZ_LAST_SETTINGS_KEY,
+      JSON.stringify({
+        deckId: elements.quizDeckSelect ? elements.quizDeckSelect.value : "all",
+        useRange,
+        from: useRange && elements.quizRangeFrom ? elements.quizRangeFrom.value : "",
+        to: useRange && elements.quizRangeTo ? elements.quizRangeTo.value : "",
+        shuffle: elements.quizShuffle ? elements.quizShuffle.checked : true,
+      }),
+    );
+  } catch {
+    /* 保存できない環境では前回設定なしで動く */
+  }
+}
+
+// 起動時に前回のクイズ設定を復元する（単語帳が消えていたら単語帳だけスキップ）
+function restoreLastQuizSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(QUIZ_LAST_SETTINGS_KEY));
+    if (!saved || typeof saved !== "object") return;
+    if (
+      saved.deckId &&
+      elements.quizDeckSelect &&
+      [...elements.quizDeckSelect.options].some((opt) => opt.value === saved.deckId)
+    ) {
+      elements.quizDeckSelect.value = saved.deckId;
+      updateQuizDeckCount();
+    }
+    if (elements.quizShuffle && typeof saved.shuffle === "boolean") {
+      elements.quizShuffle.checked = saved.shuffle;
+    }
+    if (saved.useRange && elements.quizRangeRow) {
+      elements.quizRangeRow.hidden = false;
+      elements.quizRangeToggle?.setAttribute("aria-expanded", "true");
+      if (elements.quizRangeFrom) elements.quizRangeFrom.value = String(saved.from || "");
+      if (elements.quizRangeTo) elements.quizRangeTo.value = String(saved.to || "");
+    }
+  } catch {
+    /* 壊れた保存値は無視する */
+  }
+}
+
 function endReview(message) {
+  clearSavedReviewProgress(); // 完走/中断したら再開データは消す（閉じた/リロード時だけ残る）
   reviewSession = null;
   currentQuiz = null;
   renderQuiz();
@@ -7371,6 +7669,7 @@ function renderReviewQuiz() {
 
   elements.quizWord.textContent = currentQuiz.answer.term;
   renderChoices(currentQuiz.choices);
+  autoSpeakCurrentQuiz(); // 復習クイズでも新しい問題の単語を1回だけ読み上げる
 }
 
 function highlightChoices(choiceId) {
@@ -7456,15 +7755,52 @@ function pickDistractors(pool, answer, count = 3) {
   return picked;
 }
 
+// ヘッダーの🔥ピルを最新の連続学習日数に合わせて更新する（count=0なら非表示）
+function renderStreakBadge() {
+  const badge = elements.streakBadge;
+  if (!badge) return;
+  const streak = normalizeStreak(appState.streak);
+  badge.hidden = streak.count === 0;
+  if (streak.count === 0) return;
+  if (elements.streakBadgeCount) elements.streakBadgeCount.textContent = String(streak.count);
+  const isToday = streak.last === localDateString();
+  // 今日まだ解いていなければ薄く表示する（今日やれば継続が分かるように）
+  badge.classList.toggle("is-stale", !isToday);
+  badge.title = isToday
+    ? `${streak.count}日連続で学習中！`
+    : "今日クイズに答えると連続記録が続きます";
+}
+
+// 解答のたびに連続学習日数を更新する。
+// last=今日→何もしない / last=昨日→count+1 / それ以外→count=1（日付は端末ローカルタイム）
+function updateStreakOnAnswer() {
+  try {
+    const today = localDateString();
+    const streak = normalizeStreak(appState.streak);
+    if (streak.last !== today) {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      streak.count = streak.last === localDateString(yesterday) ? streak.count + 1 : 1;
+      streak.last = today;
+      appState.streak = streak;
+    }
+  } catch {
+    // ストリークは補助機能。失敗しても解答処理は止めない
+  }
+  renderStreakBadge();
+}
+
 function gradeQuiz(choiceId, dontKnow = false) {
   if (!currentQuiz || currentQuiz.answered) return;
 
   const isCorrect = !dontKnow && choiceId === currentQuiz.answer.id;
   playSound(isCorrect ? "correct" : "wrong");
+  vibrateFeedback(isCorrect ? 15 : [40, 60, 40]);
   const word = appState.words.find((item) => item.id === currentQuiz.answer.id);
   if (!word) return;
 
   currentQuiz.answered = true;
+  updateStreakOnAnswer();
   word.stats[isCorrect ? "correct" : "wrong"] += 1;
   word.history.push({ at: new Date().toISOString(), correct: isCorrect });
   if (word.history.length > 50) word.history = word.history.slice(-50);
@@ -7483,6 +7819,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
         : "正解！「次の問題」で続けます。"
       : `正解は「${currentQuiz.answer.meaning}」。あとでもう一度出します。`;
     elements.quizScope.textContent = `${reviewSession.label} 残り ${remaining}/${reviewSession.total}`;
+    persistReviewProgress(); // 問題が進むたびに再開用スナップショットを更新する
     persistAppState();
     renderAccuracy();
     updateSavedWordRow(word);
@@ -7519,6 +7856,7 @@ function renderAll() {
   renderSavedWords();
   renderTrash();
   renderQuiz();
+  renderStreakBadge();
   populateQuizDeckSelect();
   // Fill in missing CEFR/品詞 badges via the network here (not on every saved-list
   // render). Both are guarded against overlapping runs and skip already-resolved
@@ -8221,6 +8559,7 @@ document.addEventListener("keydown", (event) => {
 
 elements.startQuizButton.addEventListener("click", () => {
   clearAutoNextTimer();
+  clearSavedReviewProgress(); // 再開せず別のクイズを始めたら、前回の続きは破棄する
   quizStarted = true;
   currentQuiz = availableQuizWords().length > 0 ? buildQuiz() : null;
   playSound(currentQuiz ? "next" : "wrong");
@@ -8271,6 +8610,17 @@ elements.nextQuizButton.addEventListener("click", () => {
 elements.generalReviewButton.addEventListener("click", startGeneralReview);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
+elements.resumeQuizButton?.addEventListener("click", resumeSavedReview);
+
+// 🔥ピル：タップで連続学習日数の説明を表示する
+elements.streakBadge?.addEventListener("click", () => {
+  const streak = normalizeStreak(appState.streak);
+  if (streak.last === localDateString()) {
+    setStatus(`🔥 ${streak.count}日連続で学習中！この調子で続けましょう。`);
+  } else {
+    setStatus(`今日はまだ解いていません。1問解くと連続記録が続きます（現在${streak.count}日）。`);
+  }
+});
 elements.quizDeckSelect?.addEventListener("change", updateQuizDeckCount);
 elements.quizRangeToggle?.addEventListener("click", () => {
   const show = elements.quizRangeRow.hidden;
@@ -8501,6 +8851,17 @@ elements.autoNextDelaySelect.addEventListener("change", () => {
   applyQuizSettings();
   playSound("tap");
 });
+elements.autoSpeakToggle?.addEventListener("change", () => {
+  localStorage.setItem(AUTO_SPEAK_KEY, elements.autoSpeakToggle.checked ? "1" : "0");
+  applyQuizSettings();
+  playSound("tap");
+});
+elements.vibrateToggle?.addEventListener("change", () => {
+  localStorage.setItem(VIBRATE_KEY, elements.vibrateToggle.checked ? "1" : "0");
+  applyQuizSettings();
+  if (elements.vibrateToggle.checked) vibrateFeedback(15); // ONにした瞬間に体感できるよう1回だけ振動
+  playSound("tap");
+});
 // "ツールを保存" rebuilds the single HTML by fetching the separate source files,
 // which fails when this is already the bundled file opened via file://. Show it
 // only in the multi-file (development) build that still links external assets.
@@ -8656,12 +9017,34 @@ function initStorageWarning() {
   box.hidden = false;
 }
 
+// PWA: Service Worker を登録してオフラインでも起動できるようにする。
+// https か localhost のときだけ。file:// や LAN の http（〜.local:8787等）では黙ってスキップする。
+function initServiceWorker() {
+  try {
+    if (!("serviceWorker" in navigator)) return;
+    const isLocalhost = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+    if (window.location.protocol !== "https:" && !isLocalhost) return;
+    navigator.serviceWorker.register("wordsnap-sw.js").catch(() => {
+      // 登録に失敗してもアプリ本体はそのまま動く
+    });
+  } catch {
+    // Service Worker は任意機能。ここで落ちても初期化を止めない
+  }
+}
+
 initTheme();
 initSettings();
 initStepTabs();
 initLearningQuote();
 initStorageWarning();
+initServiceWorker();
 renderAll();
+// 前回のクイズ設定（単語帳・範囲・シャッフル）を復元する。失敗しても起動は続ける。
+try {
+  restoreLastQuizSettings();
+} catch {
+  /* ignore */
+}
 // 保存データの復元(recoverPersisted)を待ってから同期を開始する。
 // 復元が遅い/失敗してもサーバー同期が始まるよう、フォールバックも用意する。
 let syncInitStarted = false;
