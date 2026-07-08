@@ -1,6 +1,6 @@
 {
-  "name": "WordSnap Quiz",
-  "short_name": "WordSnap",
+  "name": "WordBank",
+  "short_name": "WordBank",
   "description": "英単語と意味を登録して4択クイズで復習できる単語学習ツール",
   "lang": "ja",
   "start_url": "./",

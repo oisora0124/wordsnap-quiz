@@ -1,4 +1,4 @@
-// WordSnap Quiz — Service Worker
+// WordBank — Service Worker
 // オフラインでもアプリを起動できるようにするキャッシュ層。
 // 方針:
 //   - HTML（ナビゲーション）: network-first。最新を取りに行き、オフライン時だけキャッシュを返す
@@ -6,10 +6,12 @@
 //   - /api/（同期サーバー）とクロスオリジン（辞書API等）は絶対にキャッシュせず素通しする。
 //     オフライン中に解いた進捗はlocalStorageに溜まり、オンライン復帰時にアプリ側が同期する前提。
 // キャッシュ名はバージョン付き。更新時は番号を上げると activate で古いキャッシュが消える。
-const CACHE_NAME = "wordsnap-v1";
+const CACHE_NAME = "wordsnap-v2";
 
 // 最初に確保しておく最低限のファイル（1つ失敗しても他は続ける）
+// 本番はindex.html（"./"）、ローカルサーバーではwordsnap-quiz.htmlなので両方入れておく
 const PRECACHE_URLS = [
+  "./",
   "./wordsnap-quiz.html",
   "./wordsnap.webmanifest",
   "./assets/icon-192.png",
@@ -58,6 +60,7 @@ self.addEventListener("fetch", (event) => {
         .catch(() =>
           caches
             .match(request, { ignoreSearch: true })
+            .then((cached) => cached || caches.match("./"))
             .then((cached) => cached || caches.match("./wordsnap-quiz.html")),
         ),
     );
