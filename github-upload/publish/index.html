@@ -77,6 +77,19 @@
   font-family: var(--font);
 }
 
+/* テーマ切り替えの瞬間だけ、全体の色をなめらかに遷移させる。
+   常時transitionを付けると大きな単語リストで重くなるため、一時クラス方式にしている */
+:root.theme-fade,
+:root.theme-fade *,
+:root.theme-fade *::before,
+:root.theme-fade *::after {
+  transition:
+    background-color 0.35s ease,
+    color 0.35s ease,
+    border-color 0.35s ease,
+    box-shadow 0.35s ease !important;
+}
+
 :root[data-theme="dark"] {
   color-scheme: dark;
 
@@ -3257,6 +3270,34 @@ textarea:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  /* 並び替えと「★お気に入りだけ」を折り返さず1行に並べる */
+  .list-tools {
+    flex-wrap: nowrap;
+    gap: 0.45rem;
+  }
+
+  .sort-field {
+    flex: 1;
+    min-width: 0;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+
+  .sort-field select {
+    flex: 1;
+    min-width: 0;
+    padding: 0.4rem 0.35rem;
+    font-size: 0.85rem;
+  }
+
+  .favorite-filter {
+    flex: none;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+
   /* クイズカードを縦に詰めてスクロール量を減らす（スマホ） */
   .quiz-card {
     padding: 14px 14px 12px;
@@ -4701,7 +4742,15 @@ function requestGeoForAutoTheme() {
 
 function applyTheme(mode) {
   const isDark = resolveTheme(mode) === "dark";
-  document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+  const rootEl = document.documentElement;
+  const nextTheme = isDark ? "dark" : "light";
+  // 実際に色が変わるときだけ、ふわっとクロスフェードさせる
+  if (rootEl.getAttribute("data-theme") && rootEl.getAttribute("data-theme") !== nextTheme) {
+    rootEl.classList.add("theme-fade");
+    clearTimeout(applyTheme._fadeTimer);
+    applyTheme._fadeTimer = setTimeout(() => rootEl.classList.remove("theme-fade"), 420);
+  }
+  rootEl.setAttribute("data-theme", nextTheme);
   // ファビコンもテーマに合わせて切り替える
   const favicon = document.getElementById("favicon");
   if (favicon) {
