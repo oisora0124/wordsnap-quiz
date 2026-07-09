@@ -1500,22 +1500,39 @@ textarea:focus-visible {
   font-size: 0.82rem;
 }
 
+/* 1行の横スクロールバー。デッキが増えても折り返さず横に流す。 */
 .deck-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 6px;
   align-items: center;
   margin-bottom: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px; /* 細いスクロールバーがチップに重ならないよう少し余白を確保 */
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.deck-bar::-webkit-scrollbar {
+  height: 5px;
+}
+
+.deck-bar::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
 }
 
 .deck-tab {
-  gap: 0.45rem;
-  padding: 0.45rem 0.85rem;
+  flex: none; /* 横スクロール内でチップが縮まないように */
+  white-space: nowrap;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
   color: var(--ink);
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: 999px;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   font-weight: 650;
 }
 
@@ -1535,10 +1552,10 @@ textarea:focus-visible {
 }
 
 .deck-count {
-  padding: 0.02rem 0.45rem;
+  padding: 0.02rem 0.4rem;
   border-radius: 999px;
   background: rgba(127, 127, 127, 0.18);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
 }
 
 .deck-tab.active .deck-count {
@@ -1557,11 +1574,13 @@ textarea:focus-visible {
 }
 
 .deck-tool {
-  padding: 0.45rem 0.7rem;
+  flex: none; /* 横スクロールバー内で縮まない・折り返さない */
+  white-space: nowrap;
+  padding: 0.35rem 0.6rem;
   color: var(--ink);
   background: transparent;
   border: 1px solid var(--line);
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   font-weight: 650;
 }
 
@@ -1946,15 +1965,68 @@ textarea:focus-visible {
   margin-bottom: 16px;
 }
 
+/* デフォルトは閉じた状態（サマリーの1行だけ）で表示し、タップで円グラフの内訳を開閉する */
 .deck-stats-card {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.deck-stats-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.deck-stats-summary::-webkit-details-marker {
+  display: none;
+}
+
+.deck-stats-summary::after {
+  content: "▾";
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.deck-stats-card[open] .deck-stats-summary::after {
+  transform: rotate(180deg);
+}
+
+.donut-rate-mini {
+  flex: none;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.donut-title-mini {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-weight: 650;
+  font-size: 0.8rem;
+}
+
+.deck-stats-body {
   display: flex;
   flex-wrap: wrap;
   gap: 24px;
   align-items: center;
-  padding: 16px 20px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
+  padding: 0 20px 16px;
 }
 
 .donut {
@@ -5090,6 +5162,8 @@ function mergeStreaks(a, b) {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DELETION_TTL_MS = 90 * DAY_MS; // 90日で掃除
 const TRASH_TTL_MS = 30 * DAY_MS; // 30日で削除済みから掃除
+// 誤答した単語が通常クイズに戻れる時間ベースの保険（既存の「◯問後」SRSとOR＝早い方が優先）
+const WRONG_COOLDOWN_MS = 5 * 60 * 1000;
 
 function sanitizeDeletions(raw, now) {
   const out = {};
@@ -5303,6 +5377,7 @@ function normalizeLearning(word) {
       status: word.learning.status || "new",
       firstAttempted: Boolean(word.learning.firstAttempted),
       reviewAt: Number(word.learning.reviewAt || 0),
+      blockedUntil: Number(word.learning.blockedUntil || 0), // 誤答した単語がこの時刻まで再出題されない（旧データは0=足止めなし）
     };
   }
 
@@ -5313,6 +5388,7 @@ function normalizeLearning(word) {
     status: attempted && correct > 0 && wrong === 0 ? "mastered" : "new",
     firstAttempted: attempted,
     reviewAt: 0,
+    blockedUntil: 0,
   };
 }
 
@@ -5609,11 +5685,14 @@ function mergeEnrichData(a, b) {
 function mergeLearningState(a, b, history) {
   const last = history[history.length - 1];
   const nextReviewAt = minPositiveNumber(a?.reviewAt, b?.reviewAt);
+  // 5分ブロックは両端末の遅い方（＝より安全な方）を採用し、マージで足止めが消えないようにする
+  const blockedUntil = Math.max(Number(a?.blockedUntil || 0), Number(b?.blockedUntil || 0));
   if (last) {
     return {
       status: last.correct ? "mastered" : "review",
       firstAttempted: true,
       reviewAt: last.correct ? 0 : nextReviewAt,
+      blockedUntil,
     };
   }
   if (a?.status === "review" || b?.status === "review") {
@@ -5621,12 +5700,13 @@ function mergeLearningState(a, b, history) {
       status: "review",
       firstAttempted: Boolean(a?.firstAttempted || b?.firstAttempted),
       reviewAt: nextReviewAt,
+      blockedUntil,
     };
   }
   if (a?.status === "mastered" || b?.status === "mastered") {
-    return { status: "mastered", firstAttempted: true, reviewAt: 0 };
+    return { status: "mastered", firstAttempted: true, reviewAt: 0, blockedUntil };
   }
-  return { status: "new", firstAttempted: false, reviewAt: 0 };
+  return { status: "new", firstAttempted: false, reviewAt: 0, blockedUntil };
 }
 
 function minPositiveNumber(...values) {
@@ -5765,6 +5845,28 @@ async function pullWordsnapState(options = {}) {
   }
 }
 
+// window.confirm() はiOSでホーム画面に追加した状態（standalone）だと正しく表示されず、
+// 画面全体が反応しなくなることがあるため使わない。代わりに「もう一度押すと確定」の
+// 2段階クリックにする（一定時間内に再度押さなければ自動的に取り消される）。
+function armDangerButton(button, armedLabel, timeoutMs = 4000) {
+  if (!button) return true; // ボタンが無ければ確認をスキップして先に進める
+  if (button.dataset.armed === "1") {
+    window.clearTimeout(Number(button.dataset.armTimer || 0));
+    delete button.dataset.armed;
+    button.textContent = button.dataset.originalLabel || button.textContent;
+    return true; // 2回目のクリック＝確定
+  }
+  button.dataset.originalLabel = button.dataset.originalLabel || button.textContent;
+  button.dataset.armed = "1";
+  button.textContent = armedLabel;
+  const timer = window.setTimeout(() => {
+    delete button.dataset.armed;
+    button.textContent = button.dataset.originalLabel;
+  }, timeoutMs);
+  button.dataset.armTimer = String(timer);
+  return false; // 1回目のクリック＝まだ確定していない
+}
+
 // 【この端末を正にする】端末の内容でサーバーを丸ごと上書き（baseRev無し＝無条件上書き）。
 // 端末ごとに内容が食い違ったとき、正しい方の端末から実行する。
 async function forcePushOverwrite() {
@@ -5772,11 +5874,12 @@ async function forcePushOverwrite() {
     setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
     return;
   }
-  const ok = window.confirm(
-    `この端末の単語（${appState.words.length}語）で、サーバーと他の端末の内容を上書きします。\n` +
-      "他の端末は次に「他の端末に合わせる」を押すとこの内容になります。よろしいですか？",
-  );
-  if (!ok) return;
+  if (!armDangerButton(elements.syncForcePushButton, "もう一度押すと上書き確定")) {
+    setSyncStatus(
+      `この端末の単語（${appState.words.length}語）で、サーバーと他の端末の内容を上書きします。よければもう一度ボタンを押してください（4秒で取り消し）。`,
+    );
+    return;
+  }
   setSyncBusy(true);
   setSyncStatus("この端末の内容でサーバーを上書きしています…");
   try {
@@ -5799,11 +5902,12 @@ async function forcePullReplace() {
     setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
     return;
   }
-  const ok = window.confirm(
-    "サーバー（他の端末で『正にする』を押した内容）で、この端末の単語をすべて置き換えます。\n" +
-      "この端末だけにある変更は消えます。よろしいですか？",
-  );
-  if (!ok) return;
+  if (!armDangerButton(elements.syncForcePullButton, "もう一度押すと置き換え確定")) {
+    setSyncStatus(
+      "サーバー（他の端末で『正にする』を押した内容）で、この端末の単語をすべて置き換えます。この端末だけにある変更は消えます。よければもう一度ボタンを押してください（4秒で取り消し）。",
+    );
+    return;
+  }
   setSyncBusy(true);
   setSyncStatus("サーバーの内容で置き換えています…");
   try {
@@ -6093,6 +6197,9 @@ function renderDeckBar() {
     html += `<button type="button" class="deck-tool danger" data-deck-action="delete">削除</button>`;
   }
   elements.deckBar.innerHTML = html;
+  // 横スクロールバー化にともない、選択中のデッキが画面外なら見える位置までスクロールする
+  const activeTab = elements.deckBar.querySelector(".deck-tab.active");
+  if (activeTab) activeTab.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 function renderSaveDeckSelect() {
@@ -6155,26 +6262,34 @@ function renderDeckStats() {
 
   const ariaLabel = `${activeDeckLabel()}の正答率${rate == null ? "未挑戦" : rate + "%"}。3回以上正解${buckets.c3}語、2回正解${buckets.c2}語、1回正解${buckets.c1}語、0回正解${buckets.c0}語。`;
 
+  // 再描画のたびに開閉状態が消えないよう、既存の open 状態を引き継ぐ（初回はデフォルトで閉じておく）
+  const wasOpen = elements.deckStats.querySelector("details.deck-stats-card")?.open || false;
+
   elements.deckStats.innerHTML = `
-    <div class="deck-stats-card">
-      <div class="donut" role="img" aria-label="${escapeHtml(ariaLabel)}" style="background:${gradient}">
-        <div class="donut-hole">
-          <span class="donut-rate">${rate == null ? "—" : rate + "%"}</span>
-          <span class="donut-rate-label">正答率</span>
+    <details class="deck-stats-card"${wasOpen ? " open" : ""}>
+      <summary class="deck-stats-summary">
+        <span class="donut-rate-mini">正答率 ${rate == null ? "—" : rate + "%"}</span>
+        <span class="donut-title-mini">${escapeHtml(activeDeckLabel())} の内訳（${total}語）</span>
+      </summary>
+      <div class="deck-stats-body">
+        <div class="donut" role="img" aria-label="${escapeHtml(ariaLabel)}" style="background:${gradient}">
+          <div class="donut-hole">
+            <span class="donut-rate">${rate == null ? "—" : rate + "%"}</span>
+            <span class="donut-rate-label">正答率</span>
+          </div>
+        </div>
+        <div class="donut-legend">
+          <ul>
+            ${segs
+              .map(
+                (seg) =>
+                  `<li><span class="swatch" style="background:${seg.color}"></span><span class="legend-label">${seg.label}</span><strong>${seg.count}</strong></li>`,
+              )
+              .join("")}
+          </ul>
         </div>
       </div>
-      <div class="donut-legend">
-        <p class="donut-title">${escapeHtml(activeDeckLabel())} の内訳（${total}語）</p>
-        <ul>
-          ${segs
-            .map(
-              (seg) =>
-                `<li><span class="swatch" style="background:${seg.color}"></span><span class="legend-label">${seg.label}</span><strong>${seg.count}</strong></li>`,
-            )
-            .join("")}
-        </ul>
-      </div>
-    </div>
+    </details>
   `;
 }
 
@@ -7662,11 +7777,14 @@ function resumeSavedReview() {
     total: Number(saved.total) || saved.allIds.length,
     label: String(saved.label || "復習"),
   };
+  const remaining = saved.queue.length;
   currentQuiz = null;
   persistReviewProgress();
   renderQuiz();
   elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
-  setStatus(`前回の続きから再開しました（残り${reviewSession.queue.length}語）。`);
+  // renderQuiz() の中で「全単語ブロック中」等により即座に endReview されると reviewSession は
+  // null になっている。その場合は endReview 側のメッセージを優先し、ここでは上書きしない。
+  if (reviewSession) setStatus(`前回の続きから再開しました（残り${remaining}語）。`);
 }
 
 function startReview(ids, options = {}) {
@@ -7680,17 +7798,20 @@ function startReview(ids, options = {}) {
   } else {
     queue = shuffle(valid.slice());
   }
+  const label = options.label || "復習";
   reviewSession = {
     allIds: valid,
     queue,
     total: valid.length,
-    label: options.label || "復習",
+    label,
   };
   currentQuiz = null;
   persistReviewProgress(); // 新しいセッションで上書き（古い再開データは破棄される）
   renderQuiz();
   elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
-  setStatus(`${valid.length}語の${reviewSession.label}を開始しました。`);
+  // renderQuiz() の中で「選んだ単語が全部ブロック中」等により即座に endReview されると
+  // reviewSession は null になっている。その場合は endReview 側のメッセージを優先する。
+  if (reviewSession) setStatus(`${valid.length}語の${label}を開始しました。`);
 }
 
 // 全単語を定着度スコアの低い順（未出題=最優先）で出題する。
@@ -7819,6 +7940,8 @@ function endReview(message) {
   if (message) setStatus(message);
 }
 
+// 復習セッションはキュー式の「誤答は末尾へ回す」だけで十分な間隔があくため、
+// 5分ブロックはここではチェックしない（通常クイズのavailableQuizWordsのみ対象）。
 function buildReviewQuiz() {
   while (reviewSession.queue.length) {
     const answer = appState.words.find((word) => word.id === reviewSession.queue[0]);
@@ -7883,9 +8006,14 @@ function buildQuiz() {
 }
 
 function availableQuizWords() {
+  const now = Date.now();
   const scoped = scopedWords();
+  // 誤答した単語は「◯問後に復習」(reviewAt) と「5分経過」(blockedUntil) の早い方で出題対象に戻る。
+  // 5分ルールはcounterが進まないまま放置された時の保険であり、通常は◯問後の条件が先に成立する。
   const dueReviews = scoped.filter(
-    (word) => word.learning.status === "review" && word.learning.reviewAt <= appState.quizCounter,
+    (word) =>
+      word.learning.status === "review" &&
+      (word.learning.reviewAt <= appState.quizCounter || word.learning.blockedUntil <= now),
   );
   if (dueReviews.length > 0) return dueReviews;
 
@@ -7992,6 +8120,9 @@ function gradeQuiz(choiceId, dontKnow = false) {
   word.stats[isCorrect ? "correct" : "wrong"] += 1;
   word.history.push({ at: new Date().toISOString(), correct: isCorrect });
   if (word.history.length > 50) word.history = word.history.slice(-50);
+  // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
+  // 場合の保険で、実際には◯問後の条件が先に成立することが多い（OR判定はavailableQuizWords側）
+  if (!isCorrect) word.learning.blockedUntil = Date.now() + WRONG_COOLDOWN_MS;
   highlightChoices(choiceId);
 
   if (reviewSession) {
@@ -8754,7 +8885,7 @@ elements.saveParsedButton.addEventListener("click", () => {
       enrich: emptyEnrich(),
       stats: { correct: 0, wrong: 0 },
       history: [],
-      learning: { status: "new", firstAttempted: false, reviewAt: 0 },
+      learning: { status: "new", firstAttempted: false, reviewAt: 0, blockedUntil: 0 },
     }));
 
   appState.words.push(...cleaned);
