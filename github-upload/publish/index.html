@@ -820,6 +820,23 @@ button.ghost.danger:hover {
   margin-bottom: 22px;
 }
 
+/* クイズの進捗バー（復習セッション中のみ）。細い1本で縦幅をほぼ増やさない。 */
+.quiz-progress-track {
+  height: 4px;
+  margin: -14px 0 18px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.quiz-progress-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  border-radius: 999px;
+  transition: width 220ms ease;
+}
+
 /* ---------- Step tabs ---------- */
 
 .step-tabs {
@@ -998,6 +1015,12 @@ button.ghost.danger:hover {
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 「保存した単語」タブの短縮ラベル。320px幅など極狭のボトムナビでのみ「単語」に切り替える
+   （@media (max-width: 360px) 側でfull/shortを入れ替える。ボタンのaria-labelは常に固定）。 */
+.label-short {
+  display: none;
 }
 
 /* ---------- Import section ---------- */
@@ -1673,6 +1696,23 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.sync-key-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.sync-key-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sync-key-row button {
+  flex: none;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.78rem;
 }
 
 .sync-field input {
@@ -2468,6 +2508,30 @@ textarea:focus-visible {
   grid-template-columns: minmax(110px, 0.5fr) auto minmax(0, 1fr) auto;
 }
 
+/* スクリーンリーダー専用（見た目には出さないが読み上げ順序には残す）。
+   絶対配置でフローから外すため、grid の列数には影響しない。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 候補確認画面の「単語」「意味」ラベル。デスクトップはプレースホルダー相当で
+   十分なので隠し、スマホの縦積みレイアウトでのみ見出しとして表示する。 */
+.candidate-field-label {
+  display: none;
+  margin-bottom: -0.2rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .word-row input {
   min-width: 0;
   padding: 0.6rem 0.65rem;
@@ -3209,6 +3273,10 @@ textarea:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .candidate-field-label {
+    display: block;
+  }
+
   .hero-title {
     align-items: flex-start;
   }
@@ -3480,6 +3548,28 @@ textarea:focus-visible {
   }
 }
 
+/* 320px幅など極狭の端末向け：ボトムナビの「保存した単語」を「単語」に短縮し、
+   上部のテーマ切替ボタンはアイコンのみにして、ナビが1行に収まる／横スクロールしないようにする。
+   （後続の @media なのでカスケード上、他のブレークポイントより優先される） */
+@media (max-width: 360px) {
+  .label-full {
+    display: none;
+  }
+
+  .label-short {
+    display: inline;
+  }
+
+  .theme-toggle-text {
+    display: none;
+  }
+
+  .theme-toggle {
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
+}
+
 </style>
   </head>
   <body>
@@ -3577,11 +3667,15 @@ textarea:focus-visible {
           aria-selected="false"
           aria-controls="panel-library"
           data-step-tab="library"
+          aria-label="保存した単語"
         >
           <span class="step-icon" aria-hidden="true"></span>
           <span class="step-copy">
             <small>Library</small>
-            <strong>保存した単語</strong>
+            <strong>
+              <span class="label-full">保存した単語</span>
+              <span class="label-short">単語</span>
+            </strong>
           </span>
         </button>
         <button
@@ -3636,6 +3730,11 @@ accurate 正確な"
           </label>
         </div>
         <p id="status" class="status" role="status">単語と訳をまとめて貼り付けてください（1行に「英単語 意味」）。写真からの読み取りは精度が低く非推奨です。</p>
+        <!-- 変換結果が「すべて保存済み」だったときだけ表示する導線。次の変換操作で自動的に消える。 -->
+        <div id="importAllSavedActions" class="actions" hidden>
+          <button id="importGoLibraryButton" class="secondary" type="button" data-goto-step="library">保存した単語を見る</button>
+          <button id="importClearButton" class="ghost" type="button">入力をクリア</button>
+        </div>
 
         <details class="ocr-details">
           <summary><span class="summary-icon camera-icon" aria-hidden="true"></span>写真から読み取る（任意・OCR｜精度が低く非推奨）</summary>
@@ -3749,8 +3848,12 @@ accurate 正確な"
           </div>
           <div class="pill-group">
             <span id="quizScope" class="pill subtle">出題: すべて</span>
+            <span id="quizProgress" class="pill subtle" hidden></span>
             <span id="accuracy" class="pill">正答率 0%</span>
           </div>
+        </div>
+        <div id="quizProgressTrack" class="quiz-progress-track" hidden aria-hidden="true">
+          <div id="quizProgressFill" class="quiz-progress-fill"></div>
         </div>
 
         <div id="quizSetup" class="quiz-setup">
@@ -3922,7 +4025,10 @@ accurate 正確な"
               <div class="sync-controls">
                 <label class="sync-field">
                   あなたの個人キー
-                  <input id="syncIdInput" type="text" inputmode="latin" autocomplete="off" placeholder="自動で発行されます" readonly />
+                  <span class="sync-key-row">
+                    <input id="syncIdInput" type="password" inputmode="latin" autocomplete="off" placeholder="自動で発行されます" readonly />
+                    <button id="syncKeyToggleButton" class="ghost mini" type="button" aria-pressed="false">表示</button>
+                  </span>
                 </label>
                 <button id="syncCopyLinkButton" type="button" title="このページのリンクをクリップボードにコピーします。別の端末で開くと同じデータになります。">個人リンクをコピー</button>
                 <button id="syncPullButton" class="secondary" type="button" title="サーバーから最新のデータを取得して、この端末に反映します。">今すぐ読み込む</button>
@@ -3956,6 +4062,18 @@ accurate 正確な"
                   </p>
                 </div>
               </details>
+            </div>
+          </details>
+
+          <details class="settings-section">
+            <summary>🔒 データの保存場所と削除について</summary>
+            <div class="settings-section-body">
+              <ul class="usage-steps">
+                <li>単語と成績は、このアプリ専用のサーバー領域に<strong>あなたの個人キー</strong>と紐づけて保存されます。他の人のデータとは分離されており、キーを知らない人には見えません。</li>
+                <li>逆に、<strong>個人キー（＝個人リンク）を知っている人はデータを読み書きできます</strong>。「個人リンクをコピー」で得られるリンクにはこのキーが含まれるため、他人に教えたり公開の場に貼ったりしないでください。</li>
+                <li>全データを消すには「全データ削除」（Step 1の右上）を実行してください。<strong>サーバー側の保存分もあわせて消去（空の状態に置き換え）</strong>されます。ただし削除した単語は30日間「削除済み」として復元用に保存され（この分もサーバーに一時的に残ります）、30日を過ぎると自動的に消えます。</li>
+                <li>万一、個人キーが他人に知られてしまったら：①「JSONを書き出す」で単語データを保存 → ②この端末のブラウザデータ（サイトデータ）を消してから、個人キーの付いていない新しいリンクで開き直す（新しい個人キーが自動発行されます）→ ③「JSONを読み込む」で単語を戻す、の順で新しいキーに引っ越せます。</li>
+              </ul>
             </div>
           </details>
 
@@ -4541,6 +4659,9 @@ const elements = {
   sampleButton: document.querySelector("#sampleButton"),
   hiAccToggle: document.querySelector("#hiAccToggle"),
   status: document.querySelector("#status"),
+  importAllSavedActions: document.querySelector("#importAllSavedActions"),
+  importGoLibraryButton: document.querySelector("#importGoLibraryButton"),
+  importClearButton: document.querySelector("#importClearButton"),
   ocrText: document.querySelector("#ocrText"),
   parseButton: document.querySelector("#parseButton"),
   saveParsedButton: document.querySelector("#saveParsedButton"),
@@ -4562,6 +4683,9 @@ const elements = {
   deckBar: document.querySelector("#deckBar"),
   deckStats: document.querySelector("#deckStats"),
   quizScope: document.querySelector("#quizScope"),
+  quizProgress: document.querySelector("#quizProgress"),
+  quizProgressTrack: document.querySelector("#quizProgressTrack"),
+  quizProgressFill: document.querySelector("#quizProgressFill"),
   quizSetup: document.querySelector("#quizSetup"),
   exitQuizButton: document.querySelector("#exitQuizButton"),
   wordSortSelect: document.querySelector("#wordSortSelect"),
@@ -4594,6 +4718,7 @@ const elements = {
   undoButton: document.querySelector("#undoButton"),
   clearAllButton: document.querySelector("#clearAllButton"),
   syncIdInput: document.querySelector("#syncIdInput"),
+  syncKeyToggleButton: document.querySelector("#syncKeyToggleButton"),
   syncConnectButton: document.querySelector("#syncConnectButton"),
   syncGenerateButton: document.querySelector("#syncGenerateButton"),
   syncCopyLinkButton: document.querySelector("#syncCopyLinkButton"),
@@ -5109,6 +5234,8 @@ let favoritesOnly = false;
 let currentQuiz = null;
 let reviewSession = null;
 let quizStarted = false;
+// 通常クイズ（エンドレス）の「◯問目」表示用。「クイズを始める」を押すたびに1から数え直す。
+let normalQuizQuestionNumber = 0;
 const selectedIds = new Set();
 const syncState = {
   id: "",
@@ -6074,6 +6201,15 @@ function initWordsnapSync() {
     const id = cleanSyncId(elements.syncIdInput.value);
     elements.syncPullButton.disabled = !id;
     syncState.connected = false;
+  });
+  // 個人キーは初期状態で伏せ字（type=password）。ボタンで表示/非表示を切り替える
+  // （readonlyのまま。「個人リンクをコピー」は window.location.href を直接使うため、
+  // 伏せたままでもクリップボードには実際のキー入りURLがコピーされる）。
+  elements.syncKeyToggleButton?.addEventListener("click", () => {
+    const hidden = elements.syncIdInput.type === "password";
+    elements.syncIdInput.type = hidden ? "text" : "password";
+    elements.syncKeyToggleButton.textContent = hidden ? "隠す" : "表示";
+    elements.syncKeyToggleButton.setAttribute("aria-pressed", String(hidden));
   });
   // 別端末の変更を素早く取り込むため、アプリに戻ってきたタイミングで毎回サーバーから読む。
   // モバイルでは window の focus が発火しないことがあるので、visibilitychange / pageshow も使う。
@@ -7485,13 +7621,22 @@ function renderCandidates() {
   elements.candidateList.className = "word-list";
   elements.candidateList.innerHTML = "";
   candidates.forEach((candidate, index) => {
+    // 「候補1」「候補2」…と番号で固有化する（見出し語は入力中に変わりうるため、
+    // 混乱しないよう番号ベースで一貫させる）。role="group" でひとまとまりとして
+    // 読み上げられるようにし、見出しテキストは視覚的には隠す。
+    const n = index + 1;
     const row = document.createElement("div");
     row.className = "word-row candidate-row";
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-labelledby", `candidateHeading${index}`);
     row.innerHTML = `
-      <input aria-label="単語" value="${escapeHtml(candidate.term)}" data-index="${index}" data-field="term" />
+      <span id="candidateHeading${index}" class="sr-only">候補${n}</span>
+      <label class="candidate-field-label" for="candidateTerm${index}">単語</label>
+      <input id="candidateTerm${index}" aria-label="候補${n} の単語" value="${escapeHtml(candidate.term)}" data-index="${index}" data-field="term" />
       ${cefrBadgeMarkup(candidate.term)}
-      <input aria-label="意味" value="${escapeHtml(candidate.meaning)}" data-index="${index}" data-field="meaning" />
-      <button class="mini-button" type="button" data-remove="${index}">削除</button>
+      <label class="candidate-field-label" for="candidateMeaning${index}">意味</label>
+      <input id="candidateMeaning${index}" aria-label="候補${n} の意味" value="${escapeHtml(candidate.meaning)}" data-index="${index}" data-field="meaning" />
+      <button class="mini-button" type="button" data-remove="${index}" aria-label="候補${n} を候補から削除">削除</button>
     `;
     elements.candidateList.append(row);
   });
@@ -7760,8 +7905,39 @@ function learningLabel(word) {
   return "未出題";
 }
 
+// クイズカード上部のピル／細い進捗バーを最新状態に合わせる。
+// 復習セッション中：「進んだ数 / 総数」＋バー（誤答で再出題されてもキュー長は
+// 変わらない実装＝total - queue.length は後退しない）。
+// 通常クイズ（エンドレス）：「◯問目」のみ表示し、バーは出さない。
+function renderQuizProgress() {
+  if (!elements.quizProgress) return;
+  if (elements.quizProgressTrack) elements.quizProgressTrack.hidden = true;
+
+  if (reviewSession) {
+    const total = reviewSession.total || 0;
+    const done = total === 0 ? 0 : Math.max(0, Math.min(total, total - reviewSession.queue.length));
+    elements.quizProgress.hidden = total === 0;
+    elements.quizProgress.textContent = `${done} / ${total}問`;
+    if (elements.quizProgressTrack && total > 0) {
+      elements.quizProgressTrack.hidden = false;
+      const pct = Math.round((done / total) * 100);
+      if (elements.quizProgressFill) elements.quizProgressFill.style.width = `${pct}%`;
+    }
+    return;
+  }
+
+  if (quizStarted) {
+    elements.quizProgress.hidden = false;
+    elements.quizProgress.textContent = `${Math.max(1, normalQuizQuestionNumber)}問目`;
+    return;
+  }
+
+  elements.quizProgress.hidden = true;
+}
+
 function renderQuiz() {
   renderAccuracy();
+  renderQuizProgress();
   updateResumeButton();
 
   if (elements.generalReviewButton) {
@@ -7908,6 +8084,7 @@ function persistReviewProgress() {
         queue: reviewSession.queue,
         label: reviewSession.label,
         total: reviewSession.total,
+        missedIds: reviewSession.missedIds,
         savedAt: Date.now(),
       }),
     );
@@ -7961,6 +8138,7 @@ function resumeSavedReview() {
     queue: saved.queue,
     total: Number(saved.total) || saved.allIds.length,
     label: String(saved.label || "復習"),
+    missedIds: Array.isArray(saved.missedIds) ? saved.missedIds : [],
   };
   const remaining = saved.queue.length;
   currentQuiz = null;
@@ -7989,6 +8167,7 @@ function startReview(ids, options = {}) {
     queue,
     total: valid.length,
     label,
+    missedIds: [], // このセッション中に一度でも間違えた単語ID（完走時のサマリ用）
   };
   currentQuiz = null;
   persistReviewProgress(); // 新しいセッションで上書き（古い再開データは破棄される）
@@ -8125,6 +8304,17 @@ function endReview(message) {
   if (message) setStatus(message);
 }
 
+// 復習セッションを完走したときのサマリ文言（例:「8問中6問正解。間違えた2語はまた出題されます。」）。
+// missedIds はセッション中に一度でも間違えた単語の数＝キューを空にするまでに複数回出た語の数。
+function buildReviewSummaryMessage(session) {
+  const total = session.total || 0;
+  const missed = (session.missedIds || []).length;
+  const correct = Math.max(0, total - missed);
+  return missed === 0
+    ? `${total}問中${correct}問正解！全問クリアしました。`
+    : `${total}問中${correct}問正解。間違えた${missed}語はまた出題されます。`;
+}
+
 // 復習セッションはキュー式の「誤答は末尾へ回す」だけで十分な間隔があくため、
 // 5分ブロックはここではチェックしない（通常クイズのavailableQuizWordsのみ対象）。
 function buildReviewQuiz() {
@@ -8187,6 +8377,7 @@ function buildQuiz() {
   const distractors = pickDistractors(basePool, answer, 3);
   const choices = shuffle([answer, ...distractors]);
   elements.quizFeedback.textContent = "";
+  normalQuizQuestionNumber += 1; // 通常クイズ（エンドレス）の「◯問目」表示用
   return { answer, choices, answered: false };
 }
 
@@ -8314,6 +8505,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
     if (isCorrect) {
       reviewSession.queue.shift();
     } else {
+      if (!reviewSession.missedIds.includes(word.id)) reviewSession.missedIds.push(word.id);
       reviewSession.queue.push(reviewSession.queue.shift());
     }
     const remaining = reviewSession.queue.length;
@@ -8323,6 +8515,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
         : "正解！「次の問題」で続けます。"
       : `正解は「${currentQuiz.answer.meaning}」。あとでもう一度出します。`;
     elements.quizScope.textContent = `${reviewSession.label} 残り ${remaining}/${reviewSession.total}`;
+    renderQuizProgress();
     persistReviewProgress(); // 問題が進むたびに再開用スナップショットを更新する
     persistAppState();
     renderAccuracy();
@@ -8384,22 +8577,35 @@ function cefrTitle(result) {
   if (result == null) return "CEFRレベルを判定中";
   if (!result.level) return "CEFRレベル不明";
   return result.estimated
-    ? `推定CEFRレベル ${result.level}（出現頻度から推定）`
+    ? `CEFRレベル ${result.level}（出現頻度からの推定です）`
     : `CEFRレベル ${result.level}`;
+}
+
+// バッジの表示文字は確定値も推定値も同じ（例: "C2"）。推定である旨は
+// title（ツールチップ）とaria-label（読み上げ）にだけ含める。
+function cefrAriaLabel(result) {
+  if (result == null || !result.level) return "";
+  return result.estimated
+    ? `CEFR ${result.level}（出現頻度からの推定）`
+    : `CEFR ${result.level}`;
 }
 
 function cefrBadgeMarkup(term, stored) {
   const result = stored && (stored.level || stored.estimated) ? stored : window.Cefr.peek(term);
   const key = window.Cefr.key(term);
+  const ariaLabel = cefrAriaLabel(result);
   return `<span class="cefr-badge ${cefrClass(result)}" data-cefr-term="${escapeHtml(key)}" title="${escapeHtml(
     cefrTitle(result),
-  )}">${cefrText(result)}</span>`;
+  )}"${ariaLabel ? ` aria-label="${escapeHtml(ariaLabel)}"` : ""}>${cefrText(result)}</span>`;
 }
 
 function updateCefrBadge(badge, result) {
   badge.className = `cefr-badge ${cefrClass(result)}`;
   badge.textContent = cefrText(result);
   badge.title = cefrTitle(result);
+  const ariaLabel = cefrAriaLabel(result);
+  if (ariaLabel) badge.setAttribute("aria-label", ariaLabel);
+  else badge.removeAttribute("aria-label");
 }
 
 async function resolveCefrBadges(container) {
@@ -8999,6 +9205,7 @@ renderAiKeyFields();
 elements.sampleButton.addEventListener("click", () => {
   playSound("tap");
   elements.ocrText.value = SAMPLE_TEXT;
+  if (elements.importAllSavedActions) elements.importAllSavedActions.hidden = true;
   setStatus("サンプルを入れました。「単語リストに変換」を押して流れを試せます。");
 });
 
@@ -9011,6 +9218,22 @@ elements.parseButton.addEventListener("click", () => {
   setStatus(buildParseResultMessage(result));
   playSound(candidates.length > 0 ? "success" : "wrong");
   if (candidates.length > 0) setActiveStep("candidates", { sound: false });
+
+  // 変換結果が「すべて保存済み」（新規候補なし・削除済みとの重複もなし・読み取れない行もなし）
+  // だったときだけ、「保存した単語を見る」「入力をクリア」の導線を出す。次の変換操作で自動的に消える。
+  const isAllSaved =
+    result.newCount === 0 &&
+    result.dupSavedCount > 0 &&
+    result.dupTrashCount === 0 &&
+    result.unreadableLines.length === 0;
+  if (elements.importAllSavedActions) elements.importAllSavedActions.hidden = !isAllSaved;
+});
+
+elements.importClearButton?.addEventListener("click", () => {
+  elements.ocrText.value = "";
+  if (elements.importAllSavedActions) elements.importAllSavedActions.hidden = true;
+  setStatus("入力をクリアしました。単語と訳をまとめて貼り付けてください（1行に「英単語 意味」）。");
+  elements.ocrText.focus();
 });
 
 elements.candidateList.addEventListener("input", (event) => {
@@ -9213,6 +9436,7 @@ elements.startQuizButton.addEventListener("click", () => {
   clearAutoNextTimer();
   clearSavedReviewProgress(); // 再開せず別のクイズを始めたら、前回の続きは破棄する
   quizStarted = true;
+  normalQuizQuestionNumber = 0; // 「◯問目」を1から数え直す（buildQuiz内で+1される）
   currentQuiz = availableQuizWords().length > 0 ? buildQuiz() : null;
   playSound(currentQuiz ? "next" : "wrong");
   renderQuiz();
@@ -9225,6 +9449,7 @@ elements.exitQuizButton?.addEventListener("click", () => {
   clearAutoNextTimer();
   quizStarted = false;
   currentQuiz = null;
+  normalQuizQuestionNumber = 0;
   renderQuiz();
   setStatus("クイズをやめました。設定を変えて再開できます。");
 });
@@ -9238,7 +9463,12 @@ elements.nextQuizButton.addEventListener("click", () => {
   clearAutoNextTimer();
   if (reviewSession) {
     if (reviewSession.queue.length === 0) {
-      endReview("復習を終了しました。");
+      // セッション完走：setStatusとクイズカードのフィードバックの両方にサマリを出す
+      // （endReview() 内の renderQuiz() → renderQuizIntro() が一旦フィードバックを
+      // 上書きするため、endReview の後にもう一度サマリで上書きする）。
+      const summary = buildReviewSummaryMessage(reviewSession);
+      endReview(summary);
+      if (elements.quizFeedback) elements.quizFeedback.textContent = summary;
       playSound("success");
       return;
     }
