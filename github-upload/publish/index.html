@@ -6041,7 +6041,11 @@ function applyMergedRemoteState(remoteState) {
   if (changed) {
     syncState.applyingRemote = true;
     appState = merged;
-    currentQuiz = null;
+    // 表示済みの問題は同期差分の反映をまたいでも保持する。
+    // ここで currentQuiz を破棄すると renderAll() -> renderQuiz() が同じ問題の
+    // 選択肢を作り直し、ユーザーが選ぶ前に並び順が変わってしまう。
+    // 正解語そのものが同期先で削除されていた場合は renderQuiz() 側の存在確認で
+    // currentQuiz が安全に再生成される。
     selectedIds.clear();
     persistAppState();
     syncState.applyingRemote = false;
