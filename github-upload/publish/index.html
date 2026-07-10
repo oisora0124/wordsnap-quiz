@@ -3343,6 +3343,16 @@ textarea:focus-visible {
   .deck-move select {
     font-size: 16px;
   }
+
+  /* クイズ出題中はヘッダーを圧縮：名言を隠してヒーロー部の余白を詰める */
+  body.quiz-active #learningQuote,
+  body.quiz-active .learning-quote {
+    display: none;
+  }
+
+  body.quiz-active .hero {
+    margin-bottom: 12px;
+  }
 }
 
 /* Touch devices: comfortable tap targets. */
@@ -3501,7 +3511,7 @@ textarea:focus-visible {
               <span class="sync-badge-dot" aria-hidden="true"></span>
               <span class="sync-badge-text">同期の確認中…</span>
             </button>
-            <button id="themeToggle" class="theme-toggle" type="button" aria-pressed="false">
+            <button id="themeToggle" class="theme-toggle" type="button" aria-label="ダークテーマに切り替える">
               <span class="theme-toggle-icon" aria-hidden="true"></span>
               <span class="theme-toggle-text">ダーク</span>
             </button>
@@ -3977,7 +3987,7 @@ accurate 正確な"
               <p class="settings-desc">画面テーマと、クイズ画面の補助表示を調整します。</p>
               <label class="settings-field">
                 テーマ
-                <select id="themeModeSelect">
+                <select id="themeModeSelect" aria-label="表示テーマ">
                   <option value="light">ライト</option>
                   <option value="dark">ダーク</option>
                   <option value="auto">自動（日の出・日の入り）</option>
@@ -4004,7 +4014,7 @@ accurate 正確な"
                 </label>
                 <label class="settings-field">
                   待ち時間
-                  <select id="autoNextDelaySelect">
+                  <select id="autoNextDelaySelect" aria-label="自動で次の問題に進むまでの秒数">
                     <option value="1000">1秒</option>
                     <option value="2000">2秒</option>
                     <option value="3000">3秒</option>
@@ -4759,7 +4769,11 @@ function applyTheme(mode) {
       : "assets/wordsnap-icon-light.png";
   }
   if (elements.themeToggle) {
-    elements.themeToggle.setAttribute("aria-pressed", String(isDark));
+    // 「次のテーマへ切り替える」動作ボタンとして統一：表示中テーマの逆を案内する
+    elements.themeToggle.setAttribute(
+      "aria-label",
+      isDark ? "ライトテーマに切り替える" : "ダークテーマに切り替える",
+    );
     elements.themeToggle.querySelector(".theme-toggle-icon").classList.toggle("is-dark", isDark);
     elements.themeToggle.querySelector(".theme-toggle-text").textContent = isDark
       ? "ライト"
@@ -6404,31 +6418,67 @@ function looksLikeHeadword(line) {
   return /[A-Za-z]{2,}/.test(line);
 }
 
+// 文の終わり（。！？!?）で終わる行は「例文の訳」など想定内のノイズとみなし、
+// 読み取れなかった行としては報告しない（こわれた短い行だけを拾うための簡易判定）。
+const SENTENCE_END_CHARS = /[。！？!?]\s*$/;
+
 // Extracts "English word + first Japanese meaning" pairs, discarding example
 // sentences, phonetics, English synonyms and example translations. Handles both
 // single-line ("word 意味") and multi-line (word, then 意味 on a later line).
+//
+// 戻り値には候補一覧に加えて、変換結果メッセージを作るための内訳を含める:
+// candidates（新規候補）, newCount, dupSavedCount（保存済みでスキップ）,
+// dupTrashCount（削除済み記録でスキップ）, unreadableLines（読み取れなかった行番号・1始まり）。
 function parseVocabulary(text, deckId = null) {
   // Duplicates are judged within the target deck only, so the same word can
   // live in different 単語帳. When no deck is given, fall back to all words.
-  const existing = deckId
+  const existingWords = deckId
     ? appState.words.filter((word) => word.deckId === deckId)
     : appState.words;
-  const seen = new Set(existing.map((word) => normalizeTerm(word.term)));
-  const parsed = [];
-  let pendingTerm = null;
+  const savedTerms = new Set(existingWords.map((word) => normalizeTerm(word.term)));
 
-  const add = (term, meaning) => {
-    const pair = validPair(term, meaning);
-    if (!pair) return false;
-    const key = normalizeTerm(pair.term);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    parsed.push(pair);
-    return true;
+  const trashEntries = deckId
+    ? (appState.trash || []).filter((entry) => (entry.word?.deckId || null) === deckId)
+    : appState.trash || [];
+  const trashedTerms = new Set(trashEntries.map((entry) => normalizeTerm(entry.word.term)));
+
+  const parsed = [];
+  const claimedTerms = new Set(); // 同じ貼り付け内での重複候補を弾く
+  let newCount = 0;
+  let dupSavedCount = 0;
+  let dupTrashCount = 0;
+  const unreadableLines = [];
+
+  let pendingTerm = null;
+  let pendingTermLine = null;
+
+  // 見出し語だけ見つかって意味が対応しなかった行を「読み取れなかった行」として記録する。
+  const releasePendingTerm = () => {
+    if (pendingTerm !== null && pendingTermLine !== null) {
+      unreadableLines.push(pendingTermLine);
+    }
+    pendingTerm = null;
+    pendingTermLine = null;
   };
 
-  for (const rawLine of text.split(/\n+/)) {
-    const line = stripNoise(rawLine);
+  // term/meaning を候補として確定できるか判定する。
+  // "new" | "dup-saved" | "dup-trash" | "invalid" のいずれかを返す。
+  const resolve = (term, meaning) => {
+    const pair = validPair(term, meaning);
+    if (!pair) return "invalid";
+    const key = normalizeTerm(pair.term);
+    if (!key) return "invalid";
+    if (savedTerms.has(key) || claimedTerms.has(key)) return "dup-saved";
+    if (trashedTerms.has(key)) return "dup-trash";
+    claimedTerms.add(key);
+    parsed.push(pair);
+    return "new";
+  };
+
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const lineNo = i + 1;
+    const line = stripNoise(lines[i]);
     if (!line) continue;
     if (IPA_CHARS.test(line) && !JP_CHAR.test(line)) continue; // pure phonetic noise
 
@@ -6440,30 +6490,111 @@ function parseVocabulary(text, deckId = null) {
     if (hasEng && hasJp && jpIndex > 0) {
       const term = cleanTermText(line.slice(0, jpIndex));
       const meaning = firstMeaning(line.slice(jpIndex));
-      if (term && meaning && add(term, meaning)) {
+      const outcome = term && meaning ? resolve(term, meaning) : "invalid";
+      if (outcome === "invalid") {
+        unreadableLines.push(lineNo);
+      } else {
+        if (outcome === "new") newCount++;
+        else if (outcome === "dup-saved") dupSavedCount++;
+        else if (outcome === "dup-trash") dupTrashCount++;
         pendingTerm = null;
-        continue;
+        pendingTermLine = null;
       }
+      continue;
     }
 
     // Japanese-led line: a gloss belonging to the pending headword
     if (hasJp && jpIndex === 0) {
       if (pendingTerm) {
         const meaning = firstMeaning(line);
-        if (meaning && add(pendingTerm, meaning)) {
+        const outcome = meaning ? resolve(pendingTerm, meaning) : "invalid";
+        if (outcome === "new") {
+          newCount++;
           pendingTerm = null;
+          pendingTermLine = null;
+        } else if (outcome === "dup-saved") {
+          dupSavedCount++;
+          pendingTerm = null;
+          pendingTermLine = null;
+        } else if (outcome === "dup-trash") {
+          dupTrashCount++;
+          pendingTerm = null;
+          pendingTermLine = null;
         }
+        // "invalid" の場合は見出し語を保持したまま次の行を待つ（複数行の訳に対応）
+      } else if (!SENTENCE_END_CHARS.test(line)) {
+        // 見出し語がない状態の日本語の短い断片＝形式が崩れている可能性が高い
+        unreadableLines.push(lineNo);
       }
-      continue; // Japanese with no pending term = example translation, skip
+      continue; // 文末で終わる行は例文の訳とみなして静かにスキップ
     }
 
     // English-only line: a new headword candidate (otherwise noise)
     if (hasEng && !hasJp) {
-      if (looksLikeHeadword(line)) pendingTerm = cleanTermText(line);
+      if (looksLikeHeadword(line)) {
+        releasePendingTerm(); // 前の見出し語が意味とペアにならなかった場合は読み取れなかった行として記録
+        pendingTerm = cleanTermText(line);
+        pendingTermLine = lineNo;
+      }
+      continue;
     }
   }
+  releasePendingTerm(); // 末尾に意味の対応しない見出し語が残っていれば記録
 
-  return parsed;
+  return { candidates: parsed, newCount, dupSavedCount, dupTrashCount, unreadableLines };
+}
+
+// 最大5行まで「N行目」を列挙し、残りは「ほか◯行」でまとめる。
+function formatLineNumbers(lineNumbers) {
+  const shown = lineNumbers.slice(0, 5).map((n) => `${n}行目`);
+  const rest = lineNumbers.length - shown.length;
+  if (rest > 0) shown.push(`ほか${rest}行`);
+  return shown.join("・");
+}
+
+// parseVocabulary() の結果から、内訳がわかる変換結果メッセージを組み立てる。
+function buildParseResultMessage(result) {
+  const { newCount, dupSavedCount, dupTrashCount, unreadableLines } = result;
+  const dupTotal = dupSavedCount + dupTrashCount;
+
+  if (newCount === 0 && dupTotal === 0 && unreadableLines.length === 0) {
+    return "候補を見つけられませんでした。「単語 意味」のように1行ずつ整えると読み取れます。";
+  }
+
+  // 新規候補が0件で、読み取れない行もなく、すべてが重複だったケース
+  if (newCount === 0 && dupTotal > 0 && unreadableLines.length === 0) {
+    if (dupSavedCount > 0 && dupTrashCount > 0) {
+      return `入力された${dupTotal}語はすべて保存済みか削除済みの記録と重複しています。新しい単語を貼り付けてください。`;
+    }
+    if (dupTrashCount > 0) {
+      return `入力された${dupTotal}語はすべて削除済みの記録と重複しています。新しい単語を貼り付けてください。`;
+    }
+    return `入力された${dupTotal}語はすべて保存済みです。新しい単語を貼り付けてください。`;
+  }
+
+  const parts = [];
+  if (newCount > 0) {
+    let head = `${newCount}語を候補にしました`;
+    const skipNotes = [];
+    if (dupSavedCount > 0) skipNotes.push(`${dupSavedCount}語は保存済みのためスキップ`);
+    if (dupTrashCount > 0) skipNotes.push(`${dupTrashCount}語は削除済みのためスキップ`);
+    if (skipNotes.length > 0) head += `（${skipNotes.join("、")}）`;
+    parts.push(`${head}。`);
+  } else if (dupTotal > 0) {
+    // 新規候補は0件だが、重複と読み取れない行が混在しているケース
+    const skipNotes = [];
+    if (dupSavedCount > 0) skipNotes.push(`${dupSavedCount}語は保存済み`);
+    if (dupTrashCount > 0) skipNotes.push(`${dupTrashCount}語は削除済みの記録と重複`);
+    parts.push(`新しい候補は見つかりませんでした（${skipNotes.join("、")}）。`);
+  }
+
+  if (unreadableLines.length > 0) {
+    parts.push(
+      `${formatLineNumbers(unreadableLines)}は読み取れませんでした（『単語 意味』の形にすると読み取れます）。`,
+    );
+  }
+
+  return parts.join("");
 }
 
 function validPair(term, meaning) {
@@ -7432,17 +7563,18 @@ function renderSavedWords() {
       const row = document.createElement("div");
       row.className = "saved-item";
       row.dataset.wordId = word.id;
+      const safeTerm = escapeHtml(word.term);
       row.innerHTML = `
         <div class="saved-row">
           <div class="saved-head">
             <input type="checkbox" class="word-check" data-select-word="${word.id}"${
               selectedIds.has(word.id) ? " checked" : ""
-            } aria-label="この単語を選択" />
+            } aria-label="${safeTerm} を選択" />
             <span class="saved-index">${index + 1}</span>
-            <button class="favorite-button${word.favorite ? " is-favorite" : ""}" type="button" data-favorite-word="${word.id}" aria-pressed="${word.favorite}" aria-label="お気に入り" title="お気に入りに追加/解除">★</button>
-            <strong>${escapeHtml(word.term)}</strong>
+            <button class="favorite-button${word.favorite ? " is-favorite" : ""}" type="button" data-favorite-word="${word.id}" aria-pressed="${word.favorite}" aria-label="${safeTerm} をお気に入りに追加/解除" title="お気に入りに追加/解除">★</button>
+            <strong>${safeTerm}</strong>
             ${posBadgeMarkup(word)}
-            <button class="speak-button" type="button" data-speak-word="${word.id}" aria-label="発音を聞く" title="発音を聞く">🔊</button>
+            <button class="speak-button" type="button" data-speak-word="${word.id}" aria-label="${safeTerm} の発音を聞く" title="発音を聞く">🔊</button>
             ${cefrBadgeMarkup(word.term, word.cefr)}
           </div>
           <span class="saved-meaning">${escapeHtml(word.meaning)}</span>
@@ -7450,12 +7582,12 @@ function renderSavedWords() {
             <small>${status} / ${attempts}回出題 / ${word.stats.correct}回正解</small>
             ${historyMarkup(word)}
             <label class="deck-move">単語帳
-              <select data-move-word="${word.id}">${deckOptionsMarkup(word.deckId)}</select>
+              <select data-move-word="${word.id}" aria-label="${safeTerm} の単語帳を変更">${deckOptionsMarkup(word.deckId)}</select>
             </label>
           </div>
           <div class="saved-actions">
-            <button class="mini-button info" type="button" data-toggle-detail="${word.id}" aria-expanded="false">詳しく</button>
-            <button class="mini-button" type="button" data-delete-word="${word.id}">削除</button>
+            <button class="mini-button info" type="button" data-toggle-detail="${word.id}" aria-expanded="false" aria-label="${safeTerm} の詳細を表示">詳しく</button>
+            <button class="mini-button" type="button" data-delete-word="${word.id}" aria-label="${safeTerm} を削除">削除</button>
           </div>
         </div>
         <div class="saved-detail" hidden>
@@ -7506,15 +7638,16 @@ function renderTrash() {
       const word = entry.word;
       const deck = deckName(word.deckId);
       const meta = `${escapeHtml(word.meaning)} / ${escapeHtml(deck)} / 削除 ${formatTrashTime(entry.deletedAt)} / あと${trashDaysLeft(entry.deletedAt)}日`;
+      const safeTerm = escapeHtml(word.term);
       return `
         <div class="trash-item" data-trash-id="${escapeHtml(entry.id)}">
           <div>
-            <strong>${escapeHtml(word.term)}</strong>
+            <strong>${safeTerm}</strong>
             <span>${meta}</span>
           </div>
           <div class="trash-item-actions">
-            <button class="mini-button info" type="button" data-restore-trash="${escapeHtml(entry.id)}">戻す</button>
-            <button class="mini-button danger" type="button" data-purge-trash="${escapeHtml(entry.id)}">完全削除</button>
+            <button class="mini-button info" type="button" data-restore-trash="${escapeHtml(entry.id)}" aria-label="${safeTerm} を戻す">戻す</button>
+            <button class="mini-button danger" type="button" data-purge-trash="${escapeHtml(entry.id)}" aria-label="${safeTerm} を完全削除">完全削除</button>
           </div>
         </div>
       `;
@@ -7618,7 +7751,8 @@ function updateSavedWordRow(word) {
 }
 
 function learningLabel(word) {
-  if (word.learning.status === "mastered") return "mastered";
+  // データ値の "mastered" 自体は変更しない（同期・既存データが壊れるため）。表示文字列のみ日本語化。
+  if (word.learning.status === "mastered") return "習得済み";
   if (word.learning.status === "review") {
     const remaining = Math.max(0, word.learning.reviewAt - appState.quizCounter);
     return remaining === 0 ? "復習出題待ち" : `あと${remaining}問後に復習`;
@@ -7698,7 +7832,7 @@ function renderQuizEmpty() {
   elements.choices.innerHTML = "";
   elements.quizWord.textContent = "今出せる問題はありません";
   elements.quizFeedback.textContent =
-    "初回正解した単語は mastered として保存され、通常クイズからは外れています。「総復習」や「選択した単語を解く」で復習できます。";
+    "初回正解した単語は習得済みとして保存され、通常クイズからは外れています。「総復習」や「選択した単語を解く」で復習できます。";
 }
 
 function updateQuizControls() {
@@ -7710,6 +7844,8 @@ function updateQuizControls() {
     (inReview ? reviewSession.queue.length > 0 : quizStarted);
 
   const quizActive = inReview || quizStarted;
+  // 出題中はモバイルのヘッダーを圧縮するため、body に目印のクラスを付け外しする
+  document.body.classList.toggle("quiz-active", quizActive);
   // 出題中はクイズ設定欄を隠して、問題と選択肢を上に表示する
   if (elements.quizSetup) elements.quizSetup.hidden = quizActive;
   elements.startQuizButton.hidden = quizActive;
@@ -8206,7 +8342,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
     scheduleReview(word);
   }
   elements.quizFeedback.textContent = isCorrect
-    ? "正解です。この単語は mastered になり、保存だけされます。"
+    ? "正解です。この単語は習得済みになり、保存だけされます。"
     : dontKnow
       ? `正解は「${currentQuiz.answer.meaning}」です。2〜3問後にもう一度出します。`
       : `惜しい。正解は「${currentQuiz.answer.meaning}」。2〜3問後にもう一度出します。`;
@@ -8869,13 +9005,10 @@ elements.sampleButton.addEventListener("click", () => {
 elements.parseButton.addEventListener("click", () => {
   const targetDeckId =
     (elements.saveDeckSelect && elements.saveDeckSelect.value) || appState.decks[0]?.id;
-  candidates = parseVocabulary(elements.ocrText.value, targetDeckId);
+  const result = parseVocabulary(elements.ocrText.value, targetDeckId);
+  candidates = result.candidates;
   renderCandidates();
-  setStatus(
-    candidates.length > 0
-      ? `${candidates.length}件の候補を見つけました。確認して保存してください。`
-      : "候補を見つけられませんでした。「単語 意味」のように1行ずつ整えると読み取れます。",
-  );
+  setStatus(buildParseResultMessage(result));
   playSound(candidates.length > 0 ? "success" : "wrong");
   if (candidates.length > 0) setActiveStep("candidates", { sound: false });
 });
