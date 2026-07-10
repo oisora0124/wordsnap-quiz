@@ -4076,7 +4076,7 @@ accurate 正確な"
           <details class="settings-section">
             <summary>🔄 データの保存・引き継ぎ</summary>
             <div class="settings-section-body" aria-labelledby="syncTitle">
-              <p id="syncTitle">追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。</p>
+              <p id="syncTitle">追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。新しい個人キーはブラウザの安全な乱数機能で自動発行されます。</p>
               <ol class="sync-steps">
                 <li><strong>ホーム画面に追加して使う</strong>：このページを「ホーム画面に追加」し、そのアイコンから開いてください。ブラウザの保存が消えても、開き直せばサーバーから自動で元に戻ります。</li>
                 <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。</li>
@@ -4085,7 +4085,7 @@ accurate 正確な"
                 <label class="sync-field">
                   あなたの個人キー
                   <span class="sync-key-row">
-                    <input id="syncIdInput" type="password" inputmode="latin" autocomplete="off" placeholder="自動で発行されます" readonly />
+                    <input id="syncIdInput" type="password" inputmode="latin" autocomplete="off" maxlength="64" pattern="[A-Za-z0-9_-]{1,64}" placeholder="安全な個人キーを自動発行" readonly />
                     <button id="syncKeyToggleButton" class="ghost mini" type="button" aria-pressed="false">表示</button>
                   </span>
                 </label>
@@ -5704,17 +5704,12 @@ function cleanSyncId(value) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "")
-    .slice(0, 32);
+    .slice(0, 64);
 }
 
-// 読み間違えやすい文字（l, o, 0, 1）を除いたランダムな同期IDを発行する。
+// 旧UI用の入口も、安全な個人キー生成へ一本化する。
 function generateSyncId() {
-  const chars = "abcdefghijkmnpqrstuvwxyz23456789";
-  let id = "words-";
-  for (let i = 0; i < 6; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return id;
+  return generatePrivateKey();
 }
 
 function syncEndpoint() {
@@ -6259,19 +6254,17 @@ async function forcePullReplace() {
   }
 }
 
-// 推測されにくいランダムな個人キー（約110ビット）を発行する。
+// Web Cryptoの安全な乱数から240ビットの個人キーを発行する。
 // これがその人専用のサーバー保管場所の名前になる＝他人と混ざらない。
+// 暗号学的乱数が使えない環境では、Math.random()へフォールバックせず安全に失敗する。
 function generatePrivateKey() {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let key = "ws";
-  try {
-    const bytes = new Uint8Array(22);
-    (window.crypto || window.msCrypto).getRandomValues(bytes);
-    for (const n of bytes) key += alphabet[n % alphabet.length];
-  } catch {
-    for (let i = 0; i < 22; i += 1) key += alphabet[Math.floor(Math.random() * alphabet.length)];
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi || typeof cryptoApi.getRandomValues !== "function") {
+    throw new Error("Secure random number generation is unavailable.");
   }
-  return key;
+  const bytes = new Uint8Array(30);
+  cryptoApi.getRandomValues(bytes);
+  return `ws_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 // 個人キーをURL(?w=...)に埋め込む。ホーム画面に追加すればこのURLごと保存されるので、
@@ -6292,6 +6285,7 @@ function rememberSyncIdInUrl(id) {
 
 function initWordsnapSync() {
   if (!elements.syncIdInput) return;
+  let keyGenerationFailed = false;
   const params = new URLSearchParams(window.location.search);
   const keyFromUrl = String(params.get("key") || "").trim();
   if (keyFromUrl) localStorage.setItem(SYNC_ACCESS_KEY, keyFromUrl);
@@ -6303,8 +6297,14 @@ function initWordsnapSync() {
 
   // http/https では、個人キーが無ければ自動発行し、サーバー保存（耐久化）を有効にする。
   if (!syncState.id && syncServerAvailable()) {
-    syncState.id = generatePrivateKey();
-    localStorage.setItem(SYNC_ID_KEY, syncState.id);
+    try {
+      syncState.id = generatePrivateKey();
+      localStorage.setItem(SYNC_ID_KEY, syncState.id);
+    } catch {
+      // 推測可能なキーを作るくらいなら同期を開始しない。ローカル保存は引き続き使える。
+      syncState.id = "";
+      keyGenerationFailed = true;
+    }
   }
   // 現在の個人キーをURLに反映（ホーム画面追加で消えない保存先になる）
   if (syncState.id && syncServerAvailable()) {
@@ -6313,15 +6313,21 @@ function initWordsnapSync() {
 
   elements.syncIdInput.value = syncState.id;
   if (elements.syncPullButton) elements.syncPullButton.disabled = !syncState.id;
+  if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = !syncState.id;
 
   elements.syncConnectButton?.addEventListener("click", () => connectWordsnapSync());
   elements.syncGenerateButton?.addEventListener("click", () => {
-    const id = generateSyncId();
-    elements.syncIdInput.value = id;
-    if (elements.syncPullButton) elements.syncPullButton.disabled = false;
-    syncState.connected = false;
-    elements.syncIdInput.focus();
-    setSyncStatus(`同期ID「${id}」を発行しました。「同期を開始」を押し、別の端末でも同じIDを入力してください。`);
+    try {
+      const id = generateSyncId();
+      elements.syncIdInput.value = id;
+      if (elements.syncPullButton) elements.syncPullButton.disabled = false;
+      if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = false;
+      syncState.connected = false;
+      elements.syncIdInput.focus();
+      setSyncStatus(`安全な個人キー「${id}」を発行しました。`);
+    } catch {
+      setSyncStatus("安全な個人キーを生成できないため、サーバー同期を開始しません。ブラウザを最新版に更新して開き直してください。", "error");
+    }
   });
   elements.syncPullButton?.addEventListener("click", () => pullWordsnapState());
   elements.syncForcePushButton?.addEventListener("click", () => forcePushOverwrite());
@@ -6395,6 +6401,8 @@ function initWordsnapSync() {
   // http/https では個人キーで自動接続し、データをサーバーに保存・復元する
   if (syncState.id) {
     connectWordsnapSync({ silent: true });
+  } else if (keyGenerationFailed) {
+    setSyncStatus("安全な個人キーを生成できないため、サーバー同期を開始しません。単語はこの端末にのみ保存されます。ブラウザを最新版に更新して開き直してください。", "error");
   } else {
     setSyncStatus("サーバー保存の準備中です…");
   }
