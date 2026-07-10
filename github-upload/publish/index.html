@@ -3173,6 +3173,65 @@ textarea:focus-visible {
   flex: 1;
 }
 
+/* 範囲クイズ・総復習を完走したときの結果表示（クイズカード内の専用サマリ） */
+.review-result {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 10px;
+  padding: 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: var(--r-md);
+  text-align: left;
+}
+
+.review-result-score {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.review-result-missed {
+  max-height: 8.5rem;
+  padding-right: 0.2rem;
+  overflow-y: auto; /* 間違いが多くてもカードを縦に伸ばしすぎない */
+  font-size: 0.9rem;
+}
+
+.review-result-missed p {
+  margin: 0 0 0.3rem;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 600;
+}
+
+.review-result-missed ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.review-result-missed li {
+  margin: 0.15rem 0;
+}
+
+.review-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-result-actions button {
+  padding: 0.55rem 0.9rem;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: var(--r-md);
+  font-weight: 600;
+}
+
+.review-result-actions button:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
 .kbd-hint {
   margin-left: auto;
   align-self: center;
@@ -4410,7 +4469,8 @@ const Translate = (() => {
     } catch {
       result = null;
     }
-    cache.set(key, result);
+    // 失敗(null)はキャッシュしない（オフライン等の一時的な失敗を恒久化せず、次回に再試行できる）
+    if (result !== null) cache.set(key, result);
     return result;
   }
 
@@ -4444,8 +4504,10 @@ const Translate = (() => {
           .map((s) => s.replace(/^[\s\n]+|[\s\n]+$/g, ""));
         if (parts.length === uncached.length) {
           uncached.forEach((item, idx) => {
-            results[item.i] = parts[idx] || null;
-            cache.set(item.text, parts[idx] || null);
+            const part = parts[idx] || null;
+            results[item.i] = part;
+            // 失敗分（空文字）はキャッシュせず、次回の呼び出しで再試行できるようにする
+            if (part) cache.set(item.text, part);
           });
           batchOk = true;
         }
@@ -4505,9 +4567,18 @@ const Enrich = (() => {
     return result;
   }
 
-  async function synonyms(term) {
-    const data = await getJson(`${DM}?rel_syn=${encodeURIComponent(clean(term))}&md=d&max=8`);
-    const items = (data || []).slice(0, 8).map((entry) => ({
+  async function synonyms(term, posTag = null) {
+    // md=dp: 定義に加えて品詞タグも取得し、見出し語と品詞が一致する類義語を優先する
+    const data = await getJson(`${DM}?rel_syn=${encodeURIComponent(clean(term))}&md=dp&max=15`);
+    let entries = Array.isArray(data) ? data : [];
+    if (posTag) {
+      const matched = entries.filter(
+        (entry) => Array.isArray(entry.tags) && entry.tags.includes(posTag),
+      );
+      // 品詞が一致する候補があるときだけ絞り込む（品詞が取れない/一致0なら従来どおり全件）
+      if (matched.length > 0) entries = matched;
+    }
+    const items = entries.slice(0, 8).map((entry) => ({
       word: entry.word,
       def:
         Array.isArray(entry.defs) && entry.defs.length
@@ -4584,10 +4655,10 @@ const Enrich = (() => {
     return { text, ja };
   }
 
-  function fetchType(type, term) {
+  function fetchType(type, term, posTag = null) {
     switch (type) {
       case "synonyms":
-        return synonyms(term);
+        return synonyms(term, posTag);
       case "collocations":
         return collocations(term);
       case "examples":
@@ -4941,7 +5012,14 @@ function toggleSound() {
 }
 
 function soundVolumePercent() {
-  const value = Number(localStorage.getItem(SOUND_VOLUME_KEY));
+  let raw = null;
+  try {
+    raw = localStorage.getItem(SOUND_VOLUME_KEY);
+  } catch {
+    // ストレージ不可環境（file:// のプライベートブラウズ等）では既定値で動かす
+  }
+  if (raw === null || raw === "") return 70; // 保存値がない初回は既定の70%（「音ON」と整合させる）
+  const value = Number(raw);
   if (!Number.isFinite(value)) return 70;
   return Math.max(0, Math.min(100, value));
 }
@@ -5233,6 +5311,8 @@ let wordSortMode = "added";
 let favoritesOnly = false;
 let currentQuiz = null;
 let reviewSession = null;
+// 範囲クイズ・総復習を完走した直後の結果表示用データ（次のクイズを始めると消える）
+let reviewResult = null;
 let quizStarted = false;
 // 通常クイズ（エンドレス）の「◯問目」表示用。「クイズを始める」を押すたびに1から数え直す。
 let normalQuizQuestionNumber = 0;
@@ -5338,13 +5418,28 @@ function normalizeStreak(raw) {
   return count > 0 && last ? { count, last } : { count: 0, last: "" };
 }
 
-// ストリークの同期マージ：学習日(last)が新しい方を採用。同日なら count が大きい方。
-// 同じ2つを何度マージしても結果は変わらない（冪等）。
+// YYYY-MM-DD 同士が暦日で1日違い（b が a の翌日）かを判定する
+function isNextDayString(a, b) {
+  const ta = Date.parse(`${a}T00:00:00Z`);
+  const tb = Date.parse(`${b}T00:00:00Z`);
+  return Number.isFinite(ta) && Number.isFinite(tb) && tb - ta === 24 * 60 * 60 * 1000;
+}
+
+// ストリークの同期マージ。同じ2つを何度マージしても結果は変わらない（冪等）。
+// ・last が同じ日 → count が大きい方（従来どおり）
+// ・last が隣り合う日 → 連続はつながっているとみなし、古い側の count+1 と新しい側の count の大きい方。
+//   同期していなかった端末が今日 count=1 で始めても、昨日までの連続記録を巻き戻さない。
+// ・2日以上離れている → 連続は切れているので新しい方をそのまま採用（従来どおり）
 function mergeStreaks(a, b) {
   const x = normalizeStreak(a);
   const y = normalizeStreak(b);
   if (x.last === y.last) return x.count >= y.count ? x : y;
-  return x.last > y.last ? x : y;
+  const newer = x.last > y.last ? x : y;
+  const older = x.last > y.last ? y : x;
+  if (older.last && isNextDayString(older.last, newer.last)) {
+    return { count: Math.max(newer.count, older.count + 1), last: newer.last };
+  }
+  return newer;
 }
 
 // 削除した単語の墓標（term→削除時刻）。これを同期で共有することで、
@@ -5411,12 +5506,19 @@ function wordAddedMs(word) {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+// 墓標のキー（デッキID＋半角スペース＋正規化した単語）。単語の同一性は deckId:term なので、
+// デッキをまたいだ同名語を削除に巻き込まないよう複合キーにする。
+// 旧データ（term単体キー）の墓標は mergeAppStates 側で互換読み込みする。
+function deletionKeyForWord(word) {
+  return `${word.deckId || ""} ${normalizeTerm(word.term)}`;
+}
+
 // この端末で単語を削除したことを記録する
 function recordDeletion(word) {
   if (!word || !word.term) return;
   const deletedAt = Date.now();
   if (!appState.deletions || typeof appState.deletions !== "object") appState.deletions = {};
-  appState.deletions[normalizeTerm(word.term)] = deletedAt;
+  appState.deletions[deletionKeyForWord(word)] = deletedAt;
   addWordToTrash(word, deletedAt);
 }
 
@@ -5431,12 +5533,17 @@ function loadState() {
 }
 
 function normalizeState(state) {
-  const words = state.words.map(normalizeWord).filter((word) => word.term && word.meaning);
+  // 同期サーバー等から壊れた応答（null・words非配列）が来ても例外にせず、安全な空状態に落とす。
+  // ここで例外を投げると同期経路（pull/connect/409）が恒久的に止まってしまう。
+  const source = state && typeof state === "object" ? state : {};
+  const words = (Array.isArray(source.words) ? source.words : [])
+    .map(normalizeWord)
+    .filter((word) => word.term && word.meaning);
 
-  let decks = Array.isArray(state.decks)
-    ? state.decks
+  let decks = Array.isArray(source.decks)
+    ? source.decks
         .map((deck) => ({
-          id: deck?.id || createId(),
+          id: sanitizeId(deck?.id),
           name: String(deck?.name || "").trim() || "単語帳",
           updatedAt: Number(deck?.updatedAt || 0),
         }))
@@ -5450,38 +5557,40 @@ function normalizeState(state) {
     if (!word.deckId || !deckIds.has(word.deckId)) word.deckId = fallbackDeckId;
   }
 
-  let activeDeckId = state.activeDeckId;
+  let activeDeckId = source.activeDeckId;
   if (activeDeckId !== "all" && !deckIds.has(activeDeckId)) activeDeckId = "all";
 
   return {
     words,
     decks,
-    quizCounter: Number(state.quizCounter || 0),
+    quizCounter: Number(source.quizCounter || 0),
     activeDeckId,
-    savedAt: Number(state.savedAt || 0),
-    deletions: sanitizeDeletions(state.deletions, Date.now()),
-    trash: sanitizeTrash(state.trash, Date.now()),
-    streak: normalizeStreak(state.streak),
+    savedAt: Number(source.savedAt || 0),
+    deletions: sanitizeDeletions(source.deletions, Date.now()),
+    trash: sanitizeTrash(source.trash, Date.now()),
+    streak: normalizeStreak(source.streak),
   };
 }
 
 function normalizeWord(word) {
+  // 配列内に null 等が混ざっていても例外にしない（term空になり後段の filter で除外される）
+  const w = word && typeof word === "object" ? word : {};
   return {
-    id: word.id || createId(),
-    term: String(word.term || "").trim(),
-    meaning: String(word.meaning || "").trim(),
-    addedAt: word.addedAt || new Date().toISOString(),
-    deckId: word.deckId || null,
-    cefr: normalizeCefr(word.cefr),
-    pos: normalizePos(word.pos),
-    enrich: normalizeEnrich(word.enrich),
-    favorite: Boolean(word.favorite),
+    id: sanitizeId(w.id),
+    term: String(w.term || "").trim(),
+    meaning: String(w.meaning || "").trim(),
+    addedAt: w.addedAt || new Date().toISOString(),
+    deckId: w.deckId ? sanitizeId(w.deckId, null) : null,
+    cefr: normalizeCefr(w.cefr),
+    pos: normalizePos(w.pos),
+    enrich: normalizeEnrich(w.enrich),
+    favorite: Boolean(w.favorite),
     stats: {
-      correct: Number(word.stats?.correct || 0),
-      wrong: Number(word.stats?.wrong || 0),
+      correct: Number(w.stats?.correct || 0),
+      wrong: Number(w.stats?.wrong || 0),
     },
-    history: normalizeHistory(word.history),
-    learning: normalizeLearning(word),
+    history: normalizeHistory(w.history),
+    learning: normalizeLearning(w),
   };
 }
 
@@ -5568,6 +5677,8 @@ function normalizeLearning(word) {
       firstAttempted: Boolean(word.learning.firstAttempted),
       reviewAt: Number(word.learning.reviewAt || 0),
       blockedUntil: Number(word.learning.blockedUntil || 0), // 誤答した単語がこの時刻まで再出題されない（旧データは0=足止めなし）
+      // 連続正解数（2回連続で習得済みになる）。旧データには無いフィールドなので0で補う
+      correctStreak: Math.max(0, Math.floor(Number(word.learning.correctStreak) || 0)),
     };
   }
 
@@ -5579,6 +5690,8 @@ function normalizeLearning(word) {
     firstAttempted: attempted,
     reviewAt: 0,
     blockedUntil: 0,
+    // 誤答が無い旧データは正解数をそのまま連続正解数とみなす
+    correctStreak: attempted && wrong === 0 ? correct : 0,
   };
 }
 
@@ -5737,7 +5850,7 @@ function mergeAppStates(localState, remoteState) {
       deckIdMap.set(deck.id, existingByName);
       return existingByName;
     }
-    const next = { id: deck.id || createId(), name: deck.name || "単語帳", updatedAt: deck.updatedAt || 0 };
+    const next = { id: sanitizeId(deck.id), name: deck.name || "単語帳", updatedAt: deck.updatedAt || 0 };
     decks.push(next);
     deckIdMap.set(deck.id, next.id);
     deckNameMap.set(nameKey, next.id);
@@ -5754,18 +5867,40 @@ function mergeAppStates(localState, remoteState) {
   const remapDeckId = (id) => deckIdMap.get(id) || decks[0].id;
   const wordKey = (word) => `${word.deckId}:${normalizeTerm(word.term)}`;
 
-  // 両端末の削除記録を統合（単語ごとに新しい削除時刻を採用）
+  // 両端末の削除記録を統合（単語ごとに新しい削除時刻を採用）。
+  // 墓標のキーは「デッキID＋単語」の複合キー。デッキIDはデッキ統合後のIDに読み替える。
+  const remapDeletionKey = (key) => {
+    const sep = key.indexOf(" ");
+    if (sep <= 0) return key; // 旧形式（term単体キー）はそのまま
+    const mapped = deckIdMap.get(key.slice(0, sep));
+    return mapped ? `${mapped}${key.slice(sep)}` : key;
+  };
   const mergedDeletions = {};
   for (const src of [local.deletions, remote.deletions]) {
-    for (const [term, ts] of Object.entries(src || {})) {
-      if (!mergedDeletions[term] || ts > mergedDeletions[term]) mergedDeletions[term] = ts;
+    for (const [rawKey, ts] of Object.entries(src || {})) {
+      const key = remapDeletionKey(rawKey);
+      if (!mergedDeletions[key] || ts > mergedDeletions[key]) mergedDeletions[key] = ts;
     }
+  }
+
+  // 旧形式の墓標（term単体キー）を別デッキの同名語に波及させないための下調べ。
+  // その単語が両端末を合わせて1つのデッキにしか無いときだけ旧墓標を適用する。
+  const termDecks = new Map();
+  for (const word of [...local.words, ...remote.words]) {
+    const term = normalizeTerm(word.term);
+    if (!termDecks.has(term)) termDecks.set(term, new Set());
+    termDecks.get(term).add(remapDeckId(word.deckId));
   }
 
   const addWord = (word, source) => {
     const next = normalizeWord({ ...word, deckId: remapDeckId(word.deckId) });
     // 追加時刻より後に削除された単語は、合算で復活させない（削除を確実に反映）
-    const deletedAt = mergedDeletions[normalizeTerm(next.term)];
+    const term = normalizeTerm(next.term);
+    let deletedAt = mergedDeletions[deletionKeyForWord(next)];
+    // 旧形式の墓標は、その単語が単一デッキにしか無い場合のみ適用する（別デッキの同名語を守る）
+    if (!deletedAt && mergedDeletions[term] && (termDecks.get(term)?.size || 0) <= 1) {
+      deletedAt = mergedDeletions[term];
+    }
     if (deletedAt && deletedAt >= wordAddedMs(next)) return;
     const existing =
       wordById.get(next.id) ||
@@ -5844,7 +5979,7 @@ function mergeWord(localWord, remoteWord, source) {
     enrich: mergeEnrichData(localWord.enrich, remoteWord.enrich),
     stats,
     history,
-    learning: mergeLearningState(localWord.learning, remoteWord.learning, history),
+    learning: mergeLearningState(localWord.learning, remoteWord.learning),
   };
 }
 
@@ -5872,31 +6007,26 @@ function mergeEnrichData(a, b) {
   return base;
 }
 
-function mergeLearningState(a, b, history) {
-  const last = history[history.length - 1];
-  const nextReviewAt = minPositiveNumber(a?.reviewAt, b?.reviewAt);
-  // 5分ブロックは両端末の遅い方（＝より安全な方）を採用し、マージで足止めが消えないようにする
-  const blockedUntil = Math.max(Number(a?.blockedUntil || 0), Number(b?.blockedUntil || 0));
-  if (last) {
-    return {
-      status: last.correct ? "mastered" : "review",
-      firstAttempted: true,
-      reviewAt: last.correct ? 0 : nextReviewAt,
-      blockedUntil,
-    };
-  }
-  if (a?.status === "review" || b?.status === "review") {
-    return {
-      status: "review",
-      firstAttempted: Boolean(a?.firstAttempted || b?.firstAttempted),
-      reviewAt: nextReviewAt,
-      blockedUntil,
-    };
-  }
-  if (a?.status === "mastered" || b?.status === "mastered") {
-    return { status: "mastered", firstAttempted: true, reviewAt: 0, blockedUntil };
-  }
-  return { status: "new", firstAttempted: false, reviewAt: 0, blockedUntil };
+// 学習状態のマージ。「より進んだ側」を尊重して統合する：
+// status は mastered > review > new の優先順で強い方、correctStreak は大きい方、
+// reviewAt は早く復習する方（minPositive）、blockedUntil は遅い方、firstAttempted は OR。
+// 旧実装は history 末尾1件だけから status を決め直していたため、タップ同期しただけで
+// 片側の習得状態が上書きされて壊れていた（stats/history は別途マージ済みなので再計算しない）。
+function mergeLearningState(a, b) {
+  const rank = { new: 0, review: 1, mastered: 2 };
+  const statusOf = (learning) =>
+    learning && rank[learning.status] !== undefined ? learning.status : "new";
+  const statusA = statusOf(a);
+  const statusB = statusOf(b);
+  const status = rank[statusA] >= rank[statusB] ? statusA : statusB;
+  return {
+    status,
+    firstAttempted: Boolean(a?.firstAttempted || b?.firstAttempted) || status !== "new",
+    reviewAt: status === "review" ? minPositiveNumber(a?.reviewAt, b?.reviewAt) : 0,
+    // 5分ブロックは両端末の遅い方（＝より安全な方）を採用し、マージで足止めが消えないようにする
+    blockedUntil: Math.max(Number(a?.blockedUntil || 0), Number(b?.blockedUntil || 0)),
+    correctStreak: Math.max(Number(a?.correctStreak || 0), Number(b?.correctStreak || 0)),
+  };
 }
 
 function minPositiveNumber(...values) {
@@ -5990,7 +6120,8 @@ async function pushWordsnapState(options = {}) {
   } catch (error) {
     if (error.status === 409 && error.data && !options.retried) {
       syncState.rev = Number(error.data.stateRev) || syncState.rev;
-      applyMergedRemoteState(error.data.state);
+      // 壊れた409応答（stateなし）でも例外にせず、リビジョンだけ合わせて再送する
+      if (error.data.state) applyMergedRemoteState(error.data.state);
       syncState.pushing = false;
       await pushWordsnapState({ force: true, retried: true });
       return;
@@ -6001,16 +6132,17 @@ async function pushWordsnapState(options = {}) {
   }
 }
 
+// 戻り値: 取り込みで状態が変わったか（変わった場合は内部で push まで済ませている）
 async function pullWordsnapState(options = {}) {
   if (!syncState.id) {
     await connectWordsnapSync();
-    return;
+    return false;
   }
   if (!syncServerAvailable()) {
     setSyncStatus("同期には room-sync-server.js から開く必要があります。", "error");
-    return;
+    return false;
   }
-  if (syncState.pulling) return;
+  if (syncState.pulling) return false;
   syncState.pulling = true;
   if (!options.silent) setSyncStatus("サーバーから読み込んでいます…");
   try {
@@ -6027,9 +6159,11 @@ async function pullWordsnapState(options = {}) {
     } else if (!options.silent) {
       setSyncStatus("✓ サーバーに保存済み（最新です）", "live");
     }
+    return changed;
   } catch (error) {
     syncState.connected = false;
     if (!options.silent) setSyncStatus(error.message || "読み込みに失敗しました。", "error");
+    return false;
   } finally {
     syncState.pulling = false;
   }
@@ -6222,13 +6356,14 @@ function initWordsnapSync() {
   });
   window.addEventListener("pageshow", pullIfConnected);
   // オフライン復帰時：オフライン中に解いた進捗（stats・history・streak等）を即サーバーへ反映する。
-  // 未接続(connected=false)でも force で押し込む。pull→push の順にして、他端末が先に
-  // 送った進捗をマージしてから自分の分を送る（多重実行は pulling/pushing ガードが防ぐ）。
+  // pull で差分があれば pull 内部で push まで行われるため、二重pushを避け、
+  // 差分が無かったとき（＝オフライン中の自分の進捗が未送信のとき）だけ明示的に押し込む。
+  // 未接続(connected=false)でも force で押し込む（多重実行は pulling/pushing ガードが防ぐ）。
   const syncOnReconnect = async () => {
     if (!syncState.id || !syncServerAvailable()) return;
     try {
-      await pullWordsnapState({ silent: true });
-      await pushWordsnapState({ force: true });
+      const changed = await pullWordsnapState({ silent: true });
+      if (!changed) await pushWordsnapState({ force: true });
     } catch {
       // 失敗しても次のポーリング/保存時に再試行される
     }
@@ -6286,7 +6421,23 @@ function clearUndo() {
 
 function performUndo() {
   if (!undoSnapshot) return;
-  appState = normalizeState(undoSnapshot);
+  const restored = normalizeState(undoSnapshot);
+  // スナップショット取得後に付いた墓標（＝いま取り消した削除の記録）に復元語が負けないようにする。
+  // 墓標は別端末へ同期済みの可能性があるため、取り除くだけでは不十分で、
+  // restoreTrashWord と同じく復元する単語の追加時刻を現在に更新して復活を確定させる。
+  const currentDeletions = (appState && appState.deletions) || {};
+  const nowIso = new Date().toISOString();
+  for (const word of restored.words) {
+    const keys = [deletionKeyForWord(word), normalizeTerm(word.term)]; // 新形式＋旧形式
+    for (const key of keys) {
+      const ts = Math.max(Number(currentDeletions[key] || 0), Number(restored.deletions[key] || 0));
+      if (ts && ts >= wordAddedMs(word)) {
+        word.addedAt = nowIso; // 墓標より新しい追加時刻にする
+        delete restored.deletions[key];
+      }
+    }
+  }
+  appState = restored;
   currentQuiz = null;
   selectedIds.clear();
   saveState(); // also clears the (now consumed) undo snapshot
@@ -6505,6 +6656,17 @@ function setStatus(message) {
 
 function createId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ID（単語ID・デッキID）は renderSavedWords などで data-* 属性値としてそのまま
+// innerHTML に埋め込まれる。JSONインポートや同期経由で悪意ある文字列が来ても
+// XSSにならないよう、安全な文字だけに制限する。createId() は [a-z0-9-] しか
+// 生成しないので、正規に発行されたIDは変化しない。第2引数はサニタイズ結果が
+// 空になったときの代替値（省略時は新規ID発行、null を渡せば null を維持）。
+function sanitizeId(value, fallback) {
+  const cleaned = String(value == null ? "" : value).replace(/[^A-Za-z0-9_-]/g, "");
+  if (cleaned) return cleaned;
+  return fallback !== undefined ? fallback : createId();
 }
 
 function normalizeTerm(value) {
@@ -7821,7 +7983,11 @@ function restoreTrashWord(trashId) {
   word.addedAt = now;
   appState.words.push(word);
   appState.trash = (appState.trash || []).filter((entry) => entry.id !== trashId);
-  if (appState.deletions) delete appState.deletions[normalizeTerm(word.term)];
+  if (appState.deletions) {
+    // 新形式（デッキID＋単語）と旧形式（単語のみ）の両方の墓標を消す
+    delete appState.deletions[deletionKeyForWord(word)];
+    delete appState.deletions[normalizeTerm(word.term)];
+  }
   appState.activeDeckId = word.deckId;
   currentQuiz = null;
   selectedIds.delete(word.id);
@@ -7902,7 +8068,9 @@ function learningLabel(word) {
     const remaining = Math.max(0, word.learning.reviewAt - appState.quizCounter);
     return remaining === 0 ? "復習出題待ち" : `あと${remaining}問後に復習`;
   }
-  return "未出題";
+  // 「未出題」は本当に出題回数0のときだけ。出題歴があるのに status が "new" のままの
+  // 旧データ（復習セッションで解答した場合など）は「学習中」と表示して矛盾を避ける
+  return word.stats.correct + word.stats.wrong > 0 ? "学習中" : "未出題";
 }
 
 // クイズカード上部のピル／細い進捗バーを最新状態に合わせる。
@@ -7951,6 +8119,16 @@ function renderQuiz() {
   }
 
   renderQuizScope();
+
+  // 復習セッション完走直後は、通常クイズ中(quizStarted=true)かどうかに関わらず
+  // 専用の結果表示（正解数・間違えた単語・再挑戦導線）を最優先で出す。
+  // （通常クイズを一度始めた後に範囲クイズを完走したケースでも確実に表示するため、
+  //   quizStarted の分岐より前で判定する）
+  if (reviewResult) {
+    renderReviewResult();
+    updateQuizControls();
+    return;
+  }
 
   if (!quizStarted) {
     renderQuizIntro();
@@ -8008,7 +8186,7 @@ function renderQuizEmpty() {
   elements.choices.innerHTML = "";
   elements.quizWord.textContent = "今出せる問題はありません";
   elements.quizFeedback.textContent =
-    "初回正解した単語は習得済みとして保存され、通常クイズからは外れています。「総復習」や「選択した単語を解く」で復習できます。";
+    "2回連続で正解した単語は習得済みとして保存され、通常クイズからは外れています。「総復習」や「選択した単語を解く」で復習できます。";
 }
 
 function updateQuizControls() {
@@ -8019,16 +8197,21 @@ function updateQuizControls() {
     !currentQuiz.answered &&
     (inReview ? reviewSession.queue.length > 0 : quizStarted);
 
+  // 復習完走サマリを表示中は、設定欄や「次の問題」等の操作ボタンを隠し、
+  // サマリ内の「もう一度解く／通常クイズに戻る」だけを見せる。
+  const showingResult = !!reviewResult && !inReview;
   const quizActive = inReview || quizStarted;
   // 出題中はモバイルのヘッダーを圧縮するため、body に目印のクラスを付け外しする
-  document.body.classList.toggle("quiz-active", quizActive);
+  document.body.classList.toggle("quiz-active", quizActive && !showingResult);
   // 出題中はクイズ設定欄を隠して、問題と選択肢を上に表示する
-  if (elements.quizSetup) elements.quizSetup.hidden = quizActive;
-  elements.startQuizButton.hidden = quizActive;
-  elements.nextQuizButton.hidden = !quizActive;
-  elements.dontKnowButton.hidden = !questionActive;
+  if (elements.quizSetup) elements.quizSetup.hidden = quizActive || showingResult;
+  elements.startQuizButton.hidden = quizActive || showingResult;
+  elements.nextQuizButton.hidden = !quizActive || showingResult;
+  elements.dontKnowButton.hidden = !questionActive || showingResult;
   elements.exitReviewButton.hidden = !inReview;
-  if (elements.exitQuizButton) elements.exitQuizButton.hidden = !(quizStarted && !inReview);
+  if (elements.exitQuizButton) {
+    elements.exitQuizButton.hidden = !(quizStarted && !inReview) || showingResult;
+  }
 }
 
 function renderAccuracy() {
@@ -8101,16 +8284,25 @@ function clearSavedReviewProgress() {
   }
 }
 
-// 保存済みの再開スナップショットを読む。残りがあり、全IDが現存するときだけ返す。
+// 保存済みの再開スナップショットを読む。途中で削除された単語は取り除き、
+// 残りの単語だけで再開できる形で返す（残りが無ければ null＝破棄）。
 function readSavedReviewProgress() {
   try {
     const saved = JSON.parse(localStorage.getItem(QUIZ_RESUME_KEY));
     if (!saved || !Array.isArray(saved.allIds) || !Array.isArray(saved.queue)) return null;
-    if (saved.queue.length === 0 || saved.allIds.length === 0) return null;
     const ids = new Set(appState.words.map((word) => word.id));
-    if (!saved.allIds.every((id) => ids.has(id))) return null;
-    if (!saved.queue.every((id) => ids.has(id))) return null;
-    return saved;
+    const allIds = saved.allIds.filter((id) => ids.has(id));
+    const queue = saved.queue.filter((id) => ids.has(id));
+    if (queue.length === 0 || allIds.length === 0) return null;
+    return {
+      ...saved,
+      allIds,
+      queue,
+      total: allIds.length,
+      missedIds: Array.isArray(saved.missedIds)
+        ? saved.missedIds.filter((id) => ids.has(id))
+        : [],
+    };
   } catch {
     return null;
   }
@@ -8140,6 +8332,7 @@ function resumeSavedReview() {
     label: String(saved.label || "復習"),
     missedIds: Array.isArray(saved.missedIds) ? saved.missedIds : [],
   };
+  reviewResult = null; // 再開したら前回の結果表示は消す
   const remaining = saved.queue.length;
   currentQuiz = null;
   persistReviewProgress();
@@ -8169,6 +8362,7 @@ function startReview(ids, options = {}) {
     label,
     missedIds: [], // このセッション中に一度でも間違えた単語ID（完走時のサマリ用）
   };
+  reviewResult = null; // 新しいセッションを始めたら前回の結果表示は消す
   currentQuiz = null;
   persistReviewProgress(); // 新しいセッションで上書き（古い再開データは破棄される）
   renderQuiz();
@@ -8315,6 +8509,80 @@ function buildReviewSummaryMessage(session) {
     : `${total}問中${correct}問正解。間違えた${missed}語はまた出題されます。`;
 }
 
+// 完走した復習セッションから、クイズカード内の結果表示用データを組み立てる
+function buildReviewResult(session) {
+  const missedWords = (session.missedIds || [])
+    .map((id) => appState.words.find((word) => word.id === id))
+    .filter(Boolean)
+    .map((word) => ({ term: word.term, meaning: word.meaning }));
+  return {
+    label: session.label || "復習",
+    total: session.total || 0,
+    missedCount: (session.missedIds || []).length,
+    missedWords,
+    allIds: (session.allIds || []).slice(),
+  };
+}
+
+// 範囲クイズ・総復習の完走後に、開始画面と区別できる専用の結果表示を出す
+function renderReviewResult() {
+  const result = reviewResult;
+  if (!result) return;
+  const correct = Math.max(0, result.total - result.missedCount);
+  elements.quizWord.textContent = result.missedCount === 0 ? "全問クリア！" : "クイズ完了！";
+  elements.quizFeedback.textContent = "";
+
+  const box = document.createElement("div");
+  box.className = "review-result";
+
+  const score = document.createElement("p");
+  score.className = "review-result-score";
+  score.textContent = `${result.label}：${result.total}問中${correct}問正解`;
+  box.append(score);
+
+  if (result.missedWords.length > 0) {
+    const missed = document.createElement("div");
+    missed.className = "review-result-missed";
+    const head = document.createElement("p");
+    head.textContent = `間違えた単語（${result.missedWords.length}語）`;
+    missed.append(head);
+    const list = document.createElement("ul");
+    for (const item of result.missedWords) {
+      const li = document.createElement("li");
+      const term = document.createElement("strong");
+      term.textContent = item.term;
+      const meaning = document.createElement("span");
+      meaning.textContent = ` ${item.meaning}`;
+      li.append(term, meaning);
+      list.append(li);
+    }
+    missed.append(list);
+    box.append(missed);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "review-result-actions";
+  const again = document.createElement("button");
+  again.type = "button";
+  again.textContent = "もう一度解く";
+  again.addEventListener("click", () => {
+    reviewResult = null;
+    startReview(result.allIds, { label: result.label });
+  });
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "通常クイズに戻る";
+  close.addEventListener("click", () => {
+    reviewResult = null;
+    playSound("tap");
+    renderQuiz();
+  });
+  actions.append(again, close);
+  box.append(actions);
+
+  elements.choices.replaceChildren(box);
+}
+
 // 復習セッションはキュー式の「誤答は末尾へ回す」だけで十分な間隔があくため、
 // 5分ブロックはここではチェックしない（通常クイズのavailableQuizWordsのみ対象）。
 function buildReviewQuiz() {
@@ -8418,6 +8686,27 @@ function scheduleReview(word) {
   word.learning.reviewAt = appState.quizCounter + delay;
 }
 
+// 解答結果を学習状態（習得/復習）に反映する。通常クイズ・範囲クイズ・総復習で共通の判定。
+// 習得条件は「2回連続正解」：1回目の正解は復習スケジュールに留め、誤答は連続カウンタを0に戻す。
+// 正解で習得済みが取り消されることはない（既に mastered なら維持する）。
+function applyLearningResult(word, isCorrect) {
+  const learning = word.learning;
+  if (isCorrect) {
+    learning.correctStreak = Math.max(0, Math.floor(Number(learning.correctStreak) || 0)) + 1;
+    learning.firstAttempted = true;
+    if (learning.status === "mastered" || learning.correctStreak >= 2) {
+      learning.status = "mastered";
+      learning.reviewAt = 0;
+    } else {
+      // 1回目の正解：まだ習得とせず、数問後にもう一度出して連続正解を確認する
+      scheduleReview(word);
+    }
+  } else {
+    learning.correctStreak = 0;
+    scheduleReview(word);
+  }
+}
+
 function shuffle(items) {
   return items
     .map((item) => ({ item, sort: Math.random() }))
@@ -8501,7 +8790,12 @@ function gradeQuiz(choiceId, dontKnow = false) {
   if (!isCorrect) word.learning.blockedUntil = Date.now() + WRONG_COOLDOWN_MS;
   highlightChoices(choiceId);
 
+  // 範囲クイズ・総復習でも通常クイズと同じ判定で学習状態（習得/復習）を更新する
+  appState.quizCounter += 1;
+  applyLearningResult(word, isCorrect);
+
   if (reviewSession) {
+    // セッションのキュー操作（誤答は末尾へ回す）と進捗カウントは従来どおり維持する
     if (isCorrect) {
       reviewSession.queue.shift();
     } else {
@@ -8511,7 +8805,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
     const remaining = reviewSession.queue.length;
     elements.quizFeedback.textContent = isCorrect
       ? remaining === 0
-        ? "正解！すべてクリアしました。「次の問題」で通常出題に戻ります。"
+        ? "正解！すべてクリアしました。「次の問題」で結果を表示します。"
         : "正解！「次の問題」で続けます。"
       : `正解は「${currentQuiz.answer.meaning}」。あとでもう一度出します。`;
     elements.quizScope.textContent = `${reviewSession.label} 残り ${remaining}/${reviewSession.total}`;
@@ -8526,16 +8820,10 @@ function gradeQuiz(choiceId, dontKnow = false) {
     return;
   }
 
-  appState.quizCounter += 1;
-  if (isCorrect) {
-    word.learning.status = "mastered";
-    word.learning.firstAttempted = true;
-    word.learning.reviewAt = 0;
-  } else {
-    scheduleReview(word);
-  }
   elements.quizFeedback.textContent = isCorrect
-    ? "正解です。この単語は習得済みになり、保存だけされます。"
+    ? word.learning.status === "mastered"
+      ? "正解！2回連続正解で、この単語は習得済みになりました。"
+      : "正解！もう一度連続で正解すると習得済みになります（2〜3問後にまた出します）。"
     : dontKnow
       ? `正解は「${currentQuiz.answer.meaning}」です。2〜3問後にもう一度出します。`
       : `惜しい。正解は「${currentQuiz.answer.meaning}」。2〜3問後にもう一度出します。`;
@@ -8920,7 +9208,8 @@ async function handleEnrichChip(chip) {
   }
 
   section.innerHTML = enrichSectionShell(type, `<p class="enrich-loading">読み込み中…</p>`);
-  const data = await window.Enrich.fetch(type, word.term);
+  // 類義語は見出し語の品詞（あれば）と一致するものを優先して取得する
+  const data = await window.Enrich.fetch(type, word.term, word.pos?.tag || null);
   if (data && !window.Enrich.isEmpty(type, data)) {
     word.enrich[type] = data;
     persistAppState();
@@ -9290,7 +9579,7 @@ elements.saveParsedButton.addEventListener("click", () => {
       enrich: emptyEnrich(),
       stats: { correct: 0, wrong: 0 },
       history: [],
-      learning: { status: "new", firstAttempted: false, reviewAt: 0, blockedUntil: 0 },
+      learning: { status: "new", firstAttempted: false, reviewAt: 0, blockedUntil: 0, correctStreak: 0 },
     }));
 
   appState.words.push(...cleaned);
@@ -9403,7 +9692,7 @@ elements.choices.addEventListener("click", (event) => {
   gradeQuiz(button.dataset.choiceId);
 });
 
-// Keyboard: 1–4 to answer, N/Enter for next, S to show answer, 0 for わからない.
+// キーボード操作: 1〜4で解答、N/Enterで次の問題、0で「わからない」。
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const target = event.target;
@@ -9435,6 +9724,7 @@ document.addEventListener("keydown", (event) => {
 elements.startQuizButton.addEventListener("click", () => {
   clearAutoNextTimer();
   clearSavedReviewProgress(); // 再開せず別のクイズを始めたら、前回の続きは破棄する
+  reviewResult = null; // 完走サマリが残っていたら消して通常クイズへ
   quizStarted = true;
   normalQuizQuestionNumber = 0; // 「◯問目」を1から数え直す（buildQuiz内で+1される）
   currentQuiz = availableQuizWords().length > 0 ? buildQuiz() : null;
@@ -9463,12 +9753,10 @@ elements.nextQuizButton.addEventListener("click", () => {
   clearAutoNextTimer();
   if (reviewSession) {
     if (reviewSession.queue.length === 0) {
-      // セッション完走：setStatusとクイズカードのフィードバックの両方にサマリを出す
-      // （endReview() 内の renderQuiz() → renderQuizIntro() が一旦フィードバックを
-      // 上書きするため、endReview の後にもう一度サマリで上書きする）。
-      const summary = buildReviewSummaryMessage(reviewSession);
-      endReview(summary);
-      if (elements.quizFeedback) elements.quizFeedback.textContent = summary;
+      // セッション完走：クイズカード内を専用の結果表示（正解数・間違えた単語・
+      // 再挑戦導線）に切り替え、ステータス欄にもサマリを出す。
+      reviewResult = buildReviewResult(reviewSession);
+      endReview(buildReviewSummaryMessage(reviewSession));
       playSound("success");
       return;
     }
@@ -9675,7 +9963,7 @@ elements.clearAllButton.addEventListener("click", () => {
     })),
   ];
   const deletions = sanitizeDeletions(appState.deletions, deletedAt);
-  for (const word of appState.words) deletions[normalizeTerm(word.term)] = deletedAt;
+  for (const word of appState.words) deletions[deletionKeyForWord(word)] = deletedAt;
   appState = defaultState();
   appState.deletions = deletions;
   appState.trash = sanitizeTrash(trash, deletedAt);
@@ -9792,7 +10080,9 @@ async function recoverPersisted() {
       // localStorage had no id (likely wiped): adopt the durable id and reload
       localStorage.setItem(CLIENT_KEY, idbClient);
       STORAGE_KEY = storageKeyFor(idbClient);
-      appState = loadState();
+      // フォールバックで同期が先に始まっている場合は、丸ごと置換するとサーバー由来の
+      // マージ済みデータが消えるため、必ずマージで取り込む
+      appState = syncInitStarted ? mergeAppStates(appState, loadState()) : loadState();
     } else {
       // keep the durable copy of the id in sync with the active one
       idb.set(CLIENT_KEY, localStorage.getItem(CLIENT_KEY) || clientId);
@@ -9805,7 +10095,13 @@ async function recoverPersisted() {
     const json = await idb.get(STORAGE_KEY);
     if (json) {
       const backup = JSON.parse(json);
-      if (Number(backup.savedAt || 0) > Number(appState.savedAt || 0)) {
+      if (syncInitStarted) {
+        // フォールバックで同期が先に始まった後は、丸ごと置換するとサーバーとマージ済みの
+        // 最新状態が古いIDBミラーで上書きされて消える（そのままサーバーへpushされる）ため、
+        // 必ずマージで取り込む
+        appState = mergeAppStates(appState, backup);
+        currentQuiz = null;
+      } else if (Number(backup.savedAt || 0) > Number(appState.savedAt || 0)) {
         appState = normalizeState(backup);
         currentQuiz = null;
       }
