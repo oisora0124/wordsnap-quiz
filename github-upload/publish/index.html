@@ -1542,7 +1542,7 @@ textarea:focus-visible {
   flex-wrap: nowrap;
   gap: 6px;
   align-items: center;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 4px; /* 細いスクロールバーがチップに重ならないよう少し余白を確保 */
@@ -2015,7 +2015,7 @@ textarea:focus-visible {
 /* ---------- Deck stats (donut) ---------- */
 
 .deck-stats {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 /* デフォルトは閉じた状態（サマリーの1行だけ）で表示し、タップで円グラフの内訳を開閉する */
@@ -2160,6 +2160,73 @@ textarea:focus-visible {
 
 /* ---------- Selection bar ---------- */
 
+/* 一括選択・一括操作の折りたたみ（deck-stats-card / settings-section と同じ見た目パターン）。
+   デフォルトで閉じており、開くと中の select-bar / selectionActions が従来どおり使える。
+   最初の単語カードまでのスクロール量を減らすための変更で、中身のID・イベント委譲は変更していない。 */
+.bulk-actions {
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.bulk-actions-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 10px 14px;
+  color: var(--ink);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.bulk-actions-summary::-webkit-details-marker {
+  display: none;
+}
+
+.bulk-actions-summary::after {
+  content: "";
+  margin-left: auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.bulk-actions[open] .bulk-actions-summary::after {
+  transform: rotate(45deg);
+}
+
+.bulk-actions-summary:hover {
+  background: var(--surface-3);
+}
+
+.bulk-actions-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 12px;
+}
+
+/* 折りたたみ内に入れたので、select-bar 側の二重の枠・背景は外して単一カードの見た目にする
+   （selectionActions の強調枠はそのまま残し、選択中であることが分かるようにする） */
+.bulk-actions-body .select-bar {
+  padding: 0;
+  margin-bottom: 0;
+  border: 0;
+  background: transparent;
+}
+
+.bulk-actions-body .selection-actions {
+  margin-bottom: 0;
+}
+
 /* ① 単語を選ぶバー */
 .select-bar {
   display: flex;
@@ -2285,7 +2352,7 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   padding: 0 0.7rem;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -2642,7 +2709,7 @@ textarea:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .sort-field {
@@ -3983,28 +4050,38 @@ accurate 正確な"
         </div>
         <div id="deckBar" class="deck-bar"></div>
         <div id="deckStats" class="deck-stats" hidden></div>
-        <!-- ① 単語を選ぶ -->
-        <div class="select-bar">
-          <span class="select-bar-label">選ぶ</span>
-          <label class="select-all">
-            <input type="checkbox" id="selectAllCheckbox" />
-            全部
-          </label>
-          <span class="range-select">
-            <span class="range-select-label">番号で</span>
-            <input id="rangeSelectFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="選択する開始番号" />
-            <span class="range-select-dash" aria-hidden="true">〜</span>
-            <input id="rangeSelectTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="選択する終了番号" />
-            <button id="rangeSelectButton" class="ghost mini" type="button">選択に追加</button>
-          </span>
-        </div>
-        <!-- ② 選んだ単語に対して操作（選択があるときだけ表示） -->
-        <div id="selectionActions" class="selection-actions" hidden>
-          <span id="selectionCount" class="selection-count">0件 選択中</span>
-          <button id="reviewSelectedButton" class="secondary" type="button">選んだ単語を解く</button>
-          <button id="deleteSelectedButton" class="ghost mini danger" type="button">選んだ単語を削除</button>
-          <button id="clearSelectionButton" class="ghost mini" type="button">選択解除</button>
-        </div>
+        <!-- 一括選択・一括操作（全選択・番号で範囲選択・選んだ単語への操作）は普段使わないため折りたたみ。
+             デフォルトは閉じており、開くと従来どおりの全機能が使える。中身のID・イベント委譲は変更していない。 -->
+        <details id="bulkActionsToggle" class="bulk-actions">
+          <summary class="bulk-actions-summary">
+            <span aria-hidden="true">☑</span>
+            選択・一括操作
+          </summary>
+          <div class="bulk-actions-body">
+            <!-- ① 単語を選ぶ -->
+            <div class="select-bar">
+              <span class="select-bar-label">選ぶ</span>
+              <label class="select-all">
+                <input type="checkbox" id="selectAllCheckbox" />
+                全部
+              </label>
+              <span class="range-select">
+                <span class="range-select-label">番号で</span>
+                <input id="rangeSelectFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="選択する開始番号" />
+                <span class="range-select-dash" aria-hidden="true">〜</span>
+                <input id="rangeSelectTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="選択する終了番号" />
+                <button id="rangeSelectButton" class="ghost mini" type="button">選択に追加</button>
+              </span>
+            </div>
+            <!-- ② 選んだ単語に対して操作（選択があるときだけ表示） -->
+            <div id="selectionActions" class="selection-actions" hidden>
+              <span id="selectionCount" class="selection-count">0件 選択中</span>
+              <button id="reviewSelectedButton" class="secondary" type="button">選んだ単語を解く</button>
+              <button id="deleteSelectedButton" class="ghost mini danger" type="button">選んだ単語を削除</button>
+              <button id="clearSelectionButton" class="ghost mini" type="button">選択解除</button>
+            </div>
+          </div>
+        </details>
         <div class="word-search">
           <span class="word-search-icon" aria-hidden="true"></span>
           <input
