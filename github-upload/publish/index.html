@@ -2346,6 +2346,13 @@ textarea:focus-visible {
   color: var(--ink);
 }
 
+/* 保存一覧のページング用「さらに表示」ボタン行（一覧が長いときだけ末尾に出る） */
+.word-list-more {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 2px;
+}
+
 /* ---------- 保存した単語の検索 ---------- */
 .word-search {
   position: relative;
@@ -4910,6 +4917,20 @@ const QUIZ_LAST_SETTINGS_KEY = "wordsnap-quiz-last-settings:v1"; // 前回のク
 const SYNC_ID_KEY = "wordsnap-sync-id:v1";
 const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
+
+// ===== 描画の軽量化 =====
+// 案1: 現在表示中のパネルID（data-step-panel）。setActiveStep() が必ず更新する。
+let activeStepId = "import";
+// 案1: 非表示パネルの「要再描画」フラグ。データが変わったら全パネルを dirty にし、
+// 表示中のパネルだけ即時描画。残りはタブ切替の瞬間に描画してフラグを下ろす。
+const dirtyPanels = new Set();
+// 案2: 保存一覧を一度にDOM化する件数。超えた分は「さらに表示」ボタンで追加描画する。
+const SAVED_LIST_PAGE_SIZE = 100;
+// 案2: 現在DOM化する上限件数（検索・並び替え・フィルタ・単語帳が変わると先頭に戻す）
+let savedListVisibleCount = SAVED_LIST_PAGE_SIZE;
+// 案2: ページングを先頭に戻すべきか判定するための「表示条件」の合成キー
+let savedListSignature = null;
+
 let audioContext = null;
 let autoNextTimer = 0;
 let themeAutoTimer = 0;
@@ -5261,6 +5282,10 @@ function setActiveStep(id, options = {}) {
   for (const panel of elements.stepPanels) {
     panel.hidden = panel.dataset.stepPanel !== nextId;
   }
+  // 案1: 表示中パネルを記録し、非表示の間に「要再描画」になっていたらこの瞬間に描画する。
+  // これにより「単語追加→他タブで反映」など、どのタブへ移っても最新の内容が保証される。
+  activeStepId = nextId;
+  renderDirtyActivePanel();
   if (options.persist !== false) localStorage.setItem(ACTIVE_STEP_KEY, nextId);
   if (options.sound !== false && previousId && previousId !== nextId) playSound("tap");
 
@@ -7932,6 +7957,14 @@ function renderSavedWords() {
   const needle = wordSearchQuery.trim().toLowerCase();
   const words = visibleSavedWords();
 
+  // 案2: 表示条件（単語帳・並び替え・お気に入り・検索語）が変わったらページングを
+  // 先頭に戻す。同期反映などで条件が変わらない再描画では表示済み件数を維持する。
+  const signature = JSON.stringify([appState.activeDeckId, wordSortMode, favoritesOnly, needle]);
+  if (signature !== savedListSignature) {
+    savedListSignature = signature;
+    savedListVisibleCount = SAVED_LIST_PAGE_SIZE;
+  }
+
   // 検索ボックスの状態（クリアボタン・件数）を更新
   if (elements.wordSearchClear) elements.wordSearchClear.hidden = !needle;
   if (elements.wordSearchCount) {
@@ -7953,7 +7986,10 @@ function renderSavedWords() {
 
   elements.savedList.className = "word-list";
   elements.savedList.innerHTML = "";
-  words.forEach((word, index) => {
+  // 案2: 先頭から一定件数だけDOM化する。番号（saved-index）や範囲選択の番号は
+  // visibleSavedWords() 全体の1始まり通し番号のままなので、ページングでずれない。
+  const shownWords = words.slice(0, savedListVisibleCount);
+  shownWords.forEach((word, index) => {
       const attempts = word.stats.correct + word.stats.wrong;
       const status = learningLabel(word);
       const row = document.createElement("div");
@@ -7994,6 +8030,20 @@ function renderSavedWords() {
       `;
       elements.savedList.append(row);
     });
+
+  // 案2: まだDOM化していない単語が残っていれば「さらに表示」ボタンを出す。
+  // 一覧が SAVED_LIST_PAGE_SIZE 件以下のときはボタン自体が出ず、従来と同じ見た目になる。
+  if (words.length > shownWords.length) {
+    const more = document.createElement("div");
+    more.className = "word-list-more";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.dataset.showMoreSaved = "true";
+    button.textContent = `さらに表示（残り${words.length - shownWords.length}件）`;
+    more.append(button);
+    elements.savedList.append(more);
+  }
 
   renderSelection();
 }
@@ -8924,19 +8974,49 @@ function gradeQuiz(choiceId, dontKnow = false) {
   scheduleAutoNextIfNeeded();
 }
 
+// 案1: renderAll() は「共通の軽い描画」＋「表示中パネルの重い描画」だけを行う。
+// 非表示パネルは dirty（要再描画）として記録し、タブ切替時（setActiveStep）に描画する。
+// データが変わる場所（saveState・同期反映など）は従来どおり renderAll() を呼べばよく、
+// 「どのタブへ移っても最新の内容が見える」ことは dirty フラグが保証する。
 function renderAll() {
-  renderDecks();
-  renderCandidates();
-  renderSavedWords();
-  renderTrash();
-  renderQuiz();
+  // 共通・軽量: ヘッダーの🔥ピル、複数パネルにまたがる単語帳UI（保存先セレクト・
+  // デッキバー・出題スコープ・内訳）、クイズ設定の単語帳セレクト。
+  // populateQuizDeckSelect は起動直後の restoreLastQuizSettings が選択肢に依存する
+  // ため、パネルの表示状態に関わらず毎回更新しておく（デッキ数件分で十分安価）。
   renderStreakBadge();
+  renderDecks();
   populateQuizDeckSelect();
-  // Fill in missing CEFR/品詞 badges via the network here (not on every saved-list
-  // render). Both are guarded against overlapping runs and skip already-resolved
-  // words, so repeated calls are cheap.
-  backfillSavedCefr();
-  backfillSavedPos();
+  // 重い描画（一覧のDOM再構築・通信）は全パネルを dirty にして、表示中だけ即時描画
+  for (const id of STEP_IDS) dirtyPanels.add(id);
+  renderDirtyActivePanel();
+}
+
+// 表示中パネルが dirty なら描画してフラグを下ろす（renderAll とタブ切替の両方から呼ばれる）
+function renderDirtyActivePanel() {
+  if (!dirtyPanels.has(activeStepId)) return;
+  dirtyPanels.delete(activeStepId);
+  renderStepPanel(activeStepId);
+}
+
+// パネルごとの重い描画。全DOM再構築や通信を伴うものだけをここに置く。
+function renderStepPanel(id) {
+  if (id === "candidates") {
+    renderCandidates();
+    return;
+  }
+  if (id === "quiz") {
+    renderQuiz();
+    return;
+  }
+  if (id === "library") {
+    renderSavedWords();
+    renderTrash();
+    // CEFR/品詞の穴埋め通信は「保存した単語」パネルの表示時だけ、かつDOM化済みの
+    // 行だけを対象にする（案3）。どちらも多重実行防止・解決済みスキップのガード付き。
+    backfillSavedCefr();
+    backfillSavedPos();
+  }
+  // import / settings は静的なフォーム中心のため、都度の再描画は不要
 }
 
 function cefrClass(result) {
@@ -8999,21 +9079,40 @@ async function resolveCefrBadges(container) {
 let cefrBackfillRunning = false;
 let posBackfillRunning = false;
 
+// 案3: 「保存した単語」で現在DOM化されている行の単語だけを返す。
+// ページングでまだ表示していない単語には通信せず、「さらに表示」で出たときに取得する。
+function savedWordsInDom() {
+  const ids = new Set(
+    [...elements.savedList.querySelectorAll(".saved-item[data-word-id]")].map(
+      (row) => row.dataset.wordId,
+    ),
+  );
+  return appState.words.filter((word) => ids.has(word.id));
+}
+
 async function backfillSavedCefr() {
   if (cefrBackfillRunning) return;
   cefrBackfillRunning = true;
   let changed = false;
   try {
-    for (const word of appState.words) {
-      if (word.cefr && (word.cefr.level || word.cefr.estimated)) continue;
-      const result = await window.Cefr.resolve(word.term);
-      if (!result) continue;
-      word.cefr = { level: result.level, estimated: result.estimated };
-      changed = true;
-      const badge = elements.savedList.querySelector(
-        `[data-word-id="${word.id}"] [data-cefr-term]`,
-      );
-      if (badge) updateCefrBadge(badge, result);
+    // 実行中に「さらに表示」で行が増えても取りこぼさないよう、
+    // 処理済みIDを覚えつつDOM化済みの単語を回す（未解決のまま残る語で無限ループしない）。
+    const attempted = new Set();
+    let queue = savedWordsInDom();
+    while (queue.length > 0) {
+      for (const word of queue) {
+        attempted.add(word.id);
+        if (word.cefr && (word.cefr.level || word.cefr.estimated)) continue;
+        const result = await window.Cefr.resolve(word.term);
+        if (!result) continue;
+        word.cefr = { level: result.level, estimated: result.estimated };
+        changed = true;
+        const badge = elements.savedList.querySelector(
+          `[data-word-id="${word.id}"] [data-cefr-term]`,
+        );
+        if (badge) updateCefrBadge(badge, result);
+      }
+      queue = savedWordsInDom().filter((word) => !attempted.has(word.id));
     }
   } finally {
     cefrBackfillRunning = false;
@@ -9031,14 +9130,21 @@ async function backfillSavedPos() {
   posBackfillRunning = true;
   let changed = false;
   try {
-    for (const word of appState.words) {
-      if (word.pos) continue;
-      const result = await resolvePos(word.term);
-      if (!result) continue;
-      word.pos = { tag: result.tag };
-      changed = true;
-      const badge = elements.savedList.querySelector(`.pos-badge[data-pos-word="${word.id}"]`);
-      if (badge) badge.textContent = posLabel(result.tag);
+    // 案3: CEFRと同じく、DOM化済みの単語だけ品詞を取得する（増えた分は後追いで拾う）
+    const attempted = new Set();
+    let queue = savedWordsInDom();
+    while (queue.length > 0) {
+      for (const word of queue) {
+        attempted.add(word.id);
+        if (word.pos) continue;
+        const result = await resolvePos(word.term);
+        if (!result) continue;
+        word.pos = { tag: result.tag };
+        changed = true;
+        const badge = elements.savedList.querySelector(`.pos-badge[data-pos-word="${word.id}"]`);
+        if (badge) badge.textContent = posLabel(result.tag);
+      }
+      queue = savedWordsInDom().filter((word) => !attempted.has(word.id));
     }
   } finally {
     posBackfillRunning = false;
@@ -9700,6 +9806,16 @@ elements.trashList?.addEventListener("click", (event) => {
 elements.trashEmptyButton?.addEventListener("click", emptyTrash);
 
 elements.savedList.addEventListener("click", async (event) => {
+  // 案2: 「さらに表示」で次のページ分をDOM化し、増えた行のCEFR/品詞もそのとき取得する（案3）
+  const moreButton = event.target.closest("[data-show-more-saved]");
+  if (moreButton) {
+    savedListVisibleCount += SAVED_LIST_PAGE_SIZE;
+    renderSavedWords();
+    backfillSavedCefr();
+    backfillSavedPos();
+    return;
+  }
+
   const speakButton = event.target.closest("[data-speak-word]");
   if (speakButton) {
     const word = appState.words.find((item) => item.id === speakButton.dataset.speakWord);
