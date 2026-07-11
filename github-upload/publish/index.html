@@ -4930,6 +4930,9 @@ const SAVED_LIST_PAGE_SIZE = 100;
 let savedListVisibleCount = SAVED_LIST_PAGE_SIZE;
 // 案2: ページングを先頭に戻すべきか判定するための「表示条件」の合成キー
 let savedListSignature = null;
+// 案3: Libraryの表示条件・ページ・表示状態が変わるたびに世代を進める。
+// CEFR/品詞の旧世代処理は次のバッチへ進まず終了する。
+let libraryMetadataGeneration = 0;
 
 let audioContext = null;
 let autoNextTimer = 0;
@@ -5273,6 +5276,9 @@ function initSettings() {
 function setActiveStep(id, options = {}) {
   const nextId = STEP_IDS.includes(id) ? id : "import";
   const previousId = elements.stepTabs.find((tab) => tab.classList.contains("active"))?.dataset.stepTab;
+  if (activeStepId === "library" && nextId !== "library") {
+    invalidateLibraryMetadataWork();
+  }
   for (const tab of elements.stepTabs) {
     const active = tab.dataset.stepTab === nextId;
     tab.classList.toggle("active", active);
@@ -5286,6 +5292,7 @@ function setActiveStep(id, options = {}) {
   // これにより「単語追加→他タブで反映」など、どのタブへ移っても最新の内容が保証される。
   activeStepId = nextId;
   renderDirtyActivePanel();
+  if (nextId === "library") scheduleLibraryMetadataBackfill();
   if (options.persist !== false) localStorage.setItem(ACTIVE_STEP_KEY, nextId);
   if (options.sound !== false && previousId && previousId !== nextId) playSound("tap");
 
@@ -7954,6 +7961,7 @@ function sortWordsForList(words) {
 }
 
 function renderSavedWords() {
+  invalidateLibraryMetadataWork();
   const needle = wordSearchQuery.trim().toLowerCase();
   const words = visibleSavedWords();
 
@@ -7981,6 +7989,7 @@ function renderSavedWords() {
         : appState.words.length === 0
           ? "保存済みの単語はまだありません。"
           : "この単語帳にはまだ単語がありません。";
+    renderSelection();
     return;
   }
 
@@ -7989,63 +7998,90 @@ function renderSavedWords() {
   // 案2: 先頭から一定件数だけDOM化する。番号（saved-index）や範囲選択の番号は
   // visibleSavedWords() 全体の1始まり通し番号のままなので、ページングでずれない。
   const shownWords = words.slice(0, savedListVisibleCount);
-  shownWords.forEach((word, index) => {
-      const attempts = word.stats.correct + word.stats.wrong;
-      const status = learningLabel(word);
-      const row = document.createElement("div");
-      row.className = "saved-item";
-      row.dataset.wordId = word.id;
-      const safeTerm = escapeHtml(word.term);
-      row.innerHTML = `
-        <div class="saved-row">
-          <div class="saved-head">
-            <input type="checkbox" class="word-check" data-select-word="${word.id}"${
-              selectedIds.has(word.id) ? " checked" : ""
-            } aria-label="${safeTerm} を選択" />
-            <span class="saved-index">${index + 1}</span>
-            <button class="favorite-button${word.favorite ? " is-favorite" : ""}" type="button" data-favorite-word="${word.id}" aria-pressed="${word.favorite}" aria-label="${safeTerm} をお気に入りに追加/解除" title="お気に入りに追加/解除">★</button>
-            <strong>${safeTerm}</strong>
-            ${posBadgeMarkup(word)}
-            <button class="speak-button" type="button" data-speak-word="${word.id}" aria-label="${safeTerm} の発音を聞く" title="発音を聞く">🔊</button>
-            ${cefrBadgeMarkup(word.term, word.cefr)}
-          </div>
-          <span class="saved-meaning">${escapeHtml(word.meaning)}</span>
-          <div class="saved-meta">
-            <small>${status} / ${attempts}回出題 / ${word.stats.correct}回正解</small>
-            ${historyMarkup(word)}
-            <label class="deck-move">単語帳
-              <select data-move-word="${word.id}" aria-label="${safeTerm} の単語帳を変更">${deckOptionsMarkup(word.deckId)}</select>
-            </label>
-          </div>
-          <div class="saved-actions">
-            <button class="mini-button info" type="button" data-toggle-detail="${word.id}" aria-expanded="false" aria-label="${safeTerm} の詳細を表示">詳しく</button>
-            <button class="mini-button" type="button" data-delete-word="${word.id}" aria-label="${safeTerm} を削除">削除</button>
-          </div>
-        </div>
-        <div class="saved-detail" hidden>
-          <p class="enrich-hint">表示したい項目を選んでください（複数可）。</p>
-          <div class="enrich-chips">${enrichChipsMarkup(word)}</div>
-          <div class="enrich-results"></div>
-        </div>
-      `;
-      elements.savedList.append(row);
-    });
-
-  // 案2: まだDOM化していない単語が残っていれば「さらに表示」ボタンを出す。
-  // 一覧が SAVED_LIST_PAGE_SIZE 件以下のときはボタン自体が出ず、従来と同じ見た目になる。
-  if (words.length > shownWords.length) {
-    const more = document.createElement("div");
-    more.className = "word-list-more";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary";
-    button.dataset.showMoreSaved = "true";
-    button.textContent = `さらに表示（残り${words.length - shownWords.length}件）`;
-    more.append(button);
-    elements.savedList.append(more);
-  }
+  appendSavedWordRows(shownWords, 0);
+  updateSavedListMore(words.length, shownWords.length);
 
   renderSelection();
+  scheduleLibraryMetadataBackfill();
+}
+
+// 保存一覧の行を既存DOMの末尾へ追加する。「さらに表示」では先頭ページを作り直さないため、
+// 開いている詳細、checkbox、フォーカス、スクロール位置が維持される。
+function appendSavedWordRows(words, startIndex) {
+  words.forEach((word, offset) => {
+    const index = startIndex + offset;
+    const attempts = word.stats.correct + word.stats.wrong;
+    const status = learningLabel(word);
+    const row = document.createElement("div");
+    row.className = "saved-item";
+    row.dataset.wordId = word.id;
+    const safeTerm = escapeHtml(word.term);
+    row.innerHTML = `
+      <div class="saved-row">
+        <div class="saved-head">
+          <input type="checkbox" class="word-check" data-select-word="${word.id}"${
+            selectedIds.has(word.id) ? " checked" : ""
+          } aria-label="${safeTerm} を選択" />
+          <span class="saved-index">${index + 1}</span>
+          <button class="favorite-button${word.favorite ? " is-favorite" : ""}" type="button" data-favorite-word="${word.id}" aria-pressed="${word.favorite}" aria-label="${safeTerm} をお気に入りに追加/解除" title="お気に入りに追加/解除">★</button>
+          <strong>${safeTerm}</strong>
+          ${posBadgeMarkup(word)}
+          <button class="speak-button" type="button" data-speak-word="${word.id}" aria-label="${safeTerm} の発音を聞く" title="発音を聞く">🔊</button>
+          ${cefrBadgeMarkup(word.term, word.cefr)}
+        </div>
+        <span class="saved-meaning">${escapeHtml(word.meaning)}</span>
+        <div class="saved-meta">
+          <small>${status} / ${attempts}回出題 / ${word.stats.correct}回正解</small>
+          ${historyMarkup(word)}
+          <label class="deck-move">単語帳
+            <select data-move-word="${word.id}" aria-label="${safeTerm} の単語帳を変更">${deckOptionsMarkup(word.deckId)}</select>
+          </label>
+        </div>
+        <div class="saved-actions">
+          <button class="mini-button info" type="button" data-toggle-detail="${word.id}" aria-expanded="false" aria-label="${safeTerm} の詳細を表示">詳しく</button>
+          <button class="mini-button" type="button" data-delete-word="${word.id}" aria-label="${safeTerm} を削除">削除</button>
+        </div>
+      </div>
+      <div class="saved-detail" hidden>
+        <p class="enrich-hint">表示したい項目を選んでください（複数可）。</p>
+        <div class="enrich-chips">${enrichChipsMarkup(word)}</div>
+        <div class="enrich-results"></div>
+      </div>
+    `;
+    elements.savedList.append(row);
+  });
+}
+
+function updateSavedListMore(total, shown) {
+  elements.savedList.querySelector(".word-list-more")?.remove();
+  if (shown >= total) return null;
+  const more = document.createElement("div");
+  more.className = "word-list-more";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary";
+  button.dataset.showMoreSaved = "true";
+  button.textContent = `さらに表示（残り${total - shown}件）`;
+  more.append(button);
+  elements.savedList.append(more);
+  return button;
+}
+
+function appendNextSavedWordsPage() {
+  const words = visibleSavedWords();
+  const start = elements.savedList.querySelectorAll(".saved-item[data-word-id]").length;
+  if (start >= words.length) return;
+  invalidateLibraryMetadataWork();
+  const end = Math.min(words.length, start + SAVED_LIST_PAGE_SIZE);
+  elements.savedList.querySelector(".word-list-more")?.remove();
+  appendSavedWordRows(words.slice(start, end), start);
+  savedListVisibleCount = end;
+  const nextButton = updateSavedListMore(words.length, end);
+  renderSelection();
+  scheduleLibraryMetadataBackfill();
+  // 押した「さらに表示」の代わりに、同じ役割の次ボタンへフォーカスを引き継ぐ。
+  // 最終ページでは新しい行の末尾にフォーカスを強制せず、読み位置とスクロールを維持する。
+  nextButton?.focus({ preventScroll: true });
 }
 
 function formatTrashTime(ts) {
@@ -8166,15 +8202,17 @@ function pruneSelection() {
 
 function renderSelection() {
   pruneSelection();
-  const scoped = scopedWords();
-  const scopedSelected = scoped.filter((word) => selectedIds.has(word.id)).length;
+  // 「全部」は検索・お気に入り・単語帳で絞り込んだ結果全体を対象にする。
+  // DOM化済みページだけでも、絞り込み前のscopedWords全体でもない。
+  const visible = visibleSavedWords();
+  const visibleSelected = visible.filter((word) => selectedIds.has(word.id)).length;
   const n = selectedIds.size;
   // 操作ボタン群は、何か選ばれているときだけ表示する
   if (elements.selectionActions) elements.selectionActions.hidden = n === 0;
   if (elements.selectionCount) elements.selectionCount.textContent = `${n}件 選択中`;
   if (elements.selectAllCheckbox) {
-    elements.selectAllCheckbox.checked = scoped.length > 0 && scopedSelected === scoped.length;
-    elements.selectAllCheckbox.indeterminate = scopedSelected > 0 && scopedSelected < scoped.length;
+    elements.selectAllCheckbox.checked = visible.length > 0 && visibleSelected === visible.length;
+    elements.selectAllCheckbox.indeterminate = visibleSelected > 0 && visibleSelected < visible.length;
   }
 }
 
@@ -9011,10 +9049,6 @@ function renderStepPanel(id) {
   if (id === "library") {
     renderSavedWords();
     renderTrash();
-    // CEFR/品詞の穴埋め通信は「保存した単語」パネルの表示時だけ、かつDOM化済みの
-    // 行だけを対象にする（案3）。どちらも多重実行防止・解決済みスキップのガード付き。
-    backfillSavedCefr();
-    backfillSavedPos();
   }
   // import / settings は静的なフォーム中心のため、都度の再描画は不要
 }
@@ -9065,12 +9099,36 @@ function updateCefrBadge(badge, result) {
   else badge.removeAttribute("aria-label");
 }
 
+const cefrInFlight = new Map();
+const posInFlight = new Map();
+const METADATA_IDLE_BATCH_SIZE = 4;
+
+function resolveCefrOnce(term) {
+  const key = window.Cefr.key(term);
+  if (!key) return Promise.resolve(null);
+  const known = window.Cefr.peek(key);
+  if (known) return Promise.resolve(known);
+  if (cefrInFlight.has(key)) return cefrInFlight.get(key);
+  const promise = Promise.resolve(window.Cefr.resolve(key)).finally(() => cefrInFlight.delete(key));
+  cefrInFlight.set(key, promise);
+  return promise;
+}
+
+function resolvePosOnce(term) {
+  const key = String(term || "").trim().toLowerCase();
+  if (!key) return Promise.resolve(null);
+  if (posInFlight.has(key)) return posInFlight.get(key);
+  const promise = Promise.resolve(resolvePos(key)).finally(() => posInFlight.delete(key));
+  posInFlight.set(key, promise);
+  return promise;
+}
+
 async function resolveCefrBadges(container) {
   for (const badge of container.querySelectorAll("[data-cefr-term]")) {
     const term = badge.dataset.cefrTerm;
     if (!term || window.Cefr.peek(term)) continue;
-    const result = await window.Cefr.resolve(term);
-    if (result) updateCefrBadge(badge, result);
+    const result = await resolveCefrOnce(term);
+    if (result && badge.isConnected) updateCefrBadge(badge, result);
   }
 }
 
@@ -9078,6 +9136,28 @@ async function resolveCefrBadges(container) {
 // running, which previously fired duplicate network requests on every render.
 let cefrBackfillRunning = false;
 let posBackfillRunning = false;
+
+function invalidateLibraryMetadataWork() {
+  libraryMetadataGeneration += 1;
+}
+
+function libraryMetadataWorkIsCurrent(generation) {
+  return activeStepId === "library" && generation === libraryMetadataGeneration;
+}
+
+function scheduleIdleTask(callback) {
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(() => callback(), { timeout: 700 });
+  } else {
+    window.setTimeout(callback, 0);
+  }
+}
+
+function scheduleLibraryMetadataBackfill() {
+  if (activeStepId !== "library") return;
+  backfillSavedCefr();
+  backfillSavedPos();
+}
 
 // 案3: 「保存した単語」で現在DOM化されている行の単語だけを返す。
 // ページングでまだ表示していない単語には通信せず、「さらに表示」で出たときに取得する。
@@ -9090,34 +9170,58 @@ function savedWordsInDom() {
   return appState.words.filter((word) => ids.has(word.id));
 }
 
-async function backfillSavedCefr() {
-  if (cefrBackfillRunning) return;
+function backfillSavedCefr() {
+  if (cefrBackfillRunning || activeStepId !== "library") return;
   cefrBackfillRunning = true;
+  const generation = libraryMetadataGeneration;
+  const attempted = new Set();
   let changed = false;
-  try {
-    // 実行中に「さらに表示」で行が増えても取りこぼさないよう、
-    // 処理済みIDを覚えつつDOM化済みの単語を回す（未解決のまま残る語で無限ループしない）。
-    const attempted = new Set();
-    let queue = savedWordsInDom();
-    while (queue.length > 0) {
-      for (const word of queue) {
-        attempted.add(word.id);
-        if (word.cefr && (word.cefr.level || word.cefr.estimated)) continue;
-        const result = await window.Cefr.resolve(word.term);
-        if (!result) continue;
-        word.cefr = { level: result.level, estimated: result.estimated };
-        changed = true;
-        const badge = elements.savedList.querySelector(
-          `[data-word-id="${word.id}"] [data-cefr-term]`,
-        );
-        if (badge) updateCefrBadge(badge, result);
-      }
-      queue = savedWordsInDom().filter((word) => !attempted.has(word.id));
-    }
-  } finally {
+
+  const finish = () => {
     cefrBackfillRunning = false;
-  }
-  if (changed) persistAppState();
+    if (changed) persistAppState();
+    if (activeStepId === "library" && generation !== libraryMetadataGeneration) {
+      backfillSavedCefr();
+    }
+  };
+
+  const runBatch = async () => {
+    if (!libraryMetadataWorkIsCurrent(generation)) {
+      finish();
+      return;
+    }
+    const batch = savedWordsInDom()
+      .filter(
+        (word) =>
+          !attempted.has(word.id) &&
+          !(word.cefr && (word.cefr.level || word.cefr.estimated)),
+      )
+      .slice(0, METADATA_IDLE_BATCH_SIZE);
+    if (batch.length === 0) {
+      finish();
+      return;
+    }
+    batch.forEach((word) => attempted.add(word.id));
+    const resolved = await Promise.all(
+      batch.map(async (word) => ({ word, result: await resolveCefrOnce(word.term) })),
+    );
+    if (!libraryMetadataWorkIsCurrent(generation)) {
+      finish();
+      return;
+    }
+    for (const { word, result } of resolved) {
+      if (!result) continue;
+      word.cefr = { level: result.level, estimated: result.estimated };
+      changed = true;
+      const badge = elements.savedList.querySelector(
+        `[data-word-id="${word.id}"] [data-cefr-term]`,
+      );
+      if (badge) updateCefrBadge(badge, result);
+    }
+    scheduleIdleTask(runBatch);
+  };
+
+  scheduleIdleTask(runBatch);
 }
 
 function posBadgeMarkup(word) {
@@ -9125,31 +9229,52 @@ function posBadgeMarkup(word) {
   return `<span class="pos-badge" data-pos-word="${word.id}">${label}</span>`;
 }
 
-async function backfillSavedPos() {
-  if (posBackfillRunning) return;
+function backfillSavedPos() {
+  if (posBackfillRunning || activeStepId !== "library") return;
   posBackfillRunning = true;
+  const generation = libraryMetadataGeneration;
+  const attempted = new Set();
   let changed = false;
-  try {
-    // 案3: CEFRと同じく、DOM化済みの単語だけ品詞を取得する（増えた分は後追いで拾う）
-    const attempted = new Set();
-    let queue = savedWordsInDom();
-    while (queue.length > 0) {
-      for (const word of queue) {
-        attempted.add(word.id);
-        if (word.pos) continue;
-        const result = await resolvePos(word.term);
-        if (!result) continue;
-        word.pos = { tag: result.tag };
-        changed = true;
-        const badge = elements.savedList.querySelector(`.pos-badge[data-pos-word="${word.id}"]`);
-        if (badge) badge.textContent = posLabel(result.tag);
-      }
-      queue = savedWordsInDom().filter((word) => !attempted.has(word.id));
-    }
-  } finally {
+
+  const finish = () => {
     posBackfillRunning = false;
-  }
-  if (changed) persistAppState();
+    if (changed) persistAppState();
+    if (activeStepId === "library" && generation !== libraryMetadataGeneration) {
+      backfillSavedPos();
+    }
+  };
+
+  const runBatch = async () => {
+    if (!libraryMetadataWorkIsCurrent(generation)) {
+      finish();
+      return;
+    }
+    const batch = savedWordsInDom()
+      .filter((word) => !attempted.has(word.id) && !word.pos)
+      .slice(0, METADATA_IDLE_BATCH_SIZE);
+    if (batch.length === 0) {
+      finish();
+      return;
+    }
+    batch.forEach((word) => attempted.add(word.id));
+    const resolved = await Promise.all(
+      batch.map(async (word) => ({ word, result: await resolvePosOnce(word.term) })),
+    );
+    if (!libraryMetadataWorkIsCurrent(generation)) {
+      finish();
+      return;
+    }
+    for (const { word, result } of resolved) {
+      if (!result) continue;
+      word.pos = { tag: result.tag };
+      changed = true;
+      const badge = elements.savedList.querySelector(`.pos-badge[data-pos-word="${word.id}"]`);
+      if (badge) badge.textContent = posLabel(result.tag);
+    }
+    scheduleIdleTask(runBatch);
+  };
+
+  scheduleIdleTask(runBatch);
 }
 
 function speakWord(term) {
@@ -9698,7 +9823,9 @@ elements.parseButton.addEventListener("click", () => {
     (elements.saveDeckSelect && elements.saveDeckSelect.value) || appState.decks[0]?.id;
   const result = parseVocabulary(elements.ocrText.value, targetDeckId);
   candidates = result.candidates;
-  renderCandidates();
+  // 候補タブを dirty にして、タブ切替時に一度だけ描画する。
+  // 先に描画してから setActiveStep() でも描画すると、大量入力時に二重構築になる。
+  dirtyPanels.add("candidates");
   setStatus(buildParseResultMessage(result));
   playSound(candidates.length > 0 ? "success" : "wrong");
   if (candidates.length > 0) setActiveStep("candidates", { sound: false });
@@ -9809,10 +9936,7 @@ elements.savedList.addEventListener("click", async (event) => {
   // 案2: 「さらに表示」で次のページ分をDOM化し、増えた行のCEFR/品詞もそのとき取得する（案3）
   const moreButton = event.target.closest("[data-show-more-saved]");
   if (moreButton) {
-    savedListVisibleCount += SAVED_LIST_PAGE_SIZE;
-    renderSavedWords();
-    backfillSavedCefr();
-    backfillSavedPos();
+    appendNextSavedWordsPage();
     return;
   }
 
@@ -10271,6 +10395,7 @@ elements.hiAccToggle.addEventListener("change", () => {
 // 2) keep the client id in IndexedDB so a wiped localStorage can be recovered
 // 3) if the IndexedDB copy is newer than what we loaded, restore it
 async function recoverPersisted() {
+  const stateBeforeRecovery = stateSignature(appState);
   try {
     if (navigator.storage && navigator.storage.persist) {
       await navigator.storage.persist();
@@ -10316,7 +10441,9 @@ async function recoverPersisted() {
   }
 
   persistAppState();
-  renderAll();
+  // 起動直後にはすでに一度描画済み。IDBから実際に別の状態を復元した場合だけ
+  // 再描画し、通常起動時の同一DOM二重構築を避ける。
+  if (stateSignature(appState) !== stateBeforeRecovery) renderAll();
 }
 
 // 学習・努力にまつわる偉人の名言（4時間ごとにランダムで切り替える）
