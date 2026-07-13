@@ -5027,6 +5027,18 @@ const SYNC_ID_KEY = "wordsnap-sync-id:v1";
 const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
 
+// ===== 取り込み上限（JSON・画像の上限はここに集約する） =====
+// 正常な使用（数千語＝数百KB・スマホ写真の数MB〜十数MB）は余裕で収まる緩めの値にし、
+// 誤って巨大ファイルを選んだときのフリーズ・ストレージ溢れだけを防ぐ。
+const IMPORT_MAX_FILE_BYTES = 8 * 1024 * 1024; // JSON読み込み: 8MB
+const IMPORT_MAX_WORDS = 50000; // JSON読み込み: 5万語
+const OCR_MAX_FILE_BYTES = 40 * 1024 * 1024; // 画像取り込み(OCR/AI): 40MB
+const OCR_MAX_PIXELS = 80 * 1000 * 1000; // 画像取り込み(OCR/AI): 8,000万画素
+// エラーメッセージ中の上限表記は定数から作る（値を変えたら文言も自動で揃う）
+const IMPORT_MAX_FILE_LABEL = `${IMPORT_MAX_FILE_BYTES / (1024 * 1024)}MB`;
+const OCR_MAX_FILE_LABEL = `${OCR_MAX_FILE_BYTES / (1024 * 1024)}MB`;
+const OCR_MAX_PIXELS_LABEL = `${(OCR_MAX_PIXELS / 10000).toLocaleString("ja-JP")}万画素`;
+
 // ===== 描画の軽量化 =====
 // 案1: 現在表示中のパネルID（data-step-panel）。setActiveStep() が必ず更新する。
 let activeStepId = "import";
@@ -5372,6 +5384,8 @@ function scheduleAutoNextIfNeeded() {
   clearAutoNextTimer();
   if (!autoNextEnabled() || !elements.nextQuizButton || elements.nextQuizButton.hidden) return;
   autoNextTimer = window.setTimeout(() => {
+    // クイズタブを離れていたら何もしない（見えないまま裏で問題が進むのを防ぐ保険）
+    if (activeStepId !== "quiz") return;
     if (!elements.nextQuizButton.hidden) elements.nextQuizButton.click();
   }, autoNextDelay());
 }
@@ -5387,6 +5401,10 @@ function setActiveStep(id, options = {}) {
   const previousId = elements.stepTabs.find((tab) => tab.classList.contains("active"))?.dataset.stepTab;
   if (activeStepId === "library" && nextId !== "library") {
     invalidateLibraryMetadataWork();
+  }
+  // クイズタブを離れたら「自動で次へ進む」タイマーを止める（裏で問題が進むのを防ぐ）
+  if (activeStepId === "quiz" && nextId !== "quiz") {
+    clearAutoNextTimer();
   }
   for (const tab of elements.stepTabs) {
     const active = tab.dataset.stepTab === nextId;
@@ -5548,6 +5566,16 @@ const syncState = {
   busy: false,
   errored: false,
   lastSyncedAt: 0,
+  // 【送信キュー】ローカル変更の世代番号。保存（scheduleSyncPush）のたびに進める。
+  // PUT送信中に進んだ世代＝そのPUTに乗らなかった変更は、送信完了後に必ず送り直す。
+  dirtyGen: 0,
+  // PUT送信中に届いた送信要求の保留フラグ（1回分だけ予約し、完了後に消化する）
+  pushQueued: false,
+  // 【キー切替対策】同期リクエストの世代番号。キー切替（別リンク採用・接続先変更・
+  // 強制取得）のたびに進め、古い世代の応答は破棄する（新しいキーへの混入防止）。
+  requestGen: 0,
+  // 進行中の同期fetchのAbortController。キー切替時にまとめて中断する。
+  abortControllers: new Set(),
 };
 
 // IndexedDB mirror: a second, more durable copy so data survives even if
@@ -5758,6 +5786,20 @@ function normalizeState(state) {
     .map(normalizeWord)
     .filter((word) => word.term && word.meaning);
 
+  // 【重複ID対策】同一idが複数の単語/単語帳に付いていたら、2つ目以降へ新しいidを振り直す。
+  // idは選択・削除・出題・DOM(data属性)の参照キーなので、重複したままだと別の単語と
+  // 操作が混線する。壊れたJSONの読み込みや不正な同期データを受けたときだけ起こる稀なケース。
+  // （sanitizeIdの後段＝normalizeWord/デッキ整形のあとで行う）
+  let reassignedIds = false;
+  const usedWordIds = new Set();
+  for (const word of words) {
+    while (usedWordIds.has(word.id)) {
+      word.id = createId();
+      reassignedIds = true;
+    }
+    usedWordIds.add(word.id);
+  }
+
   let decks = Array.isArray(source.decks)
     ? source.decks
         .map((deck) => ({
@@ -5768,6 +5810,32 @@ function normalizeState(state) {
         .filter((deck) => deck.id)
     : [];
   if (decks.length === 0) decks = [{ id: createId(), name: "単語帳1", updatedAt: 0 }];
+
+  // 単語帳も同様に重複idへ新idを振る。元のidは先勝ち＝単語のdeckId参照は
+  // 最初の単語帳（idを保持した方）に付き、2つ目以降は空の単語帳として分離される。
+  const usedDeckIds = new Set();
+  for (const deck of decks) {
+    while (usedDeckIds.has(deck.id)) {
+      deck.id = createId();
+      reassignedIds = true;
+    }
+    usedDeckIds.add(deck.id);
+  }
+
+  // 再採番が起きたときは、旧idを参照している選択状態と「前回の続き」再開データを
+  // 破棄して混線を防ぐ（currentQuizはrenderQuiz側の存在確認で安全に作り直される）。
+  if (reassignedIds) {
+    try {
+      selectedIds.clear();
+    } catch {
+      // 起動直後（selectedIds初期化前）の呼び出しでは何もしない
+    }
+    try {
+      clearSavedReviewProgress();
+    } catch {
+      // ストレージ不可環境では黙って諦める
+    }
+  }
 
   const deckIds = new Set(decks.map((deck) => deck.id));
   const fallbackDeckId = decks[0].id;
@@ -5940,15 +6008,57 @@ function syncHeaders() {
   return headers;
 }
 
+// キー切替で無効になった同期応答を表す番兵エラー。呼び出し側はエラー表示せず静かに無視する。
+function staleSyncError() {
+  const error = new Error("同期リクエストがキー切替で破棄されました。");
+  error.staleSync = true;
+  return error;
+}
+
+function isStaleSyncError(error) {
+  return Boolean(error && error.staleSync);
+}
+
+// キー切替（別リンク採用・接続先変更・強制取得）時に呼ぶ：
+// リクエスト世代を進め、進行中の同期fetchをすべて中断する。中断された/世代の古い
+// 応答は syncRequest が staleSyncError にして返すため、マージ・push・UI反映されない。
+function bumpSyncRequestGen() {
+  syncState.requestGen += 1;
+  for (const controller of syncState.abortControllers) {
+    try {
+      controller.abort();
+    } catch {
+      // 中断失敗は無視（応答が返っても世代チェックで破棄される）
+    }
+  }
+  syncState.abortControllers.clear();
+}
+
 async function syncRequest(method, body = null) {
+  // 送信時の世代を覚え、応答受信時に世代が変わっていたら結果を破棄する
+  const gen = syncState.requestGen;
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  if (controller) syncState.abortControllers.add(controller);
   const options = {
     method,
     cache: "no-store",
     headers: syncHeaders(),
   };
+  if (controller) options.signal = controller.signal;
   if (body) options.body = JSON.stringify(body);
-  const response = await fetch(syncEndpoint(), options);
-  const data = await response.json().catch(() => ({}));
+  let response;
+  let data;
+  try {
+    response = await fetch(syncEndpoint(), options);
+    data = await response.json().catch(() => ({}));
+  } catch (error) {
+    // abort例外（キー切替による中断）は番兵エラーに変換して静かに破棄させる
+    if (gen !== syncState.requestGen) throw staleSyncError();
+    throw error;
+  } finally {
+    if (controller) syncState.abortControllers.delete(controller);
+  }
+  if (gen !== syncState.requestGen) throw staleSyncError();
   if (!response.ok) {
     const error = new Error(data.error || "同期サーバーへ接続できませんでした。");
     error.status = response.status;
@@ -6275,6 +6385,9 @@ async function connectWordsnapSync(options = {}) {
     return;
   }
   elements.syncIdInput.value = id;
+  // 入力欄からの接続で個人キーが変わる場合はキー切替として扱い、進行中の
+  // 旧キーのリクエストを中断・破棄する（同じキーへの再接続では中断しない）。
+  if (syncState.id !== id) bumpSyncRequestGen();
   syncState.id = id;
   localStorage.setItem(SYNC_ID_KEY, id);
 
@@ -6302,6 +6415,7 @@ async function connectWordsnapSync(options = {}) {
       setSyncStatus("✓ サーバーに保存済み（このリンクをホーム画面に追加すると、機種変更してもデータが残ります）", "live");
     }
   } catch (error) {
+    if (isStaleSyncError(error)) return; // キー切替で破棄された応答は無視（finallyでbusyのみ解除）
     syncState.connected = false;
     setSyncStatus(error.message || "同期できませんでした。", "error");
   } finally {
@@ -6317,7 +6431,17 @@ function startSyncPolling() {
 }
 
 function scheduleSyncPush() {
-  if (!syncState.connected || syncState.applyingRemote || !syncState.id) return;
+  // リモート反映中の保存は再送信しない（従来どおり）。世代も進めない。
+  if (syncState.applyingRemote) return;
+  // 【送信キュー】ここまでのローカル変更を「未送信世代」として記録する。
+  // PUT送信中に進んだ世代は、送信完了後に pushWordsnapState 側が送り直す。
+  syncState.dirtyGen += 1;
+  if (!syncState.connected || !syncState.id) return;
+  if (syncState.pushing) {
+    // 送信中は保留フラグを1回分だけ立て、完了後に必ず消化する（単一送信キュー）
+    syncState.pushQueued = true;
+    return;
+  }
   window.clearTimeout(syncState.pushTimer);
   syncState.pushTimer = window.setTimeout(() => {
     pushWordsnapState();
@@ -6327,8 +6451,17 @@ function scheduleSyncPush() {
 async function pushWordsnapState(options = {}) {
   if (!syncState.id || !syncServerAvailable()) return;
   if (!syncState.connected && !options.force) return;
-  if (syncState.pushing) return;
+  if (syncState.pushing) {
+    // 送信中の呼び出しは黙って捨てず、完了後に送り直す予約に変える
+    // （PUT中の変更が送られず「最新です」と誤表示されるのを防ぐ）
+    syncState.pushQueued = true;
+    return;
+  }
   syncState.pushing = true;
+  // この送信のボディに乗るのは現時点の世代までの変更。送信中に世代が進んだら再送する。
+  const sentGen = syncState.dirtyGen;
+  // 409再送・キー切替に処理を引き継いだら true（finally での再送予約を二重に行わない）
+  let handedOff = false;
   try {
     const result = await syncRequest("PUT", {
       baseRev: syncState.rev,
@@ -6338,17 +6471,30 @@ async function pushWordsnapState(options = {}) {
     syncState.connected = true;
     setSyncStatus("✓ サーバーに保存しました", "live");
   } catch (error) {
+    // キー切替で破棄された送信。切替処理側が以後の状態に責任を持つため、
+    // ここではエラー表示も再送もしない（古い内容を新しいキーへ送らない）。
+    if (isStaleSyncError(error)) {
+      handedOff = true;
+      return;
+    }
     if (error.status === 409 && error.data && !options.retried) {
       syncState.rev = Number(error.data.stateRev) || syncState.rev;
       // 壊れた409応答（stateなし）でも例外にせず、リビジョンだけ合わせて再送する
       if (error.data.state) applyMergedRemoteState(error.data.state);
       syncState.pushing = false;
+      handedOff = true; // 未送信分の消化は再送呼び出し側の finally に任せる
       await pushWordsnapState({ force: true, retried: true });
       return;
     }
     setSyncStatus(error.message || "同期保存に失敗しました。", "error");
   } finally {
     syncState.pushing = false;
+    // 【送信キュー】送信開始後に届いた変更（保留フラグ or 世代の進み）は必ず送り直す。
+    // 失敗時も1回だけ予約する（成功するまで無限に繰り返すことはない）。
+    if (!handedOff && (syncState.pushQueued || syncState.dirtyGen > sentGen)) {
+      syncState.pushQueued = false;
+      scheduleSyncPush();
+    }
   }
 }
 
@@ -6385,6 +6531,7 @@ async function pullWordsnapState(options = {}) {
     }
     return changed;
   } catch (error) {
+    if (isStaleSyncError(error)) return false; // キー切替で破棄された応答は無視
     syncState.connected = false;
     if (!options.silent) setSyncStatus(error.message || "読み込みに失敗しました。", "error");
     return false;
@@ -6436,6 +6583,7 @@ async function forcePushOverwrite() {
     syncState.connected = true;
     setSyncStatus("✓ この端末の内容でサーバーを更新しました。他の端末で「他の端末に合わせる」を押してください。", "live");
   } catch (error) {
+    if (isStaleSyncError(error)) return; // キー切替で破棄された応答は無視
     syncState.connected = false;
     setSyncStatus(error.message || "上書きに失敗しました。", "error");
   } finally {
@@ -6458,6 +6606,11 @@ async function forcePullReplace() {
   }
   setSyncBusy(true);
   setSyncStatus("サーバーの内容で置き換えています…");
+  // 「置き換え」はサーバー内容を正とする操作なので、進行中のGET/PUT（古い内容の
+  // マージ・送信につながる）を中断し、保留中の自動pushも破棄する。
+  bumpSyncRequestGen();
+  window.clearTimeout(syncState.pushTimer);
+  syncState.pushQueued = false;
   try {
     const remote = await syncRequest("GET");
     syncState.rev = Number(remote.stateRev) || syncState.rev;
@@ -6472,6 +6625,7 @@ async function forcePullReplace() {
     renderAll();
     setSyncStatus(`✓ サーバーの内容に置き換えました（${appState.words.length}語）。`, "live");
   } catch (error) {
+    if (isStaleSyncError(error)) return; // さらに新しいキー切替があった場合は静かに譲る
     syncState.connected = false;
     setSyncStatus(error.message || "置き換えに失敗しました。", "error");
   } finally {
@@ -6535,6 +6689,9 @@ async function adoptForeignSyncId(newId) {
   // 元のキーで動いていた自動同期（ポーリング・保留中のpush）を止めてから切り替える
   window.clearInterval(syncState.pollTimer);
   window.clearTimeout(syncState.pushTimer);
+  syncState.pushQueued = false;
+  // 進行中の旧キーへのGET/PUTを中断し、遅れて届く応答が新キーへ混ざるのを防ぐ
+  bumpSyncRequestGen();
   syncState.id = newId;
   syncState.rev = 0;
   syncState.connected = false;
@@ -6562,6 +6719,7 @@ async function adoptForeignSyncId(newId) {
     startSyncPolling();
     setSyncStatus(`✓ リンク先のデータに切り替えました（${appState.words.length}語）。`, "live");
   } catch (error) {
+    if (isStaleSyncError(error)) return; // さらに新しいキー切替があった場合は静かに譲る
     syncState.connected = false;
     setSyncStatus(error.message || "リンク先のデータを読み込めませんでした。", "error");
   } finally {
@@ -7296,14 +7454,10 @@ function syncEditorCorrectionControls() {
   if (elements.perspHValue) elements.perspHValue.textContent = formatAdjustmentValue(editorPerspH);
 }
 
-// 画像取り込み（OCR/AI）の上限。通常の写真（スマホの12〜48MP・数MB〜十数MB）は
-// 余裕で収まる緩めの値にし、極端に大きい画像でのフリーズ・クラッシュだけを防ぐ。
-const OCR_MAX_FILE_BYTES = 40 * 1024 * 1024; // 40MB
-const OCR_MAX_PIXELS = 80 * 1000 * 1000; // 8,000万画素
-
+// 画像取り込み（OCR/AI）の上限値は先頭の「取り込み上限」ブロック（OCR_MAX_*）に集約している。
 function loadEditorImage(file) {
   if (file && file.size > OCR_MAX_FILE_BYTES) {
-    setStatus("画像ファイルが大きすぎるため読み込めません（40MBまで）。縮小するか、別の画像をお試しください。");
+    setStatus(`画像ファイルが大きすぎるため読み込めません（${OCR_MAX_FILE_LABEL}まで）。縮小するか、別の画像をお試しください。`);
     return;
   }
   const url = URL.createObjectURL(file);
@@ -7311,7 +7465,7 @@ function loadEditorImage(file) {
   img.onload = () => {
     URL.revokeObjectURL(url);
     if (img.naturalWidth * img.naturalHeight > OCR_MAX_PIXELS) {
-      setStatus("画像の画素数が大きすぎるため読み込めません（8,000万画素まで）。縮小してからお試しください。");
+      setStatus(`画像の画素数が大きすぎるため読み込めません（${OCR_MAX_PIXELS_LABEL}まで）。縮小してからお試しください。`);
       return;
     }
     editorImg = img;
@@ -7901,6 +8055,13 @@ const AI_PROVIDERS = [
 
 const AI_PERSIST_KEY = "wordsnap-ai-persist";
 
+// AI抽出の応答待ち上限（無期限に待ち続けない）。超過時はAbortControllerで中断する。
+const AI_EXTRACT_TIMEOUT_MS = 60 * 1000; // 60秒
+// 処理中のみ非null。「中断」ボタン（処理中のAI抽出ボタン）とタイムアウトが共用する。
+let aiExtractAbort = null;
+// タイムアウトによる中断と、ユーザーの手動中断を区別するためのフラグ
+let aiExtractCancelled = false;
+
 function aiKeyStorageKey(id) {
   return `wordsnap-ai-key:${id}`;
 }
@@ -7941,7 +8102,8 @@ function imageDataUrl(canvas) {
 
 // Sends the (rotated/cropped) image to Google Gemini and returns clean
 // "word meaning" lines. Uses the user's own free API key (kept on this device).
-async function extractWithGemini(canvas, key) {
+// signal: タイムアウト/手動中断用のAbortSignal（省略可）
+async function extractWithGemini(canvas, key, signal) {
   const base64 = imageDataUrl(canvas).split(",")[1];
   const body = JSON.stringify({
     contents: [
@@ -7959,7 +8121,7 @@ async function extractWithGemini(canvas, key) {
   for (const model of GEMINI_MODELS) {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body },
+      { method: "POST", headers: { "Content-Type": "application/json" }, body, signal },
     );
     if (res.ok) {
       const data = await res.json();
@@ -7985,10 +8147,12 @@ async function extractWithGemini(canvas, key) {
 }
 
 // OpenAI-compatible vision request to Groq (free tier, no credit card).
-async function extractWithGroq(canvas, key) {
+// signal: タイムアウト/手動中断用のAbortSignal（省略可）
+async function extractWithGroq(canvas, key, signal) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    signal,
     body: JSON.stringify({
       model: GROQ_MODEL,
       temperature: 0,
@@ -9019,7 +9183,8 @@ function buildReviewQuiz() {
     );
     if (pool.length < 3) pool = appState.words.filter((word) => word.id !== answer.id);
     const choices = shuffle([answer, ...pickDistractors(pool, answer, 3)]);
-    elements.quizFeedback.textContent = "";
+    // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
+    elements.quizFeedback.textContent = choiceCountNote(choices);
     return { answer, choices, answered: false };
   }
   return null;
@@ -9071,7 +9236,8 @@ function buildQuiz() {
   const basePool = pool.length >= 3 ? pool : appState.words.filter((word) => word.id !== answer.id);
   const distractors = pickDistractors(basePool, answer, 3);
   const choices = shuffle([answer, ...distractors]);
-  elements.quizFeedback.textContent = "";
+  // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
+  elements.quizFeedback.textContent = choiceCountNote(choices);
   normalQuizQuestionNumber += 1; // 通常クイズ（エンドレス）の「◯問目」表示用
   return { answer, choices, answered: false };
 }
@@ -9148,6 +9314,15 @@ function normalizeMeaning(meaning) {
   return String(meaning ?? "")
     .trim()
     .toLowerCase();
+}
+
+// 4択に必要な「意味の異なる単語」が足りないとき、選択肢数の注記を返す（足りていれば空文字）。
+// 意味の重複や単語数不足で選択肢が4未満になっても出題自体は継続できるため、
+// 注記だけ出して正誤判定・キーボード操作（1〜N）は従来どおり動かす。
+function choiceCountNote(choices) {
+  return choices.length < 4
+    ? `意味の異なる単語が足りないため、この問題は${choices.length}択です。`
+    : "";
 }
 
 // Picks up to `count` distractors whose displayed meaning differs from the
@@ -9464,12 +9639,19 @@ function backfillSavedCefr() {
     }
     for (const { word, result } of resolved) {
       if (!result) continue;
-      word.cefr = { level: result.level, estimated: result.estimated };
+      // 応答待ちの間に単語が削除・置換（同期/インポート）されていないか、現在の
+      // appState から同じ単語を引き直して確認する（古い応答を別の単語へ書かない）
+      const live = appState.words.find((item) => item.id === word.id);
+      if (!live || normalizeTerm(live.term) !== normalizeTerm(word.term)) continue;
+      live.cefr = { level: result.level, estimated: result.estimated };
       changed = true;
       const badge = elements.savedList.querySelector(
-        `[data-word-id="${word.id}"] [data-cefr-term]`,
+        `[data-word-id="${live.id}"] [data-cefr-term]`,
       );
-      if (badge) updateCefrBadge(badge, result);
+      // DOM行のバッジが同じ単語のものであることも確認してから書き換える
+      if (badge && badge.dataset.cefrTerm === window.Cefr.key(live.term)) {
+        updateCefrBadge(badge, result);
+      }
     }
     scheduleIdleTask(runBatch);
   };
@@ -9519,9 +9701,12 @@ function backfillSavedPos() {
     }
     for (const { word, result } of resolved) {
       if (!result) continue;
-      word.pos = { tag: result.tag };
+      // 応答待ちの間に単語が削除・置換されていないか確認してから反映する（CEFRと同じガード）
+      const live = appState.words.find((item) => item.id === word.id);
+      if (!live || normalizeTerm(live.term) !== normalizeTerm(word.term)) continue;
+      live.pos = { tag: result.tag };
       changed = true;
-      const badge = elements.savedList.querySelector(`.pos-badge[data-pos-word="${word.id}"]`);
+      const badge = elements.savedList.querySelector(`.pos-badge[data-pos-word="${live.id}"]`);
       if (badge) badge.textContent = posLabel(result.tag);
     }
     scheduleIdleTask(runBatch);
@@ -10021,6 +10206,16 @@ function renderAiKeyFields() {
 }
 
 elements.aiOcrButton.addEventListener("click", async () => {
+  // 処理中にもう一度押した場合は「中断」として扱う（進捗表示の近くにある同じボタンが導線）
+  if (aiExtractAbort) {
+    aiExtractCancelled = true;
+    try {
+      aiExtractAbort.abort();
+    } catch {
+      // 中断に失敗しても致命的ではない（タイムアウトで自然に終わる）
+    }
+    return;
+  }
   if (!editorImg) {
     setStatus("先に「写真を選ぶ」で画像を読み込んでください。");
     return;
@@ -10033,32 +10228,56 @@ elements.aiOcrButton.addEventListener("click", async () => {
     return;
   }
 
-  elements.aiOcrButton.disabled = true;
+  // 処理中はボタンを「中断」に切り替える（元のアイコン付きラベルは終了時に戻す）
+  const originalLabel = elements.aiOcrButton.innerHTML;
+  elements.aiOcrButton.textContent = "⏹ 読み取りを中断";
+  aiExtractCancelled = false;
   try {
     const canvas = getEditedCanvas();
     const errors = [];
     let result = null;
     for (const provider of configured) {
+      // プロバイダごとに上限時間つきのAbortControllerを用意する（無期限待機の防止）
+      const controller = typeof AbortController === "function" ? new AbortController() : null;
+      const timeoutTimer = controller
+        ? window.setTimeout(() => controller.abort(), AI_EXTRACT_TIMEOUT_MS)
+        : 0;
+      aiExtractAbort = controller;
       try {
-        setStatus(`${provider.name} で読み取っています…`);
-        const text = await provider.extract(canvas, getAiKey(provider.id));
+        setStatus(`${provider.name} で読み取っています…（上のボタンで中断できます）`);
+        const text = await provider.extract(
+          canvas,
+          getAiKey(provider.id),
+          controller ? controller.signal : undefined,
+        );
         if (text) {
           result = { text, name: provider.name };
           break;
         }
         errors.push(`${provider.name}: 空の結果`);
       } catch (error) {
-        errors.push(`${provider.name}: ${error.message}`);
+        if (error && error.name === "AbortError") {
+          if (aiExtractCancelled) break; // 手動中断：他のプロバイダも試さず終了
+          errors.push(`${provider.name}: ${AI_EXTRACT_TIMEOUT_MS / 1000}秒以内に応答がなかったため中断しました`);
+        } else {
+          errors.push(`${provider.name}: ${error.message}`);
+        }
+      } finally {
+        window.clearTimeout(timeoutTimer);
+        aiExtractAbort = null;
       }
     }
     if (result) {
       elements.ocrText.value = result.text;
       setStatus(`${result.name} が抽出しました。内容を確認して「単語リストに変換」を押してください。`);
+    } else if (aiExtractCancelled) {
+      setStatus("AI抽出を中断しました。");
     } else {
       setStatus(`AI抽出に失敗しました：${errors.join(" / ")}`);
     }
   } finally {
-    elements.aiOcrButton.disabled = false;
+    aiExtractAbort = null;
+    elements.aiOcrButton.innerHTML = originalLabel;
   }
 });
 
@@ -10217,6 +10436,11 @@ elements.savedList.addEventListener("click", async (event) => {
 
   const deleteButton = event.target.closest("[data-delete-word]");
   if (deleteButton) {
+    // 誤タップ削除を防ぐため、一括削除と同じ2段階確認にする（もう一度押すと確定）
+    if (!armDangerButton(deleteButton, "もう一度押すと削除")) {
+      setStatus("もう一度「削除」を押すと確定します（削除後も30日間は「削除済み」から戻せます）。");
+      return;
+    }
     const id = deleteButton.dataset.deleteWord;
     const word = appState.words.find((item) => item.id === id);
     const snapshot = snapshotState();
@@ -10508,10 +10732,7 @@ elements.exportButton.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
-// JSON読み込みの上限。正常な使用（数千語＝数百KB程度）は余裕で収まる緩めの値にし、
-// 誤って巨大ファイルを選んだときのフリーズ・ストレージ溢れを防ぐ。
-const IMPORT_MAX_FILE_BYTES = 8 * 1024 * 1024; // 8MB
-const IMPORT_MAX_WORDS = 50000; // 5万語
+// JSON読み込みの上限値は先頭の「取り込み上限」ブロック（IMPORT_MAX_*）に集約している。
 
 // window.confirm はiOSのホーム画面起動で固まるため、ファイル選択→確認バーで確定の2段階にする。
 // 選んだ内容は確定までここに保持する。
@@ -10529,7 +10750,7 @@ elements.importJsonInput.addEventListener("change", async () => {
   try {
     if (file.size > IMPORT_MAX_FILE_BYTES) {
       hideImportConfirmBar();
-      setStatus("JSONファイルが大きすぎるため読み込めません（8MBまで）。書き出したデータを選んでください。");
+      setStatus(`JSONファイルが大きすぎるため読み込めません（${IMPORT_MAX_FILE_LABEL}まで）。書き出したデータを選んでください。`);
       return;
     }
     const imported = JSON.parse(await file.text());
@@ -10681,6 +10902,15 @@ if (document.querySelector('link[rel="stylesheet"]')) {
 
 // 他人に渡すための「共有用リンク」（個人キー ?w= を含まないURL）をワンタップで共有/コピー
 function shareTool() {
+  // file:// で直接開いている場合、location由来のURLはこの端末のファイルパスで
+  // あり、他人には開けない。無意味なリンクを共有せず案内だけ出す。
+  if (location.protocol === "file:") {
+    setSyncStatus(
+      "このファイルを直接開いているため共有リンクを作れません。サーバー版（https のリンク）から開いて共有してください。",
+      "error",
+    );
+    return;
+  }
   const url = location.origin + location.pathname;
   if (navigator.share) {
     navigator
