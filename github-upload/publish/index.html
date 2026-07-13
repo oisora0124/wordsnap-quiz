@@ -417,6 +417,44 @@ h2 {
   background: var(--muted);
 }
 
+/* ---------- 別の共有リンクを開いたときの確認バナー ---------- */
+/* 自分の保存済みキーと異なる ?w= を開いたときだけ表示。window.confirm は
+   iOSのホーム画面起動（standalone）で固まるため、非ブロッキングのバナーで確認する */
+.sync-switch-banner {
+  margin: 0 0 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  border-radius: var(--r-md);
+  background: var(--accent-3-soft);
+  box-shadow: var(--shadow-sm);
+}
+
+.sync-switch-text {
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.sync-switch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* ---------- JSON読み込みの確認バー（window.confirmの代替） ---------- */
+.import-confirm {
+  align-items: center;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  border-radius: var(--r-md);
+  background: var(--accent-3-soft);
+}
+
+.import-confirm span {
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
 /* ---------- 連続学習日数（🔥ストリーク）ピル ---------- */
 /* hero-controls の1行に収める前提。iPhone幅でも折り返さないよう横幅は最小限にする */
 .streak-badge {
@@ -2257,11 +2295,20 @@ textarea:focus-visible {
 
 .range-select {
   display: inline-flex;
+  flex-wrap: wrap; /* 320px級の狭い画面では要素単位で折り返す（文字単位で潰さない） */
   align-items: center;
   gap: 0.4rem;
   color: var(--muted);
   font-size: 0.82rem;
   font-weight: 650;
+}
+
+/* ラベル・ボタンは1語のまとまりとして扱い、幅不足でもCJKが1文字ずつ縦に潰れないようにする */
+.range-select .range-select-label,
+.range-select .range-select-dash,
+.range-select button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .range-select input[type="number"] {
@@ -3169,6 +3216,12 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
+/* 範囲の「番号」がライブラリの絞り込み後の番号と基準が違うことの注記（1行で折り返す） */
+.quiz-range-note {
+  flex-basis: 100%;
+  font-size: 0.74rem;
+}
+
 .quiz-card {
   position: relative;
   overflow: hidden;
@@ -3746,6 +3799,19 @@ textarea:focus-visible {
         </div>
       </section>
 
+      <!-- 【他人の共有リンク対策】URLの ?w= がこの端末の保存済みキーと異なるときだけ表示。
+           確認するまでリンク先へは何も送信しない（詳細は showSyncSwitchConfirm）。 -->
+      <div id="syncSwitchBanner" class="sync-switch-banner" role="alertdialog" aria-live="polite" hidden>
+        <p class="sync-switch-text">
+          <strong>別の共有リンクを開いています。</strong>このリンクのデータに切り替えますか？<br />
+          切り替えるまで、この端末の現在の単語がこのリンク先へ送信されることはありません。
+        </p>
+        <div class="sync-switch-actions">
+          <button id="syncSwitchAdoptButton" class="secondary danger" type="button">このリンクのデータに切り替える</button>
+          <button id="syncSwitchKeepButton" class="ghost" type="button">元のデータのまま使う</button>
+        </div>
+      </div>
+
       <nav class="step-tabs" aria-label="学習ステップ" role="tablist">
         <button
           id="tab-import"
@@ -3840,7 +3906,7 @@ textarea:focus-visible {
             <p class="eyebrow">Step 1</p>
             <h2 id="importTitle">単語を取り込む</h2>
           </div>
-          <button id="clearAllButton" class="ghost danger" type="button">全データ削除</button>
+          <!-- 「全データ削除」は誤タップ防止のため、設定タブの「危険な操作」へ移動した -->
         </div>
 
         <label class="field">
@@ -4002,7 +4068,7 @@ accurate 正確な"
               <input id="quizShuffle" type="checkbox" checked />
               シャッフル
             </label>
-            <button id="quizRangeStartButton" type="button">この設定で出題</button>
+            <button id="quizRangeStartButton" type="button" title="上で選んだ単語帳・範囲の単語を1周だけ出題します（習得済みも含む）">この設定で出題</button>
             <span id="quizDeckCount" class="quiz-setup-count"></span>
           </div>
           <div id="quizRangeRow" class="quiz-range-row" hidden>
@@ -4011,7 +4077,13 @@ accurate 正確な"
             <span aria-hidden="true">〜</span>
             <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
             <span class="quiz-range-hint">空欄なら全部</span>
+            <span class="quiz-range-hint quiz-range-note">※番号は単語帳の追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
           </div>
+          <!-- 2つの開始ボタンの違いが分かりにくいという指摘への補足（文言のみ・挙動は不変） -->
+          <p class="settings-desc quiz-setup-hint">
+            「この設定で出題」＝上の単語帳・範囲を<strong>1周だけ</strong>出題（習得済みも含む）。
+            「クイズを始める（おまかせ）」＝覚えていない単語を自動で選んで<strong>エンドレス</strong>に出題。
+          </p>
         </div>
 
         <div id="quizCard" class="quiz-card">
@@ -4023,7 +4095,7 @@ accurate 正確な"
         </div>
 
         <div class="actions">
-          <button id="startQuizButton" type="button">クイズを始める</button>
+          <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
           <button id="generalReviewButton" class="secondary" type="button">総復習</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
@@ -4054,6 +4126,13 @@ accurate 正確な"
               <input id="importJsonInput" type="file" accept="application/json" />
             </label>
           </div>
+        </div>
+        <!-- JSON読み込みの置き換え確認。window.confirm はiOSのホーム画面起動で
+             固まるため、ファイル選択→このバーで確定、の2段階にする。 -->
+        <div id="importConfirmBar" class="actions import-confirm" hidden>
+          <span id="importConfirmText"></span>
+          <button id="importConfirmButton" class="secondary danger" type="button">置き換える</button>
+          <button id="importCancelButton" class="ghost" type="button">キャンセル</button>
         </div>
         <div id="deckBar" class="deck-bar"></div>
         <div id="deckStats" class="deck-stats" hidden></div>
@@ -4160,11 +4239,19 @@ accurate 正確な"
           <details class="settings-section">
             <summary>🔄 データの保存・引き継ぎ</summary>
             <div class="settings-section-body" aria-labelledby="syncTitle">
-              <p id="syncTitle">追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。新しい個人キーはブラウザの安全な乱数機能で自動発行されます。</p>
-              <ol class="sync-steps">
-                <li><strong>ホーム画面に追加して使う</strong>：このページを「ホーム画面に追加」し、そのアイコンから開いてください。ブラウザの保存が消えても、開き直せばサーバーから自動で元に戻ります。</li>
-                <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。</li>
-              </ol>
+              <!-- 要点を先に2行で示し、長い説明は「詳しい説明」に畳む（文言整理のみ・機能は不変） -->
+              <p id="syncTitle">
+                <strong>単語と成績は自動でサーバー保存されます。</strong><br />
+                別の端末では「個人リンク」を開くと引き継げます。
+              </p>
+              <details class="sync-detail-more">
+                <summary>詳しい説明</summary>
+                <p>追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。新しい個人キーはブラウザの安全な乱数機能で自動発行されます。</p>
+                <ol class="sync-steps">
+                  <li><strong>ホーム画面に追加して使う</strong>：このページを「ホーム画面に追加」し、そのアイコンから開いてください。ブラウザの保存が消えても、開き直せばサーバーから自動で元に戻ります。</li>
+                  <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。</li>
+                </ol>
+              </details>
               <div class="sync-controls">
                 <label class="sync-field">
                   あなたの個人キー
@@ -4214,7 +4301,7 @@ accurate 正確な"
               <ul class="usage-steps">
                 <li>単語と成績は、このアプリ専用のサーバー領域に<strong>あなたの個人キー</strong>と紐づけて保存されます。他の人のデータとは分離されており、キーを知らない人には見えません。</li>
                 <li>逆に、<strong>個人キー（＝個人リンク）を知っている人はデータを読み書きできます</strong>。「個人リンクをコピー」で得られるリンクにはこのキーが含まれるため、他人に教えたり公開の場に貼ったりしないでください。</li>
-                <li>全データを消すには「全データ削除」（Step 1の右上）を実行してください。<strong>サーバー側の保存分もあわせて消去（空の状態に置き換え）</strong>されます。ただし削除した単語は30日間「削除済み」として復元用に保存され（この分もサーバーに一時的に残ります）、30日を過ぎると自動的に消えます。</li>
+                <li>全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて消去（空の状態に置き換え）</strong>されます。ただし削除した単語は30日間「削除済み」として復元用に保存され（この分もサーバーに一時的に残ります）、30日を過ぎると自動的に消えます。</li>
                 <li>万一、個人キーが他人に知られてしまったら：①「JSONを書き出す」で単語データを保存 → ②この端末のブラウザデータ（サイトデータ）を消してから、個人キーの付いていない新しいリンクで開き直す（新しい個人キーが自動発行されます）→ ③「JSONを読み込む」で単語を戻す、の順で新しいキーに引っ越せます。</li>
               </ul>
             </div>
@@ -4288,6 +4375,19 @@ accurate 正確な"
                 <input id="autoSpeakToggle" type="checkbox" />
                 <span>出題時に発音を自動再生する</span>
               </label>
+            </div>
+          </details>
+
+          <!-- 「全データ削除」は取り込み画面の主導線近くにあると誤タップしやすいため、ここへ移動した -->
+          <details class="settings-section">
+            <summary>⚠️ 危険な操作</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">
+                保存した単語・成績・単語帳をすべて削除します（サーバー保存分も空の状態になります）。
+                削除した単語は30日間「削除済み」から戻せます。ボタンを2回押すと実行されます。
+              </p>
+              <button id="clearAllButton" class="ghost danger" type="button">全データ削除</button>
+              <p id="clearAllStatus" class="settings-desc" role="status"></p>
             </div>
           </details>
         </div>
@@ -4870,8 +4970,17 @@ const elements = {
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   exportButton: document.querySelector("#exportButton"),
   importJsonInput: document.querySelector("#importJsonInput"),
+  importConfirmBar: document.querySelector("#importConfirmBar"),
+  importConfirmText: document.querySelector("#importConfirmText"),
+  importConfirmButton: document.querySelector("#importConfirmButton"),
+  importCancelButton: document.querySelector("#importCancelButton"),
+  bulkActionsToggle: document.querySelector("#bulkActionsToggle"),
   undoButton: document.querySelector("#undoButton"),
   clearAllButton: document.querySelector("#clearAllButton"),
+  clearAllStatus: document.querySelector("#clearAllStatus"),
+  syncSwitchBanner: document.querySelector("#syncSwitchBanner"),
+  syncSwitchAdoptButton: document.querySelector("#syncSwitchAdoptButton"),
+  syncSwitchKeepButton: document.querySelector("#syncSwitchKeepButton"),
   syncIdInput: document.querySelector("#syncIdInput"),
   syncKeyToggleButton: document.querySelector("#syncKeyToggleButton"),
   syncConnectButton: document.querySelector("#syncConnectButton"),
@@ -6179,6 +6288,9 @@ async function connectWordsnapSync(options = {}) {
   setSyncStatus("同期サーバーへ接続しています…");
   try {
     const remote = await syncRequest("GET");
+    // 接続中に個人キーが切り替わったら（他人リンクへの切り替え等）、古いキーの
+    // 内容を新しいキーへマージ・送信してしまわないよう、ここで中断する。
+    if (syncState.id !== id) return;
     syncState.rev = Number(remote.stateRev) || 0;
     syncState.connected = true;
     let changed = false;
@@ -6254,7 +6366,11 @@ async function pullWordsnapState(options = {}) {
   syncState.pulling = true;
   if (!options.silent) setSyncStatus("サーバーから読み込んでいます…");
   try {
+    // 取得中に個人キーが切り替わったら（他人リンクへの切り替え等）、古いキーの
+    // 内容を新しいキーへマージ・送信してしまわないよう、結果を破棄する。
+    const requestedId = syncState.id;
     const remote = await syncRequest("GET");
+    if (requestedId !== syncState.id) return false;
     const remoteRev = Number(remote.stateRev) || 0;
     const changed = remote.state && (remoteRev > syncState.rev || !options.silent)
       ? applyMergedRemoteState(remote.state)
@@ -6392,6 +6508,67 @@ function rememberSyncIdInUrl(id) {
   }
 }
 
+// 【他人の共有リンク対策】URLの ?w= が保存済みキーと異なるときに出す確認バナー。
+// window.confirm はiOSのホーム画面起動で固まるため、非ブロッキングのバナーで確認する。
+// 確認するまでは元のキーのまま同期し、リンク先のキーへは一切送信しない。
+function showSyncSwitchConfirm(foreignId, ownId) {
+  const banner = elements.syncSwitchBanner;
+  if (!banner) return;
+  banner.hidden = false;
+  elements.syncSwitchAdoptButton?.addEventListener("click", () => {
+    // ローカル表示をリンク先の内容で置き換える破壊的操作なので、2段階タップで確定する
+    if (!armDangerButton(elements.syncSwitchAdoptButton, "もう一度押すと切り替え")) return;
+    banner.hidden = true;
+    adoptForeignSyncId(foreignId);
+  });
+  elements.syncSwitchKeepButton?.addEventListener("click", () => {
+    banner.hidden = true;
+    rememberSyncIdInUrl(ownId); // URLを自分のキーに戻す
+    setSyncStatus("元のデータのまま使います（開いたリンクへは何も送信していません）。");
+  });
+}
+
+// ユーザーが「切り替える」を選んだ後の処理：リンク先のデータを取得し、
+// forcePullReplace と同じ「置き換え」で表示する。マージ・pushはしない＝
+// この端末の単語がリンク先のサーバー領域へ送られることはない。
+async function adoptForeignSyncId(newId) {
+  // 元のキーで動いていた自動同期（ポーリング・保留中のpush）を止めてから切り替える
+  window.clearInterval(syncState.pollTimer);
+  window.clearTimeout(syncState.pushTimer);
+  syncState.id = newId;
+  syncState.rev = 0;
+  syncState.connected = false;
+  localStorage.setItem(SYNC_ID_KEY, newId);
+  if (elements.syncIdInput) elements.syncIdInput.value = newId;
+  rememberSyncIdInUrl(newId);
+  if (!syncServerAvailable()) {
+    setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
+    return;
+  }
+  setSyncBusy(true);
+  setSyncStatus("リンク先のデータを読み込んでいます…");
+  try {
+    const remote = await syncRequest("GET");
+    syncState.rev = Number(remote.stateRev) || 0;
+    syncState.connected = true;
+    // applyingRemote 中の persist は再pushしない（リンク先の内容をそのまま採用するため）
+    syncState.applyingRemote = true;
+    appState = normalizeState(remote.state || defaultState());
+    currentQuiz = null;
+    selectedIds.clear();
+    persistAppState();
+    syncState.applyingRemote = false;
+    renderAll();
+    startSyncPolling();
+    setSyncStatus(`✓ リンク先のデータに切り替えました（${appState.words.length}語）。`, "live");
+  } catch (error) {
+    syncState.connected = false;
+    setSyncStatus(error.message || "リンク先のデータを読み込めませんでした。", "error");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
 function initWordsnapSync() {
   if (!elements.syncIdInput) return;
   let keyGenerationFailed = false;
@@ -6401,8 +6578,15 @@ function initWordsnapSync() {
   syncState.accessKey = keyFromUrl || String(localStorage.getItem(SYNC_ACCESS_KEY) || "").trim();
 
   const idFromUrl = cleanSyncId(params.get("w") || params.get("wordsnap") || params.get("syncId"));
-  if (idFromUrl) localStorage.setItem(SYNC_ID_KEY, idFromUrl);
-  syncState.id = idFromUrl || cleanSyncId(localStorage.getItem(SYNC_ID_KEY));
+  // 【他人の共有リンク対策】URLのキーが、この端末が最後に使っていた保存済みキーと
+  // 異なる場合は、自動でのマージ・送信を行わず、切り替えるかどうかを本人に確認する。
+  // これを怠ると、他人のリンクを開いただけで自分の単語が相手のサーバー領域へ混入する。
+  // 同じキーを開き直した通常のケースと、初回（保存キーなし）は従来どおり無確認で動く。
+  const storedSyncId = cleanSyncId(localStorage.getItem(SYNC_ID_KEY));
+  const foreignSyncId = idFromUrl && storedSyncId && idFromUrl !== storedSyncId ? idFromUrl : "";
+  if (idFromUrl && !foreignSyncId) localStorage.setItem(SYNC_ID_KEY, idFromUrl);
+  // 確認が済むまでは元のキーのまま（＝リモートと分離。リンク先へは何も送信しない）
+  syncState.id = foreignSyncId ? storedSyncId : idFromUrl || storedSyncId;
 
   // http/https では、個人キーが無ければ自動発行し、サーバー保存（耐久化）を有効にする。
   if (!syncState.id && syncServerAvailable()) {
@@ -6415,8 +6599,9 @@ function initWordsnapSync() {
       keyGenerationFailed = true;
     }
   }
-  // 現在の個人キーをURLに反映（ホーム画面追加で消えない保存先になる）
-  if (syncState.id && syncServerAvailable()) {
+  // 現在の個人キーをURLに反映（ホーム画面追加で消えない保存先になる）。
+  // 別リンクの確認待ちの間はURLを書き換えない（開いたリンクのキーを保持して確認に使う）。
+  if (syncState.id && syncServerAvailable() && !foreignSyncId) {
     rememberSyncIdInUrl(syncState.id);
   }
 
@@ -6507,6 +6692,8 @@ function initWordsnapSync() {
     setSyncStatus("ファイルを直接開いているため、サーバー保存は使えません。https のリンクから開くと自動で保存されます。");
     return;
   }
+  // 別の共有リンクを開いている場合は確認バナーを出す（確認までは元のキーで通常同期）
+  if (foreignSyncId) showSyncSwitchConfirm(foreignSyncId, storedSyncId);
   // http/https では個人キーで自動接続し、データをサーバーに保存・復元する
   if (syncState.id) {
     connectWordsnapSync({ silent: true });
@@ -6609,7 +6796,7 @@ function renameDeck() {
   saveState();
 }
 
-function deleteDeck() {
+function deleteDeck(button) {
   if (appState.decks.length <= 1) {
     setStatus("単語帳が1つのときは削除できません。");
     return;
@@ -6617,8 +6804,14 @@ function deleteDeck() {
   const deck = appState.decks.find((item) => item.id === appState.activeDeckId);
   if (!deck) return;
   const count = appState.words.filter((word) => word.deckId === deck.id).length;
-  const note = count > 0 ? `含まれる${count}語は別の単語帳へ移動します。` : "";
-  if (!window.confirm(`単語帳「${deck.name}」を削除しますか？${note}`)) return;
+  // 削除後は先頭の単語帳（＝削除対象を除いた最初の単語帳）へ残単語が移る。名前を先に出して不安をなくす
+  const targetDeck = appState.decks.find((item) => item.id !== deck.id);
+  const note = count > 0 ? `含まれる${count}語は「${targetDeck.name}」へ移動します。` : "";
+  // window.confirm はiOSのホーム画面起動で固まるため、2段階タップで確定する
+  if (!armDangerButton(button, "もう一度押すと削除")) {
+    setStatus(`単語帳「${deck.name}」を削除します。${note}よければもう一度「削除」を押してください（4秒で取り消し）。`);
+    return;
+  }
 
   appState.decks = appState.decks.filter((item) => item.id !== deck.id);
   const targetId = appState.decks[0].id;
@@ -6628,7 +6821,9 @@ function deleteDeck() {
   appState.activeDeckId = "all";
   currentQuiz = null;
   saveState();
-  setStatus(`単語帳「${deck.name}」を削除しました。`);
+  setStatus(
+    `単語帳「${deck.name}」を削除しました。${count > 0 ? `${count}語は「${deckName(targetId)}」へ移動しました。` : ""}`,
+  );
 }
 
 function moveWordToDeck(wordId, deckId) {
@@ -6866,6 +7061,7 @@ function parseVocabulary(text, deckId = null) {
   let newCount = 0;
   let dupSavedCount = 0;
   let dupTrashCount = 0;
+  let dupInputCount = 0; // 同じ貼り付け内で既出（保存済みとは別に数えて誤表示を防ぐ）
   const unreadableLines = [];
 
   let pendingTerm = null;
@@ -6881,13 +7077,14 @@ function parseVocabulary(text, deckId = null) {
   };
 
   // term/meaning を候補として確定できるか判定する。
-  // "new" | "dup-saved" | "dup-trash" | "invalid" のいずれかを返す。
+  // "new" | "dup-saved" | "dup-input" | "dup-trash" | "invalid" のいずれかを返す。
   const resolve = (term, meaning) => {
     const pair = validPair(term, meaning);
     if (!pair) return "invalid";
     const key = normalizeTerm(pair.term);
     if (!key) return "invalid";
-    if (savedTerms.has(key) || claimedTerms.has(key)) return "dup-saved";
+    if (savedTerms.has(key)) return "dup-saved"; // 実際に保存済みの単語との重複
+    if (claimedTerms.has(key)) return "dup-input"; // 同じ貼り付け内で既出（保存済みではない）
     if (trashedTerms.has(key)) return "dup-trash";
     claimedTerms.add(key);
     parsed.push(pair);
@@ -6915,6 +7112,7 @@ function parseVocabulary(text, deckId = null) {
       } else {
         if (outcome === "new") newCount++;
         else if (outcome === "dup-saved") dupSavedCount++;
+        else if (outcome === "dup-input") dupInputCount++;
         else if (outcome === "dup-trash") dupTrashCount++;
         pendingTerm = null;
         pendingTermLine = null;
@@ -6933,6 +7131,10 @@ function parseVocabulary(text, deckId = null) {
           pendingTermLine = null;
         } else if (outcome === "dup-saved") {
           dupSavedCount++;
+          pendingTerm = null;
+          pendingTermLine = null;
+        } else if (outcome === "dup-input") {
+          dupInputCount++;
           pendingTerm = null;
           pendingTermLine = null;
         } else if (outcome === "dup-trash") {
@@ -6960,7 +7162,7 @@ function parseVocabulary(text, deckId = null) {
   }
   releasePendingTerm(); // 末尾に意味の対応しない見出し語が残っていれば記録
 
-  return { candidates: parsed, newCount, dupSavedCount, dupTrashCount, unreadableLines };
+  return { candidates: parsed, newCount, dupSavedCount, dupInputCount, dupTrashCount, unreadableLines };
 }
 
 // 最大5行まで「N行目」を列挙し、残りは「ほか◯行」でまとめる。
@@ -6973,7 +7175,7 @@ function formatLineNumbers(lineNumbers) {
 
 // parseVocabulary() の結果から、内訳がわかる変換結果メッセージを組み立てる。
 function buildParseResultMessage(result) {
-  const { newCount, dupSavedCount, dupTrashCount, unreadableLines } = result;
+  const { newCount, dupSavedCount, dupInputCount = 0, dupTrashCount, unreadableLines } = result;
   const dupTotal = dupSavedCount + dupTrashCount;
 
   if (newCount === 0 && dupTotal === 0 && unreadableLines.length === 0) {
@@ -6996,6 +7198,7 @@ function buildParseResultMessage(result) {
     let head = `${newCount}語を候補にしました`;
     const skipNotes = [];
     if (dupSavedCount > 0) skipNotes.push(`${dupSavedCount}語は保存済みのためスキップ`);
+    if (dupInputCount > 0) skipNotes.push(`${dupInputCount}語は入力内で重複のためスキップ`);
     if (dupTrashCount > 0) skipNotes.push(`${dupTrashCount}語は削除済みのためスキップ`);
     if (skipNotes.length > 0) head += `（${skipNotes.join("、")}）`;
     parts.push(`${head}。`);
@@ -7093,11 +7296,24 @@ function syncEditorCorrectionControls() {
   if (elements.perspHValue) elements.perspHValue.textContent = formatAdjustmentValue(editorPerspH);
 }
 
+// 画像取り込み（OCR/AI）の上限。通常の写真（スマホの12〜48MP・数MB〜十数MB）は
+// 余裕で収まる緩めの値にし、極端に大きい画像でのフリーズ・クラッシュだけを防ぐ。
+const OCR_MAX_FILE_BYTES = 40 * 1024 * 1024; // 40MB
+const OCR_MAX_PIXELS = 80 * 1000 * 1000; // 8,000万画素
+
 function loadEditorImage(file) {
+  if (file && file.size > OCR_MAX_FILE_BYTES) {
+    setStatus("画像ファイルが大きすぎるため読み込めません（40MBまで）。縮小するか、別の画像をお試しください。");
+    return;
+  }
   const url = URL.createObjectURL(file);
   const img = new Image();
   img.onload = () => {
     URL.revokeObjectURL(url);
+    if (img.naturalWidth * img.naturalHeight > OCR_MAX_PIXELS) {
+      setStatus("画像の画素数が大きすぎるため読み込めません（8,000万画素まで）。縮小してからお試しください。");
+      return;
+    }
     editorImg = img;
     editorRotation = 0;
     editorStraighten = 0;
@@ -8163,7 +8379,9 @@ function restoreTrashWord(trashId) {
     delete appState.deletions[deletionKeyForWord(word)];
     delete appState.deletions[normalizeTerm(word.term)];
   }
-  appState.activeDeckId = word.deckId;
+  // 「すべて」表示中は復元語もそのまま一覧に出るので、閲覧中のデッキを勝手に切り替えない。
+  // 特定デッキ表示中だけ、復元先のデッキへ切り替えて復元結果が見えるようにする。
+  if (appState.activeDeckId !== "all") appState.activeDeckId = word.deckId;
   currentQuiz = null;
   selectedIds.delete(word.id);
   saveState();
@@ -8171,11 +8389,15 @@ function restoreTrashWord(trashId) {
 }
 
 // 削除済みから1件だけ完全に削除する（復元不可。削除の記録は残すので同期で復活しない）
-function permanentlyDeleteTrash(trashId) {
+function permanentlyDeleteTrash(trashId, button) {
   const item = (appState.trash || []).find((entry) => entry.id === trashId);
   if (!item) return;
   const term = item.word?.term || "この単語";
-  if (!window.confirm(`「${term}」を完全に削除します。\nもう元に戻せません。よろしいですか？`)) return;
+  // window.confirm はiOSのホーム画面起動で固まるため、2段階タップで確定する
+  if (!armDangerButton(button, "もう一度で確定")) {
+    setStatus(`「${term}」を完全に削除します（元に戻せません）。よければもう一度「完全削除」を押してください（4秒で取り消し）。`);
+    return;
+  }
   appState.trash = (appState.trash || []).filter((entry) => entry.id !== trashId);
   saveState();
   setStatus(`「${term}」を完全に削除しました。`);
@@ -8188,7 +8410,11 @@ function emptyTrash() {
     setStatus("削除済みは空です。");
     return;
   }
-  if (!window.confirm(`削除済みの ${n}件 を完全に削除します。\nもう元に戻せません。よろしいですか？`)) return;
+  // window.confirm はiOSのホーム画面起動で固まるため、2段階タップで確定する
+  if (!armDangerButton(elements.trashEmptyButton, "もう一度押すと全消去")) {
+    setStatus(`削除済みの ${n}件 を完全に削除します（元に戻せません）。よければもう一度押してください（4秒で取り消し）。`);
+    return;
+  }
   appState.trash = [];
   saveState();
   setStatus(`削除済みの${n}件を完全に削除しました。`);
@@ -8355,7 +8581,7 @@ function renderQuizIntro() {
   elements.quizWord.textContent = "クイズを始めましょう";
   elements.quizFeedback.textContent =
     availableQuizWords().length > 0
-      ? "下の「クイズを始める」を押すと、保存した単語の意味クイズが始まります。"
+      ? "下の「クイズを始める（おまかせ）」を押すと、保存した単語の意味クイズが始まります。"
       : "通常出題できる単語がありません。「総復習」か、一覧から選んで「選択した単語を解く」で復習できます。";
 }
 
@@ -8542,6 +8768,10 @@ function startReview(ids, options = {}) {
   reviewResult = null; // 新しいセッションを始めたら前回の結果表示は消す
   currentQuiz = null;
   persistReviewProgress(); // 新しいセッションで上書き（古い再開データは破棄される）
+  // ライブラリの「選んだ単語を解く」等、クイズタブ以外から開始してもセッションが
+  // 見えるように必ずクイズタブへ切り替える（すでにクイズタブなら実質no-op）。
+  // scrollIntoView は非表示パネルでは効かないため、切替を先に行う。
+  setActiveStep("quiz", { sound: false });
   renderQuiz();
   elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
   // renderQuiz() の中で「選んだ単語が全部ブロック中」等により即座に endReview されると
@@ -8673,6 +8903,21 @@ function endReview(message) {
   currentQuiz = null;
   renderQuiz();
   if (message) setStatus(message);
+}
+
+// 進行中の復習/範囲クイズから、削除された単語の帳尻を合わせる。
+// まだ回答されていない（＝キューに残っている）単語をキューから消すだけだと total が
+// 据え置きのままになり、削除語が暗黙に「正解」計上されて進捗も1問飛ぶ。そこで
+// queue・allIds・missedIds から取り除き、total を1減らす。すでに回答済み（キューに
+// ない）単語は正当に計上済みなので何も変えない（missedIds に残っていれば誤答のまま）。
+// 単語を appState.words から削除する全経路（個別削除・一括削除）から呼ぶこと。
+function dropWordFromReviewSession(id) {
+  if (!reviewSession || !reviewSession.queue.includes(id)) return;
+  reviewSession.queue = reviewSession.queue.filter((entry) => entry !== id);
+  reviewSession.allIds = reviewSession.allIds.filter((entry) => entry !== id);
+  reviewSession.missedIds = reviewSession.missedIds.filter((entry) => entry !== id);
+  reviewSession.total = Math.max(0, (reviewSession.total || 0) - 1);
+  persistReviewProgress(); // 再開用スナップショットも削除後の姿に合わせる
 }
 
 // 復習セッションを完走したときのサマリ文言（例:「8問中6問正解。間違えた2語はまた出題されます。」）。
@@ -8815,7 +9060,12 @@ function highlightChoices(choiceId) {
 
 function buildQuiz() {
   const words = availableQuizWords();
-  const answer = chooseNextWord(words);
+  // 直前に出題した単語は候補から外し、同じ問題の2連続を避ける。
+  // ただし候補がその1語しかない場合は除外しない（出題が止まるのを防ぐ）。
+  const lastAnswerId = currentQuiz?.answer?.id;
+  const candidates =
+    lastAnswerId && words.length > 1 ? words.filter((word) => word.id !== lastAnswerId) : words;
+  const answer = chooseNextWord(candidates);
   if (!answer) return null;
   const pool = scopedWords().filter((word) => word.id !== answer.id);
   const basePool = pool.length >= 3 ? pool : appState.words.filter((word) => word.id !== answer.id);
@@ -8831,10 +9081,13 @@ function availableQuizWords() {
   const scoped = scopedWords();
   // 誤答した単語は「◯問後に復習」(reviewAt) と「5分経過」(blockedUntil) の早い方で出題対象に戻る。
   // 5分ルールはcounterが進まないまま放置された時の保険であり、通常は◯問後の条件が先に成立する。
+  // blockedUntil は誤答時にのみセットされる。未設定(0)を「0 <= now で常に復習可」と
+  // 扱うと、正解直後の review 単語が即座に最優先で戻り、同じ問題が2連続で出てしまう。
   const dueReviews = scoped.filter(
     (word) =>
       word.learning.status === "review" &&
-      (word.learning.reviewAt <= appState.quizCounter || word.learning.blockedUntil <= now),
+      (word.learning.reviewAt <= appState.quizCounter ||
+        (word.learning.blockedUntil > 0 && word.learning.blockedUntil <= now)),
   );
   if (dueReviews.length > 0) return dueReviews;
 
@@ -9928,7 +10181,7 @@ elements.trashList?.addEventListener("click", (event) => {
     return;
   }
   const purgeBtn = event.target.closest("[data-purge-trash]");
-  if (purgeBtn) permanentlyDeleteTrash(purgeBtn.dataset.purgeTrash);
+  if (purgeBtn) permanentlyDeleteTrash(purgeBtn.dataset.purgeTrash, purgeBtn); // 2段階確認用にボタンも渡す
 });
 elements.trashEmptyButton?.addEventListener("click", emptyTrash);
 
@@ -9969,6 +10222,7 @@ elements.savedList.addEventListener("click", async (event) => {
     const snapshot = snapshotState();
     if (word) recordDeletion(word);
     appState.words = appState.words.filter((item) => item.id !== id);
+    dropWordFromReviewSession(id); // 復習セッション中の未回答語なら total ごと取り除く
     if (currentQuiz?.answer.id === id) currentQuiz = null;
     saveState();
     offerUndo(snapshot);
@@ -9997,6 +10251,11 @@ elements.savedList.addEventListener("change", (event) => {
     const id = check.dataset.selectWord;
     if (check.checked) selectedIds.add(id);
     else selectedIds.delete(id);
+    // 選択すると操作ボタン群（折りたたみ内）が現れるので、折りたたみを自動で開いて見えるようにする。
+    // 解除時に自動で閉じることはしない（ユーザーの開閉状態を尊重）。
+    if (check.checked && elements.bulkActionsToggle && !elements.bulkActionsToggle.open) {
+      elements.bulkActionsToggle.open = true;
+    }
     renderSelection();
     return;
   }
@@ -10006,10 +10265,11 @@ elements.savedList.addEventListener("change", (event) => {
 });
 
 elements.deckBar.addEventListener("click", (event) => {
-  const action = event.target.closest("[data-deck-action]")?.dataset.deckAction;
+  const actionButton = event.target.closest("[data-deck-action]");
+  const action = actionButton?.dataset.deckAction;
   if (action === "add") return addDeck();
   if (action === "rename") return renameDeck();
-  if (action === "delete") return deleteDeck();
+  if (action === "delete") return deleteDeck(actionButton); // 2段階確認用にボタン自身を渡す
 
   const tab = event.target.closest("[data-deck-id]");
   if (tab) setActiveDeck(tab.dataset.deckId);
@@ -10214,14 +10474,18 @@ elements.deleteSelectedButton?.addEventListener("click", () => {
     return;
   }
   const targets = appState.words.filter((word) => ids.includes(word.id));
-  const ok = window.confirm(
-    `選んだ ${targets.length}件 を削除します。\n削除した単語は30日間「削除済み」から戻せます。よろしいですか？`,
-  );
-  if (!ok) return;
+  // window.confirm はiOSのホーム画面起動で固まるため、2段階タップで確定する
+  if (!armDangerButton(elements.deleteSelectedButton, "もう一度押すと削除")) {
+    setStatus(
+      `選んだ ${targets.length}件 を削除します（30日間「削除済み」から戻せます）。よければもう一度押してください（4秒で取り消し）。`,
+    );
+    return;
+  }
   const idSet = new Set(ids);
   const snapshot = snapshotState();
   targets.forEach((word) => recordDeletion(word));
   appState.words = appState.words.filter((word) => !idSet.has(word.id));
+  ids.forEach((id) => dropWordFromReviewSession(id)); // 復習セッション中の未回答語なら total ごと取り除く
   if (currentQuiz && idSet.has(currentQuiz.answer.id)) currentQuiz = null;
   selectedIds.clear();
   saveState();
@@ -10244,43 +10508,97 @@ elements.exportButton.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
+// JSON読み込みの上限。正常な使用（数千語＝数百KB程度）は余裕で収まる緩めの値にし、
+// 誤って巨大ファイルを選んだときのフリーズ・ストレージ溢れを防ぐ。
+const IMPORT_MAX_FILE_BYTES = 8 * 1024 * 1024; // 8MB
+const IMPORT_MAX_WORDS = 50000; // 5万語
+
+// window.confirm はiOSのホーム画面起動で固まるため、ファイル選択→確認バーで確定の2段階にする。
+// 選んだ内容は確定までここに保持する。
+let pendingImport = null;
+
+function hideImportConfirmBar() {
+  pendingImport = null;
+  if (elements.importConfirmBar) elements.importConfirmBar.hidden = true;
+}
+
 elements.importJsonInput.addEventListener("change", async () => {
   const [file] = elements.importJsonInput.files;
   if (!file) return;
 
   try {
-    const imported = JSON.parse(await file.text());
-    if (!imported || !Array.isArray(imported.words)) throw new Error("Invalid data");
-    const count = imported.words.length;
-    if (!window.confirm(`現在のデータを、読み込んだ${count}語で置き換えます。よろしいですか？（「元に戻す」で取り消せます）`)) {
-      setStatus("読み込みをキャンセルしました。");
+    if (file.size > IMPORT_MAX_FILE_BYTES) {
+      hideImportConfirmBar();
+      setStatus("JSONファイルが大きすぎるため読み込めません（8MBまで）。書き出したデータを選んでください。");
       return;
     }
-    const snapshot = snapshotState();
-    appState = normalizeState(imported);
-    currentQuiz = null;
-    saveState();
-    offerUndo(snapshot);
-    setStatus("JSONデータを読み込みました。「元に戻す」で取り消せます。");
+    const imported = JSON.parse(await file.text());
+    if (!imported || !Array.isArray(imported.words)) throw new Error("Invalid data");
+    if (imported.words.length > IMPORT_MAX_WORDS) {
+      hideImportConfirmBar();
+      setStatus(`単語数が多すぎるため読み込めません（${IMPORT_MAX_WORDS.toLocaleString("ja-JP")}語まで）。`);
+      return;
+    }
+    pendingImport = imported;
+    if (elements.importConfirmText) {
+      elements.importConfirmText.textContent = `現在のデータを、読み込んだ${imported.words.length}語で置き換えます（「元に戻す」で取り消せます）。`;
+    }
+    if (elements.importConfirmBar) elements.importConfirmBar.hidden = false;
+    setStatus("内容を確認して「置き換える」を押してください。");
   } catch {
+    hideImportConfirmBar();
     setStatus("JSONを読み込めませんでした。書き出したデータを選んでください。");
   } finally {
     elements.importJsonInput.value = "";
   }
 });
 
+elements.importConfirmButton?.addEventListener("click", () => {
+  if (!pendingImport) return;
+  const snapshot = snapshotState();
+  const previousWords = appState.words;
+  appState = normalizeState(pendingImport);
+  // 【復活防止】置き換えで消えた単語（置換前にあり置換後に無い）へ削除の記録（墓標）を付ける。
+  // これが無いと、次の同期マージで他端末側に残っている同じ単語が復活してしまう。
+  // 同じ単語が置換後にも存在すればキーが一致して墓標は付かない＝再インポートしても冪等。
+  const deletedAt = Date.now();
+  const nextKeys = new Set(appState.words.map((word) => deletionKeyForWord(word)));
+  for (const word of previousWords) {
+    const key = deletionKeyForWord(word);
+    if (!nextKeys.has(key)) appState.deletions[key] = deletedAt;
+  }
+  hideImportConfirmBar();
+  currentQuiz = null;
+  saveState();
+  offerUndo(snapshot);
+  setStatus("JSONデータを読み込みました。「元に戻す」で取り消せます。");
+});
+
+elements.importCancelButton?.addEventListener("click", () => {
+  hideImportConfirmBar();
+  setStatus("読み込みをキャンセルしました。");
+});
+
 elements.undoButton.addEventListener("click", performUndo);
 
 elements.clearAllButton.addEventListener("click", () => {
+  // ボタンは設定タブにあるため、メッセージも設定タブ内（ボタン直下）に表示する
+  const say = (message) => {
+    if (elements.clearAllStatus) elements.clearAllStatus.textContent = message;
+    setStatus(message);
+  };
   const count = appState.words.length;
   if (count === 0) {
-    setStatus("削除する単語がありません。");
+    say("削除する単語がありません。");
     return;
   }
-  const confirmed = window.confirm(
-    `保存した単語 ${count}語 と成績・単語帳をすべて削除します。\n削除した単語は30日間「削除済み」から戻せます。\n本当によろしいですか？`,
-  );
-  if (!confirmed) return;
+  // window.confirm はiOSのホーム画面起動で固まるため、2段階タップで確定する
+  if (!armDangerButton(elements.clearAllButton, "もう一度押すと全削除")) {
+    say(
+      `保存した単語 ${count}語 と成績・単語帳をすべて削除します（30日間「削除済み」から戻せます）。よければもう一度押してください（4秒で取り消し）。`,
+    );
+    return;
+  }
   const snapshot = snapshotState();
   const deletedAt = Date.now();
   const trash = [
@@ -10300,7 +10618,7 @@ elements.clearAllButton.addEventListener("click", () => {
   currentQuiz = null;
   saveState();
   offerUndo(snapshot);
-  setStatus("保存データを削除しました。単語は削除済みに30日間保存されます。");
+  say("保存データを削除しました。単語は削除済みに30日間保存されます。");
 });
 
 // 空状態などにある「Step 1 へ」等のボタンから、該当ステップへ移動する
