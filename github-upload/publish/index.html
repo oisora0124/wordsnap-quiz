@@ -6140,6 +6140,92 @@ async function syncRequest(method, body = null) {
   return data;
 }
 
+// 【同期用ビュー】サーバーへ送るstateから、各単語の enrich（例文・語源・類義語などの
+// 取得キャッシュ）を除いたコピーを作る。enrich は各端末でいつでも再取得できるデータで、
+// 9,000語規模だと state 全体の大半を占め、bodyの4MB上限やD1の行制限（約2MB）に当たる。
+// あくまで送信用のコピーであり、ローカルの appState からは一切消さない。
+// （受信側は mergeEnrichData がローカル優先なので、enrich無しのリモートとマージしても
+//   手元の enrich は保持される。リモートにしか無い単語は表示時に再取得される。）
+function buildSyncPayloadState() {
+  return {
+    ...appState,
+    words: appState.words.map((word) => {
+      const { enrich, ...rest } = word;
+      return rest;
+    }),
+  };
+}
+
+// gzip圧縮が使える環境か（CompressionStream非対応の古いブラウザはプレーン送信に切り替える）
+function syncGzipSupported() {
+  return (
+    typeof CompressionStream === "function" &&
+    typeof Blob === "function" &&
+    typeof Response === "function"
+  );
+}
+
+// 圧縮送信するかの判定。ローカル動作用の room-sync-server.js（旧契約・プレーンstateのみ）
+// でも動くよう、圧縮は本番（https）のみに限定する。http/localhost は従来のプレーン送信。
+function syncShouldCompress() {
+  return syncGzipSupported() && window.location.protocol === "https:";
+}
+
+// JSON文字列 → gzip → base64（PUT body用）
+async function gzipJsonToBase64(text) {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let binary = "";
+  const CHUNK = 0x8000; // String.fromCharCodeの引数上限対策で分割
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+// 圧縮後base64がこの値を超える場合は送信しない（サーバー側のD1行制限保護1.9MBの手前）。
+// enrich除去＋gzip後なので、ここに到達するのは数万語級のデータのみ。
+const SYNC_GZ_BASE64_LIMIT = 1_800_000;
+
+// PUT送信の共通入口。baseRev が null のときは省略して送る（＝強制上書き）。
+// 本番(https)では { baseRev, stateGz, format: "gzip-base64" } の圧縮形式で送り、
+// 圧縮が使えない環境ではプレーン { baseRev, state }（従来形式）で送る。
+// 圧縮形式を知らない旧サーバーが4xxを返した場合も、プレーンで1回だけ再試行する。
+async function syncPutState(baseRev) {
+  const state = buildSyncPayloadState();
+  if (syncShouldCompress()) {
+    let stateGz = null;
+    try {
+      stateGz = await gzipJsonToBase64(JSON.stringify(state));
+    } catch {
+      stateGz = null; // 圧縮に失敗したらプレーン送信へフォールバック
+    }
+    if (stateGz) {
+      if (stateGz.length > SYNC_GZ_BASE64_LIMIT) {
+        const mb = (stateGz.length / 1024 / 1024).toFixed(1);
+        const error = new Error(
+          `データが大きすぎて同期できません（圧縮後 約${mb}MB）。不要な単語帳の整理をご検討ください。`,
+        );
+        error.noRetry = true; // 通信リトライでは解決しないため自動再送しない
+        throw error;
+      }
+      const body = { stateGz, format: "gzip-base64" };
+      if (baseRev !== null) body.baseRev = baseRev;
+      try {
+        return await syncRequest("PUT", body);
+      } catch (error) {
+        // 旧サーバー（stateGz未対応）が返す400/422だけ、プレーン形式で1回再試行する。
+        // 409（競合）・413・5xx・通信断・キー切替は従来どおり呼び出し側の処理へ渡す。
+        const unknownFormat = error && (error.status === 400 || error.status === 422);
+        if (isStaleSyncError(error) || !unknownFormat) throw error;
+      }
+    }
+  }
+  const body = { state };
+  if (baseRev !== null) body.baseRev = baseRev;
+  return await syncRequest("PUT", body);
+}
+
 function setSyncStatus(message, mode = "") {
   if (mode === "live") {
     syncState.lastSyncedAt = Date.now();
@@ -6561,10 +6647,8 @@ async function pushWordsnapState(options = {}) {
   let handedOff = false;
   let retryNeeded = false;
   try {
-    const result = await syncRequest("PUT", {
-      baseRev: syncState.rev,
-      state: appState,
-    });
+    // enrich除去＋（本番では）gzip圧縮した同期用ビューを送る（appState自体は送らない）
+    const result = await syncPutState(syncState.rev);
     syncState.rev = Number(result.stateRev) || syncState.rev;
     syncState.connected = true;
     setSyncStatus("✓ サーバーに保存しました", "live");
@@ -6584,7 +6668,8 @@ async function pushWordsnapState(options = {}) {
       await pushWordsnapState({ force: true, retried: true, retryAttempt });
       return;
     }
-    retryNeeded = retryAttempt < 2;
+    // サイズ超過（noRetry）はリトライしても解決しないため自動再送しない
+    retryNeeded = retryAttempt < 2 && !error.noRetry;
     setSyncStatus(error.message || "同期保存に失敗しました。", "error");
   } finally {
     syncState.pushing = false;
@@ -6679,7 +6764,7 @@ async function forcePushOverwrite() {
   setSyncBusy(true);
   setSyncStatus("この端末の内容でサーバーを上書きしています…");
   try {
-    const result = await syncRequest("PUT", { state: appState }); // baseRev無し＝強制上書き
+    const result = await syncPutState(null); // baseRev無し＝強制上書き（同期用ビューを送信）
     syncState.rev = Number(result.stateRev) || syncState.rev;
     syncState.connected = true;
     setSyncStatus("✓ この端末の内容でサーバーを更新しました。他の端末で「他の端末に合わせる」を押してください。", "live");
