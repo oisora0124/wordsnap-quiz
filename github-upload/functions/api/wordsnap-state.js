@@ -3,8 +3,16 @@
 //
 //   GET  /api/wordsnap-state?sync=KEY        -> { syncId, state, stateRev, updatedAt }
 //   PUT  /api/wordsnap-state?sync=KEY  body: { baseRev, state }
+//        または圧縮形式 body: { baseRev, stateGz: "<base64>", format: "gzip-base64" }
 //        baseRev が最新と一致 -> 保存して { ok, syncId, stateRev, updatedAt }
 //        一致しない          -> 409 { error, syncId, state, stateRev, updatedAt }
+//
+// 【圧縮対応】単語1万語規模だと state の生JSONが 4MB（bodyの上限）や
+// D1 の1行約2MB制限を超えて保存できなくなる。そこで:
+//   - クライアントは gzip+base64 で送れる（旧クライアントのプレーン state も従来どおり受理）
+//   - D1 へは常に gzip+base64 を {"__gz":"<base64>"} というマーカーJSONで保存する
+//     （スキーマ変更なし。既存のプレーンJSON行も読み出し時にそのまま解釈できる）
+//   - GET / 409 の応答は保存形式に関わらず「解凍済みのプレーン state」を返す＝契約は不変
 //
 // D1 を使う最大の利点: SQLite の1文の UPDATE ... WHERE rev=? が原子的な
 // Compare-And-Swap になるので、「サーバー同時PUTの競合」を追加ロジックなしで防げる
@@ -16,6 +24,13 @@
 //   3. Pages プロジェクトの Functions バインディングで、変数名 DB に上記 D1 を割り当てる
 
 const HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+
+// bodyの上限は従来どおり4MB（gzip後のstateはこの中に余裕で収まる）
+const MAX_RAW_BODY = 4_000_000;
+// 解凍後JSONの上限。正当な数万語データでも到達しない値にして「解凍爆弾」を防ぐ
+const MAX_INFLATED_JSON = 50_000_000;
+// D1 は1行あたり約2MBの制限があるため、保存する base64 はその手前で拒否する
+const MAX_STORED_BASE64 = 1_900_000;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: HEADERS });
@@ -30,6 +45,57 @@ function cleanSyncId(value) {
     .slice(0, 64);
 }
 
+// base64 → gzip解凍 → JSON文字列。壊れたbase64/gzipは例外（呼び出し側で400系に変換）。
+// 解凍後サイズが上限を超えたら sizeExceeded 印付きの例外で中断する（解凍爆弾対策）。
+async function gunzipBase64ToText(base64) {
+  const binary = atob(base64); // 不正なbase64はここで例外
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read(); // 不正なgzipはここで例外
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_INFLATED_JSON) {
+      try {
+        await reader.cancel();
+      } catch {
+        // 中断失敗は無視（例外で処理自体は打ち切られる）
+      }
+      const error = new Error("inflated state too large");
+      error.sizeExceeded = true;
+      throw error;
+    }
+    chunks.push(value);
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
+// JSON文字列 → gzip → base64（D1保存用）
+async function gzipTextToBase64(text) {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let binary = "";
+  const CHUNK = 0x8000; // String.fromCharcodeの引数上限対策で分割
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+// DBの1行を読み、stateを「解凍済みプレーン」で返す。
+// 保存形式は2通りを受理する（後方互換）:
+//   新: {"__gz":"<base64>"} マーカー → 解凍してJSONパース
+//   旧: プレーンなstate JSONそのまま → そのまま採用
 async function readRow(db, syncId) {
   const row = await db
     .prepare("SELECT state, rev, updatedAt FROM states WHERE key = ?")
@@ -39,6 +105,9 @@ async function readRow(db, syncId) {
   let state = null;
   try {
     state = row.state ? JSON.parse(row.state) : null;
+    if (state && typeof state === "object" && !Array.isArray(state) && typeof state.__gz === "string") {
+      state = JSON.parse(await gunzipBase64ToText(state.__gz));
+    }
   } catch {
     state = null; // 万一DB内が壊れていても500にせず null 扱い
   }
@@ -69,7 +138,7 @@ export async function onRequest(context) {
     } catch {
       return json({ error: "unreadable body" }, 400);
     }
-    if (raw.length > 4_000_000) return json({ error: "body too large" }, 413);
+    if (raw.length > MAX_RAW_BODY) return json({ error: "body too large" }, 413);
     let body;
     try {
       body = JSON.parse(raw);
@@ -82,7 +151,20 @@ export async function onRequest(context) {
     if (body.baseRev !== undefined && body.baseRev !== null && !Number.isFinite(Number(body.baseRev))) {
       return json({ error: "invalid baseRev" }, 400);
     }
-    const state = body.state;
+
+    // --- state の取り出し：圧縮形式（新クライアント）とプレーン（旧クライアント）の両対応 ---
+    let state;
+    if (body.format === "gzip-base64" && typeof body.stateGz === "string") {
+      try {
+        state = JSON.parse(await gunzipBase64ToText(body.stateGz));
+      } catch (error) {
+        if (error && error.sizeExceeded) return json({ error: "inflated state too large" }, 413);
+        return json({ error: "invalid compressed state" }, 400);
+      }
+    } else {
+      state = body.state;
+    }
+    // 検証は解凍後のstateに対して行う（プレーン受信時も同一の検証）
     if (
       !state ||
       typeof state !== "object" ||
@@ -93,9 +175,15 @@ export async function onRequest(context) {
       return json({ error: "invalid state" }, 422);
     }
 
+    // --- D1へは常に圧縮形式で保存する（プレーン受信でもここで圧縮する） ---
+    const stateJson = JSON.stringify(state);
+    if (stateJson.length > MAX_INFLATED_JSON) return json({ error: "state too large" }, 413);
+    const storedBase64 = await gzipTextToBase64(stateJson);
+    if (storedBase64.length > MAX_STORED_BASE64) return json({ error: "state too large" }, 413);
+    const storedJson = JSON.stringify({ __gz: storedBase64 });
+
     const nextRev = current.rev + 1;
     const now = Date.now();
-    const stateJson = JSON.stringify(state);
     const hasBase = body.baseRev !== undefined && body.baseRev !== null;
     const baseRev = hasBase ? Number(body.baseRev) : null;
 
@@ -105,7 +193,7 @@ export async function onRequest(context) {
       if (!hasBase || baseRev === 0) {
         const res = await db
           .prepare("INSERT OR IGNORE INTO states (key, state, rev, updatedAt) VALUES (?, ?, 1, ?)")
-          .bind(syncId, stateJson, now)
+          .bind(syncId, storedJson, now)
           .run();
         applied = (res.meta?.changes || 0) > 0;
       }
@@ -113,20 +201,21 @@ export async function onRequest(context) {
       // baseRev 省略 = 強制上書き（「この端末を正にする」）。原子的に rev を進める。
       const res = await db
         .prepare("UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ?")
-        .bind(stateJson, now, syncId)
+        .bind(storedJson, now, syncId)
         .run();
       applied = (res.meta?.changes || 0) > 0;
     } else {
       // 楽観的ロック: 現在の rev が baseRev と一致するときだけ書き込む（原子的 CAS）
       const res = await db
         .prepare("UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ? AND rev = ?")
-        .bind(stateJson, now, syncId, baseRev)
+        .bind(storedJson, now, syncId, baseRev)
         .run();
       applied = (res.meta?.changes || 0) > 0;
     }
 
     if (!applied) {
       // 競合: 最新を読み直して 409 で返す（クライアントは pull→マージ→再push する）
+      // state は readRow が解凍済みプレーンにして返す＝応答契約は従来と同じ。
       const latest = await readRow(db, syncId);
       return json(
         { error: "conflict", syncId, state: latest.state, stateRev: latest.rev, updatedAt: latest.updatedAt },
