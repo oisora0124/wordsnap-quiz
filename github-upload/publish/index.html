@@ -1852,6 +1852,24 @@ textarea:focus-visible {
   font-size: 0.78rem !important;
 }
 
+/* 「別の端末と同じキーで同期」欄：キー/リンクの貼り付け入力＋接続ボタンの1行 */
+.sync-join-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 0.62rem 0.7rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 0.92rem;
+}
+
+.sync-join-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 /* ---------- 設定アコーディオン（見出しタブを押すと開く） ---------- */
 .settings-accordion {
   display: grid;
@@ -3812,6 +3830,21 @@ textarea:focus-visible {
         </div>
       </div>
 
+      <!-- 【キー切り替え後の合流確認】切り替え前のこの端末に単語が1語以上あった場合だけ表示。
+           「合流させる」を選んだときだけ、切り替え前の単語を新しいキーへマージ・送信する。
+           放置やリロードは「合流しない」扱い（スナップショットはメモリ内のみ）。 -->
+      <div id="syncMergeBanner" class="sync-switch-banner" role="alertdialog" aria-live="polite" hidden>
+        <p class="sync-switch-text">
+          <strong>データの切り替えが完了しました。</strong>切り替え前のこの端末には
+          <strong><span id="syncMergeCount">0</span>語</strong>がありました。今のデータに合流させますか？<br />
+          合流させると両方の端末の単語がひとつにまとまって保存されます。合流しない場合は、今表示されているサーバーの内容のまま使います。
+        </p>
+        <div class="sync-switch-actions">
+          <button id="syncMergeAcceptButton" class="secondary" type="button">この端末にあった単語を合流させる</button>
+          <button id="syncMergeDeclineButton" class="ghost" type="button">合流しない</button>
+        </div>
+      </div>
+
       <nav class="step-tabs" aria-label="学習ステップ" role="tablist">
         <button
           id="tab-import"
@@ -4249,7 +4282,7 @@ accurate 正確な"
                 <p>追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。新しい個人キーはブラウザの安全な乱数機能で自動発行されます。</p>
                 <ol class="sync-steps">
                   <li><strong>ホーム画面に追加して使う</strong>：このページを「ホーム画面に追加」し、そのアイコンから開いてください。ブラウザの保存が消えても、開き直せばサーバーから自動で元に戻ります。</li>
-                  <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。</li>
+                  <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。リンクを開けないときは、下の「<strong>別の端末と同じキーで同期</strong>」にリンクやキーを貼り付けても同じことができます。</li>
                 </ol>
               </details>
               <div class="sync-controls">
@@ -4275,6 +4308,32 @@ accurate 正確な"
                   （個人キーの付かない“共有用リンク”をコピー／共有します）。
                 </p>
               </div>
+              <details class="sync-fix">
+                <summary>別の端末と同じキーで同期（キーを貼り付け）</summary>
+                <div class="sync-fix-body">
+                  <p>
+                    別の端末の「<strong>個人リンクをコピー</strong>」で得たリンク（または個人キー）を貼り付けると、
+                    この端末をその端末と同じデータに揃えられます。
+                  </p>
+                  <div class="sync-fix-actions sync-join-row">
+                    <input
+                      id="syncJoinInput"
+                      type="text"
+                      inputmode="latin"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      spellcheck="false"
+                      placeholder="個人キー または 個人リンクを貼り付け"
+                      aria-label="別の端末の個人キーまたは個人リンク"
+                    />
+                    <button id="syncJoinButton" class="secondary danger" type="button">このキーに接続</button>
+                  </div>
+                  <p class="sync-fix-hint">
+                    接続すると、表示は貼り付けたキーのデータに切り替わります（この端末の単語が勝手に送信されることはありません）。
+                    切り替え後に、この端末にあった単語を合流させるか選べます。
+                  </p>
+                </div>
+              </details>
               <details class="sync-fix">
                 <summary>端末ごとに単語が違うとき（手動で揃える）</summary>
                 <div class="sync-fix-body">
@@ -4981,6 +5040,12 @@ const elements = {
   syncSwitchBanner: document.querySelector("#syncSwitchBanner"),
   syncSwitchAdoptButton: document.querySelector("#syncSwitchAdoptButton"),
   syncSwitchKeepButton: document.querySelector("#syncSwitchKeepButton"),
+  syncMergeBanner: document.querySelector("#syncMergeBanner"),
+  syncMergeCount: document.querySelector("#syncMergeCount"),
+  syncMergeAcceptButton: document.querySelector("#syncMergeAcceptButton"),
+  syncMergeDeclineButton: document.querySelector("#syncMergeDeclineButton"),
+  syncJoinInput: document.querySelector("#syncJoinInput"),
+  syncJoinButton: document.querySelector("#syncJoinButton"),
   syncIdInput: document.querySelector("#syncIdInput"),
   syncKeyToggleButton: document.querySelector("#syncKeyToggleButton"),
   syncConnectButton: document.querySelector("#syncConnectButton"),
@@ -5561,6 +5626,7 @@ const syncState = {
   pushing: false,
   applyingRemote: false,
   pushTimer: 0,
+  retryTimer: 0,
   pollTimer: 0,
   accessKey: "",
   busy: false,
@@ -6024,6 +6090,12 @@ function isStaleSyncError(error) {
 // 応答は syncRequest が staleSyncError にして返すため、マージ・push・UI反映されない。
 function bumpSyncRequestGen() {
   syncState.requestGen += 1;
+  // 旧キー向けに予約されていた通常送信・失敗リトライを、新しいキーへ持ち越さない。
+  window.clearTimeout(syncState.pushTimer);
+  window.clearTimeout(syncState.retryTimer);
+  syncState.pushTimer = 0;
+  syncState.retryTimer = 0;
+  syncState.pushQueued = false;
   for (const controller of syncState.abortControllers) {
     try {
       controller.abort();
@@ -6086,6 +6158,7 @@ function setSyncStatus(message, mode = "") {
 function setSyncBusy(busy) {
   syncState.busy = busy;
   if (elements.syncConnectButton) elements.syncConnectButton.disabled = busy;
+  if (elements.syncJoinButton) elements.syncJoinButton.disabled = busy;
   if (elements.syncPullButton) elements.syncPullButton.disabled = busy || !syncState.id;
   updateSyncBadge();
 }
@@ -6406,10 +6479,16 @@ async function connectWordsnapSync(options = {}) {
     if (syncState.id !== id) return;
     syncState.rev = Number(remote.stateRev) || 0;
     syncState.connected = true;
-    let changed = false;
-    if (remote.state) changed = applyMergedRemoteState(remote.state);
+    let needsPush = !remote.state;
+    if (remote.state) {
+      // ローカル側だけにある単語・学習履歴をマージしても、ローカル自身との比較だけでは
+      // changed=false になり得る。マージ結果をリモートとも比較し、欠けている分だけ送る。
+      const merged = mergeAppStates(appState, remote.state);
+      needsPush = stateSignature(merged) !== stateSignature(normalizeState(remote.state));
+      applyMergedRemoteState(remote.state);
+    }
     startSyncPolling();
-    if (!remote.state || changed) {
+    if (needsPush) {
       await pushWordsnapState({ force: true });
     } else {
       setSyncStatus("✓ サーバーに保存済み（このリンクをホーム画面に追加すると、機種変更してもデータが残ります）", "live");
@@ -6442,10 +6521,23 @@ function scheduleSyncPush() {
     syncState.pushQueued = true;
     return;
   }
+  window.clearTimeout(syncState.retryTimer);
+  syncState.retryTimer = 0;
   window.clearTimeout(syncState.pushTimer);
   syncState.pushTimer = window.setTimeout(() => {
     pushWordsnapState();
   }, 900);
+}
+
+function scheduleSyncRetry(requestGen, requestedId, retryAttempt) {
+  // 通信障害時だけ最大2回。世代とIDを固定し、キー切替後は絶対に送らない。
+  if (retryAttempt > 2 || requestGen !== syncState.requestGen || requestedId !== syncState.id) return;
+  window.clearTimeout(syncState.retryTimer);
+  syncState.retryTimer = window.setTimeout(() => {
+    syncState.retryTimer = 0;
+    if (requestGen !== syncState.requestGen || requestedId !== syncState.id) return;
+    pushWordsnapState({ force: true, retryAttempt });
+  }, retryAttempt * 1500);
 }
 
 async function pushWordsnapState(options = {}) {
@@ -6458,10 +6550,16 @@ async function pushWordsnapState(options = {}) {
     return;
   }
   syncState.pushing = true;
+  window.clearTimeout(syncState.retryTimer);
+  syncState.retryTimer = 0;
   // この送信のボディに乗るのは現時点の世代までの変更。送信中に世代が進んだら再送する。
   const sentGen = syncState.dirtyGen;
+  const requestGen = syncState.requestGen;
+  const requestedId = syncState.id;
+  const retryAttempt = Math.max(0, Number(options.retryAttempt) || 0);
   // 409再送・キー切替に処理を引き継いだら true（finally での再送予約を二重に行わない）
   let handedOff = false;
+  let retryNeeded = false;
   try {
     const result = await syncRequest("PUT", {
       baseRev: syncState.rev,
@@ -6483,9 +6581,10 @@ async function pushWordsnapState(options = {}) {
       if (error.data.state) applyMergedRemoteState(error.data.state);
       syncState.pushing = false;
       handedOff = true; // 未送信分の消化は再送呼び出し側の finally に任せる
-      await pushWordsnapState({ force: true, retried: true });
+      await pushWordsnapState({ force: true, retried: true, retryAttempt });
       return;
     }
+    retryNeeded = retryAttempt < 2;
     setSyncStatus(error.message || "同期保存に失敗しました。", "error");
   } finally {
     syncState.pushing = false;
@@ -6494,6 +6593,8 @@ async function pushWordsnapState(options = {}) {
     if (!handedOff && (syncState.pushQueued || syncState.dirtyGen > sentGen)) {
       syncState.pushQueued = false;
       scheduleSyncPush();
+    } else if (!handedOff && retryNeeded) {
+      scheduleSyncRetry(requestGen, requestedId, retryAttempt + 1);
     }
   }
 }
@@ -6682,10 +6783,16 @@ function showSyncSwitchConfirm(foreignId, ownId) {
   });
 }
 
-// ユーザーが「切り替える」を選んだ後の処理：リンク先のデータを取得し、
+// ユーザーが「切り替える」を選んだ後の処理：切り替え先のデータを取得し、
 // forcePullReplace と同じ「置き換え」で表示する。マージ・pushはしない＝
-// この端末の単語がリンク先のサーバー領域へ送られることはない。
+// この端末の単語が切り替え先のサーバー領域へ勝手に送られることはない。
+// 入口は2つ（URLの ?w= 確認バナー／設定のキー貼り付け欄）だが、どちらも必ずこの関数を通る。
+// 切り替え前にローカルへ単語があった場合のみ、取得完了後に「合流させるか」を本人に確認する
+// （合流を選んだときだけ mergeAppStates で合体して送信する）。
 async function adoptForeignSyncId(newId) {
+  // 前回の確認バナー・合流オファーは、新しい切り替えの開始で無効になる
+  if (elements.syncSwitchBanner) elements.syncSwitchBanner.hidden = true;
+  hideSyncMergeOffer();
   // 元のキーで動いていた自動同期（ポーリング・保留中のpush）を止めてから切り替える
   window.clearInterval(syncState.pollTimer);
   window.clearTimeout(syncState.pushTimer);
@@ -6702,13 +6809,23 @@ async function adoptForeignSyncId(newId) {
     setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
     return;
   }
+  // 【合流用スナップショット】置き換えで消える前のローカル状態をメモリ内に控える。
+  // localStorage 等へは保存しない（リロードで消える＝放置は「合流しない」扱い）。
+  let priorWordCount = 0;
+  let priorSnapshot = null;
+  try {
+    priorWordCount = Array.isArray(appState?.words) ? appState.words.length : 0;
+    priorSnapshot = priorWordCount > 0 ? snapshotState() : null;
+  } catch {
+    priorSnapshot = null; // スナップショット失敗時は合流の提案だけを諦める（切り替えは続行）
+  }
   setSyncBusy(true);
-  setSyncStatus("リンク先のデータを読み込んでいます…");
+  setSyncStatus("切り替え先のデータを読み込んでいます…");
   try {
     const remote = await syncRequest("GET");
     syncState.rev = Number(remote.stateRev) || 0;
     syncState.connected = true;
-    // applyingRemote 中の persist は再pushしない（リンク先の内容をそのまま採用するため）
+    // applyingRemote 中の persist は再pushしない（切り替え先の内容をそのまま採用するため）
     syncState.applyingRemote = true;
     appState = normalizeState(remote.state || defaultState());
     currentQuiz = null;
@@ -6717,13 +6834,100 @@ async function adoptForeignSyncId(newId) {
     syncState.applyingRemote = false;
     renderAll();
     startSyncPolling();
-    setSyncStatus(`✓ リンク先のデータに切り替えました（${appState.words.length}語）。`, "live");
+    setSyncStatus(`✓ このキーのデータに切り替えました（${appState.words.length}語）。`, "live");
+    // ローカルが1語以上あった場合のみ、合流するかを非ブロッキングで確認する
+    if (priorSnapshot) {
+      showSyncMergeOffer({
+        snapshot: priorSnapshot,
+        wordCount: priorWordCount,
+        forId: newId,
+        gen: syncState.requestGen,
+      });
+    }
   } catch (error) {
     if (isStaleSyncError(error)) return; // さらに新しいキー切替があった場合は静かに譲る
     syncState.connected = false;
-    setSyncStatus(error.message || "リンク先のデータを読み込めませんでした。", "error");
+    setSyncStatus(error.message || "切り替え先のデータを読み込めませんでした。", "error");
   } finally {
     setSyncBusy(false);
+  }
+}
+
+// 【合流確認】キー切り替え直前のローカル状態のスナップショット。メモリ内のみで保持し、
+// キーがさらに切り替わったら無効化する（古い単語を別のキーへ送らないため）。
+let pendingSyncMergeOffer = null;
+
+function hideSyncMergeOffer() {
+  pendingSyncMergeOffer = null;
+  if (elements.syncMergeBanner) elements.syncMergeBanner.hidden = true;
+}
+
+function showSyncMergeOffer(offer) {
+  if (!elements.syncMergeBanner || !offer || !offer.snapshot) return;
+  pendingSyncMergeOffer = offer;
+  if (elements.syncMergeCount) elements.syncMergeCount.textContent = String(offer.wordCount);
+  if (elements.syncMergeAcceptButton) {
+    // armDangerButton は使わない（合流は追加のみで破壊的でなく、バナー自体が明示確認のため）。
+    // ラベルに語数を出して、何が合流されるのかをその場で分かるようにする。
+    elements.syncMergeAcceptButton.textContent = `この端末にあった${offer.wordCount}語を合流させる`;
+  }
+  elements.syncMergeBanner.hidden = false;
+}
+
+// 「合流させる」を選んだときだけ実行：切り替え前のスナップショットを現在の状態へマージし、
+// 保存してサーバーへも送信する（両端末の単語がひとつにまとまる）。
+async function acceptSyncMergeOffer() {
+  const offer = pendingSyncMergeOffer;
+  hideSyncMergeOffer();
+  // キーや世代がさらに切り替わっていたら、古いスナップショットを別のキーへ送らない
+  if (!offer || offer.forId !== syncState.id || offer.gen !== syncState.requestGen) {
+    setSyncStatus("キーが切り替わったため、合流を中止しました。", "error");
+    return;
+  }
+  try {
+    const before = stateSignature(appState);
+    const merged = mergeAppStates(appState, offer.snapshot);
+    if (stateSignature(merged) === before) {
+      setSyncStatus("✓ 合流の必要はありませんでした（すでに同じ内容です）。", "live");
+      return;
+    }
+    setSyncStatus(`この端末にあった${offer.wordCount}語を合流させています…`);
+    appState = merged;
+    selectedIds.clear();
+    persistAppState();
+    renderAll();
+    // persistAppState が予約した遅延pushを取り消し、即時に送信する（二重PUT防止）
+    window.clearTimeout(syncState.pushTimer);
+    syncState.pushTimer = 0;
+    await pushWordsnapState({ force: true });
+    if (!syncState.errored) {
+      setSyncStatus(`✓ この端末にあった${offer.wordCount}語を合流させました（現在${appState.words.length}語）。`, "live");
+    }
+  } catch (error) {
+    if (isStaleSyncError(error)) return; // キー切替で破棄された送信は静かに譲る
+    setSyncStatus((error && error.message) || "合流に失敗しました。", "error");
+  }
+}
+
+// 貼り付け入力から個人キーを取り出す。キー単体（ws_…）でも、?w=KEY 付きのフルURLでも、
+// 「w=KEY」だけの断片でも受け付ける。読み取れなければ空文字を返す（呼び出し側でエラー表示）。
+function extractSyncIdFromJoinInput(rawValue) {
+  // #以降（URLのハッシュ）はキーに混入させない（例: …?w=KEY#top の「top」）
+  const text = String(rawValue || "").trim().split("#")[0];
+  if (!text) return "";
+  try {
+    const queryIndex = text.indexOf("?");
+    const queryPart = queryIndex >= 0 ? text.slice(queryIndex + 1) : text.includes("=") ? text : "";
+    if (queryPart) {
+      const params = new URLSearchParams(queryPart);
+      return cleanSyncId(params.get("w") || params.get("wordsnap") || params.get("syncId"));
+    }
+    // 「?」の無いURLらしき入力（https://… 等）にはキーが含まれていない。
+    // cleanSyncId に通すと別物のキーに化けてしまうため、ここで拒否する。
+    if (text.includes("://")) return "";
+    return cleanSyncId(text);
+  } catch {
+    return "";
   }
 }
 
@@ -6784,6 +6988,53 @@ function initWordsnapSync() {
   elements.syncPullButton?.addEventListener("click", () => pullWordsnapState());
   elements.syncForcePushButton?.addEventListener("click", () => forcePushOverwrite());
   elements.syncForcePullButton?.addEventListener("click", () => forcePullReplace());
+  // 【別の端末と同じキーで同期】貼り付けたキー/リンクへ、URLバナーと同じ安全経路
+  // （adoptForeignSyncId：push無しでpull→本人が選んだときだけ合流）で切り替える。
+  elements.syncJoinButton?.addEventListener("click", () => {
+    const id = extractSyncIdFromJoinInput(elements.syncJoinInput?.value);
+    if (!id) {
+      setSyncStatus("キーを読み取れませんでした。個人キー（英数字・ハイフン・アンダーバー）か、?w= 付きの個人リンクを貼り付けてください。", "error");
+      return;
+    }
+    if (id === syncState.id) {
+      setSyncStatus("すでにこのキーで同期しています。切り替えは不要です。");
+      return;
+    }
+    if (!syncServerAvailable()) {
+      setSyncStatus("同期には https のリンクから開く必要があります。file:// では端末間同期できません。", "error");
+      return;
+    }
+    // 表示が丸ごと切り替わる操作なので、URLバナー側と同じ2段階確認にする
+    if (!armDangerButton(elements.syncJoinButton, "もう一度押すと切り替え")) {
+      setSyncStatus(
+        "この端末の表示を、貼り付けたキーのデータに切り替えます（この端末の単語は送信されません。切り替え後に合流するか選べます）。よければもう一度押してください（4秒で取り消し）。",
+      );
+      return;
+    }
+    if (elements.syncJoinInput) elements.syncJoinInput.value = "";
+    adoptForeignSyncId(id);
+  });
+  // 入力を書き換えたら2段階確認を解除する（前の入力への「確定」が別のキーに効かないように）
+  elements.syncJoinInput?.addEventListener("input", () => {
+    const button = elements.syncJoinButton;
+    if (button && button.dataset.armed === "1") {
+      window.clearTimeout(Number(button.dataset.armTimer || 0));
+      delete button.dataset.armed;
+      button.textContent = button.dataset.originalLabel || button.textContent;
+    }
+  });
+  elements.syncJoinInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      elements.syncJoinButton?.click();
+    }
+  });
+  // 【キー切り替え後の合流確認バナー】選んだときだけ合流。放置・リロードは「合流しない」扱い
+  elements.syncMergeAcceptButton?.addEventListener("click", () => acceptSyncMergeOffer());
+  elements.syncMergeDeclineButton?.addEventListener("click", () => {
+    hideSyncMergeOffer();
+    setSyncStatus("合流せず、サーバーの内容のまま使います（切り替え前の単語は送信していません）。");
+  });
   elements.syncCopyLinkButton?.addEventListener("click", async () => {
     rememberSyncIdInUrl(syncState.id);
     try {
