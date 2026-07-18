@@ -2418,31 +2418,6 @@ textarea:focus-visible {
   padding: 4px 0 2px;
 }
 
-.word-number-jump {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 0.85rem;
-  font-weight: 700;
-}
-
-.word-number-jump input {
-  width: 5.3rem;
-  padding: 0.45rem 0.5rem;
-  color: var(--ink);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  font-size: 16px;
-  text-align: center;
-}
-
-.word-number-jump button {
-  padding: 0.45rem 0.7rem;
-}
-
 /* ---------- 保存した単語の検索 ---------- */
 .word-search {
   position: relative;
@@ -2761,11 +2736,6 @@ textarea:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
-}
-
-.saved-item.is-jump-target {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-md);
 }
 
 .saved-row {
@@ -3319,10 +3289,7 @@ textarea:focus-visible {
 }
 
 .choice-button {
-  display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr);
-  gap: 0.65rem;
-  align-items: start;
+  gap: 0;
   padding: 0.9rem 1rem;
   color: #fff;
   text-align: left;
@@ -3340,6 +3307,7 @@ textarea:focus-visible {
   justify-content: center;
   width: 1.5rem;
   height: 1.5rem;
+  margin-right: 0.65rem;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.2);
   font-size: 0.78rem;
@@ -3347,10 +3315,7 @@ textarea:focus-visible {
 }
 
 .choice-text {
-  min-width: 0;
-  line-break: strict;
-  overflow-wrap: anywhere;
-  word-break: normal;
+  flex: 1;
 }
 
 /* 範囲クイズ・総復習を完走したときの結果表示（クイズカード内の専用サマリ） */
@@ -3579,7 +3544,7 @@ textarea:focus-visible {
 
   /* 並び替えと「★お気に入りだけ」を折り返さず1行に並べる */
   .list-tools {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 0.45rem;
   }
 
@@ -3603,11 +3568,6 @@ textarea:focus-visible {
     padding: 0.4rem 0.6rem;
     font-size: 0.78rem;
     white-space: nowrap;
-  }
-
-  .word-number-jump {
-    width: 100%;
-    margin-left: 0;
   }
 
   /* クイズカードを縦に詰めてスクロール量を減らす（スマホ） */
@@ -4120,7 +4080,6 @@ accurate 正確な"
           </div>
           <div class="pill-group">
             <span id="quizScope" class="pill subtle">出題: すべて</span>
-            <span id="quizLearningProgress" class="pill subtle">習得済み 0 / 復習中 0 / 未着手 0</span>
             <span id="quizProgress" class="pill subtle" hidden></span>
             <span id="accuracy" class="pill">正答率 0%</span>
           </div>
@@ -4137,19 +4096,6 @@ accurate 正確な"
               <span>単語帳</span>
               <select id="quizDeckSelect"></select>
             </label>
-            <label class="quiz-setup-field">
-              <span>CEFR</span>
-              <select id="quizCefrSelect">
-                <option value="all">すべて</option>
-                <option value="A1">A1</option>
-                <option value="A2">A2</option>
-                <option value="B1">B1</option>
-                <option value="B2">B2</option>
-                <option value="C1">C1</option>
-                <option value="C2">C2</option>
-                <option value="unknown">未判定</option>
-              </select>
-            </label>
             <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false">範囲</button>
             <label class="quiz-setup-check">
               <input id="quizShuffle" type="checkbox" checked />
@@ -4164,13 +4110,12 @@ accurate 正確な"
             <span aria-hidden="true">〜</span>
             <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
             <span class="quiz-range-hint">空欄なら全部</span>
-            <span class="quiz-range-hint quiz-range-note">※番号は選択した単語帳・CEFR条件での追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
+            <span class="quiz-range-hint quiz-range-note">※番号は単語帳の追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
           </div>
           <!-- 2つの開始ボタンの違いが分かりにくいという指摘への補足（文言のみ・挙動は不変） -->
           <p class="settings-desc quiz-setup-hint">
             「この設定で出題」＝上の単語帳・範囲を<strong>1周だけ</strong>出題（習得済みも含む）。
             「クイズを始める（おまかせ）」＝覚えていない単語を自動で選んで<strong>エンドレス</strong>に出題。
-            「苦手だけ」＝誤答歴があり正答率80%未満の単語、「復習対象」＝今すぐ復習できる単語だけを1周。
           </p>
         </div>
 
@@ -4184,9 +4129,8 @@ accurate 正確な"
 
         <div class="actions">
           <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
-          <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
-          <button id="generalReviewButton" class="secondary" type="button">復習対象を解く（0語）</button>
+          <button id="generalReviewButton" class="secondary" type="button">総復習</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
           <button id="exitQuizButton" class="ghost" type="button" hidden>クイズをやめる</button>
           <span class="kbd-hint">キー 1–4＝解答 / N＝次へ / 0＝わからない</span>
@@ -4279,25 +4223,7 @@ accurate 正確な"
               <option value="wrong">間違えた回数が多い順</option>
             </select>
           </label>
-          <label class="sort-field">
-            CEFR
-            <select id="libraryCefrSelect" aria-label="CEFRレベルで単語一覧を絞り込み">
-              <option value="all">すべて</option>
-              <option value="A1">A1</option>
-              <option value="A2">A2</option>
-              <option value="B1">B1</option>
-              <option value="B2">B2</option>
-              <option value="C1">C1</option>
-              <option value="C2">C2</option>
-              <option value="unknown">未判定</option>
-            </select>
-          </label>
           <button id="favoriteFilterButton" class="favorite-filter" type="button" aria-pressed="false">★ お気に入りだけ</button>
-          <div class="word-number-jump">
-            <label for="savedNumberJump">番号へ</label>
-            <input id="savedNumberJump" type="number" min="1" inputmode="numeric" placeholder="例 9900" aria-label="表示する単語番号" />
-            <button id="savedNumberJumpButton" class="ghost mini" type="button">移動</button>
-          </div>
         </div>
         <div id="trashPanel" class="trash-panel" hidden>
           <div class="trash-panel-heading">
@@ -5060,9 +4986,6 @@ const elements = {
   wordSearchInput: document.querySelector("#wordSearchInput"),
   wordSearchClear: document.querySelector("#wordSearchClear"),
   wordSearchCount: document.querySelector("#wordSearchCount"),
-  libraryCefrSelect: document.querySelector("#libraryCefrSelect"),
-  savedNumberJump: document.querySelector("#savedNumberJump"),
-  savedNumberJumpButton: document.querySelector("#savedNumberJumpButton"),
   rangeSelectFrom: document.querySelector("#rangeSelectFrom"),
   rangeSelectTo: document.querySelector("#rangeSelectTo"),
   rangeSelectButton: document.querySelector("#rangeSelectButton"),
@@ -5074,7 +4997,6 @@ const elements = {
   deckBar: document.querySelector("#deckBar"),
   deckStats: document.querySelector("#deckStats"),
   quizScope: document.querySelector("#quizScope"),
-  quizLearningProgress: document.querySelector("#quizLearningProgress"),
   quizProgress: document.querySelector("#quizProgress"),
   quizProgressTrack: document.querySelector("#quizProgressTrack"),
   quizProgressFill: document.querySelector("#quizProgressFill"),
@@ -5086,13 +5008,11 @@ const elements = {
   choices: document.querySelector("#choices"),
   quizFeedback: document.querySelector("#quizFeedback"),
   startQuizButton: document.querySelector("#startQuizButton"),
-  difficultQuizButton: document.querySelector("#difficultQuizButton"),
   nextQuizButton: document.querySelector("#nextQuizButton"),
   dontKnowButton: document.querySelector("#dontKnowButton"),
   generalReviewButton: document.querySelector("#generalReviewButton"),
   exitReviewButton: document.querySelector("#exitReviewButton"),
   quizDeckSelect: document.querySelector("#quizDeckSelect"),
-  quizCefrSelect: document.querySelector("#quizCefrSelect"),
   quizRangeToggle: document.querySelector("#quizRangeToggle"),
   quizRangeRow: document.querySelector("#quizRangeRow"),
   quizRangeFrom: document.querySelector("#quizRangeFrom"),
@@ -5194,8 +5114,6 @@ const dirtyPanels = new Set();
 const SAVED_LIST_PAGE_SIZE = 100;
 // 案2: 現在DOM化する上限件数（検索・並び替え・フィルタ・単語帳が変わると先頭に戻す）
 let savedListVisibleCount = SAVED_LIST_PAGE_SIZE;
-// 番号ジャンプ時に表示する100件窓の先頭（0始まり）。通常は0で「さらに表示」を維持する。
-let savedListWindowStart = 0;
 // 案2: ページングを先頭に戻すべきか判定するための「表示条件」の合成キー
 let savedListSignature = null;
 // 案3: Libraryの表示条件・ページ・表示状態が変わるたびに世代を進める。
@@ -5692,8 +5610,6 @@ let wordSearchQuery = "";
 let wordSortMode = "added";
 // お気に入り（★）だけを表示するかどうか
 let favoritesOnly = false;
-// 一覧用CEFRフィルタ。保存データには含めず、この画面を開いている間だけ保持する。
-let libraryCefrLevel = "all";
 let currentQuiz = null;
 let reviewSession = null;
 // 範囲クイズ・総復習を完走した直後の結果表示用データ（次のクイズを始めると消える）
@@ -7453,43 +7369,8 @@ function renderSaveDeckSelect() {
   elements.saveDeckSelect.innerHTML = deckOptionsMarkup(preferred);
 }
 
-function learningBuckets(words) {
-  return words.reduce(
-    (counts, word) => {
-      const status = word.learning?.status;
-      if (status === "mastered") counts.mastered += 1;
-      else if (
-        word.stats.correct + word.stats.wrong === 0 &&
-        !word.learning?.firstAttempted
-      ) counts.new += 1;
-      else counts.review += 1;
-      return counts;
-    },
-    { mastered: 0, review: 0, new: 0 },
-  );
-}
-
-function cefrMatches(word, level) {
-  // 保存済み判定を優先し、メモリ内キャッシュがあればそれも利用する。絞り込みのために
-  // 全件を外部APIへ問い合わせることはしない（大きな単語帳でも即時に動く）。
-  const stored = word.cefr?.level || window.Cefr?.peek?.(word.term)?.level || null;
-  if (!level || level === "all") return true;
-  if (level === "unknown") return !stored;
-  return stored === level;
-}
-
 function renderQuizScope() {
-  if (!elements.quizScope) return;
-  const deckId = elements.quizDeckSelect?.value || "all";
-  const deckLabel = deckId === "all" ? "すべて" : deckName(deckId);
-  const cefr = elements.quizCefrSelect?.value || "all";
-  elements.quizScope.textContent = `出題: ${deckLabel}${cefr === "all" ? "" : ` / CEFR ${cefr === "unknown" ? "未判定" : cefr}`}`;
-}
-
-function renderQuizLearningProgress() {
-  if (!elements.quizLearningProgress) return;
-  const counts = learningBuckets(quizSelectedDeckWords());
-  elements.quizLearningProgress.textContent = `習得済み ${counts.mastered} / 復習中 ${counts.review} / 未着手 ${counts.new}`;
+  if (elements.quizScope) elements.quizScope.textContent = `出題: ${activeDeckLabel()}`;
 }
 
 function renderDeckStats() {
@@ -7504,13 +7385,26 @@ function renderDeckStats() {
   }
   elements.deckStats.hidden = false;
 
-  const buckets = learningBuckets(words);
-  const masteredRate = Math.round((buckets.mastered / total) * 100);
+  let correct = 0;
+  let wrong = 0;
+  const buckets = { c3: 0, c2: 0, c1: 0, c0: 0 };
+  for (const word of words) {
+    correct += word.stats.correct;
+    wrong += word.stats.wrong;
+    const c = word.stats.correct;
+    if (c >= 3) buckets.c3 += 1;
+    else if (c === 2) buckets.c2 += 1;
+    else if (c === 1) buckets.c1 += 1;
+    else buckets.c0 += 1;
+  }
+  const attempts = correct + wrong;
+  const rate = attempts === 0 ? null : Math.round((correct / attempts) * 100);
 
   const segs = [
-    { label: "習得済み", color: "#16a34a", count: buckets.mastered },
-    { label: "復習中", color: "#f59e0b", count: buckets.review },
-    { label: "未着手", color: "#94a3b8", count: buckets.new },
+    { label: "3回以上正解", color: "#16a34a", count: buckets.c3 },
+    { label: "2回正解", color: "#22c55e", count: buckets.c2 },
+    { label: "1回正解", color: "#f59e0b", count: buckets.c1 },
+    { label: "0回正解", color: "#94a3b8", count: buckets.c0 },
   ];
 
   let acc = 0;
@@ -7526,7 +7420,7 @@ function renderDeckStats() {
     ? `conic-gradient(${stops.join(", ")})`
     : "conic-gradient(var(--surface-3) 0 100%)";
 
-  const ariaLabel = `${activeDeckLabel()}の学習進捗。習得済み${buckets.mastered}語、復習中${buckets.review}語、未着手${buckets.new}語。`;
+  const ariaLabel = `${activeDeckLabel()}の正答率${rate == null ? "未挑戦" : rate + "%"}。3回以上正解${buckets.c3}語、2回正解${buckets.c2}語、1回正解${buckets.c1}語、0回正解${buckets.c0}語。`;
 
   // 再描画のたびに開閉状態が消えないよう、既存の open 状態を引き継ぐ（初回はデフォルトで閉じておく）
   const wasOpen = elements.deckStats.querySelector("details.deck-stats-card")?.open || false;
@@ -7534,14 +7428,14 @@ function renderDeckStats() {
   elements.deckStats.innerHTML = `
     <details class="deck-stats-card"${wasOpen ? " open" : ""}>
       <summary class="deck-stats-summary">
-        <span class="donut-rate-mini">習得 ${buckets.mastered}/${total}</span>
-        <span class="donut-title-mini">復習中 ${buckets.review} / 未着手 ${buckets.new}</span>
+        <span class="donut-rate-mini">正答率 ${rate == null ? "—" : rate + "%"}</span>
+        <span class="donut-title-mini">${escapeHtml(activeDeckLabel())} の内訳（${total}語）</span>
       </summary>
       <div class="deck-stats-body">
         <div class="donut" role="img" aria-label="${escapeHtml(ariaLabel)}" style="background:${gradient}">
           <div class="donut-hole">
-            <span class="donut-rate">${masteredRate}%</span>
-            <span class="donut-rate-label">習得済み</span>
+            <span class="donut-rate">${rate == null ? "—" : rate + "%"}</span>
+            <span class="donut-rate-label">正答率</span>
           </div>
         </div>
         <div class="donut-legend">
@@ -7563,7 +7457,6 @@ function renderDecks() {
   renderDeckBar();
   renderSaveDeckSelect();
   renderQuizScope();
-  renderQuizLearningProgress();
   renderDeckStats();
 }
 
@@ -8765,9 +8658,6 @@ function visibleSavedWords() {
   const needle = wordSearchQuery.trim().toLowerCase();
   let words = scopedWords();
   if (favoritesOnly) words = words.filter((word) => word.favorite);
-  if (libraryCefrLevel !== "all") {
-    words = words.filter((word) => cefrMatches(word, libraryCefrLevel));
-  }
   if (needle) words = words.filter((word) => wordMatchesQuery(word, needle));
   return sortWordsForList(words);
 }
@@ -8793,17 +8683,10 @@ function renderSavedWords() {
 
   // 案2: 表示条件（単語帳・並び替え・お気に入り・検索語）が変わったらページングを
   // 先頭に戻す。同期反映などで条件が変わらない再描画では表示済み件数を維持する。
-  const signature = JSON.stringify([
-    appState.activeDeckId,
-    wordSortMode,
-    favoritesOnly,
-    libraryCefrLevel,
-    needle,
-  ]);
+  const signature = JSON.stringify([appState.activeDeckId, wordSortMode, favoritesOnly, needle]);
   if (signature !== savedListSignature) {
     savedListSignature = signature;
     savedListVisibleCount = SAVED_LIST_PAGE_SIZE;
-    savedListWindowStart = 0;
   }
 
   // 検索ボックスの状態（クリアボタン・件数）を更新
@@ -8811,9 +8694,6 @@ function renderSavedWords() {
   if (elements.wordSearchCount) {
     elements.wordSearchCount.hidden = !needle;
     if (needle) elements.wordSearchCount.textContent = `${words.length}件`;
-  }
-  if (elements.savedNumberJump) {
-    elements.savedNumberJump.max = String(Math.max(1, words.length));
   }
 
   if (words.length === 0) {
@@ -8829,23 +8709,13 @@ function renderSavedWords() {
     return;
   }
 
-  // ジャンプ先のページで削除・同期が起きて総件数が減った場合は、空白ページを残さず
-  // 最後に存在するページへ戻す。
-  if (savedListWindowStart >= words.length) {
-    savedListWindowStart = Math.floor((words.length - 1) / SAVED_LIST_PAGE_SIZE) * SAVED_LIST_PAGE_SIZE;
-  }
-  savedListVisibleCount = Math.min(
-    words.length,
-    Math.max(savedListVisibleCount, savedListWindowStart + SAVED_LIST_PAGE_SIZE),
-  );
-
   elements.savedList.className = "word-list";
   elements.savedList.innerHTML = "";
   // 案2: 先頭から一定件数だけDOM化する。番号（saved-index）や範囲選択の番号は
   // visibleSavedWords() 全体の1始まり通し番号のままなので、ページングでずれない。
-  const shownWords = words.slice(savedListWindowStart, savedListVisibleCount);
-  appendSavedWordRows(shownWords, savedListWindowStart);
-  updateSavedListMore(words.length, savedListVisibleCount);
+  const shownWords = words.slice(0, savedListVisibleCount);
+  appendSavedWordRows(shownWords, 0);
+  updateSavedListMore(words.length, shownWords.length);
 
   renderSelection();
   scheduleLibraryMetadataBackfill();
@@ -8861,7 +8731,6 @@ function appendSavedWordRows(words, startIndex) {
     const row = document.createElement("div");
     row.className = "saved-item";
     row.dataset.wordId = word.id;
-    row.dataset.savedIndex = String(index + 1);
     const safeTerm = escapeHtml(word.term);
     row.innerHTML = `
       <div class="saved-row">
@@ -8916,8 +8785,7 @@ function updateSavedListMore(total, shown) {
 
 function appendNextSavedWordsPage() {
   const words = visibleSavedWords();
-  const start =
-    savedListWindowStart + elements.savedList.querySelectorAll(".saved-item[data-word-id]").length;
+  const start = elements.savedList.querySelectorAll(".saved-item[data-word-id]").length;
   if (start >= words.length) return;
   invalidateLibraryMetadataWork();
   const end = Math.min(words.length, start + SAVED_LIST_PAGE_SIZE);
@@ -8930,31 +8798,6 @@ function appendNextSavedWordsPage() {
   // 押した「さらに表示」の代わりに、同じ役割の次ボタンへフォーカスを引き継ぐ。
   // 最終ページでは新しい行の末尾にフォーカスを強制せず、読み位置とスクロールを維持する。
   nextButton?.focus({ preventScroll: true });
-}
-
-// 指定番号を含む100件だけを描画する。#9900でも先頭から9900行をDOM化しないため、
-// 大きな単語帳で「さらに表示」を何十回も押す必要も、巨大な再描画もない。
-function jumpToSavedWordNumber() {
-  const words = visibleSavedWords();
-  const total = words.length;
-  const requested = parseInt(elements.savedNumberJump?.value, 10);
-  if (total === 0) {
-    setStatus("表示できる単語がありません。");
-    return;
-  }
-  if (!Number.isFinite(requested) || requested < 1 || requested > total) {
-    setStatus(`1〜${total}の番号を入力してください。`);
-    elements.savedNumberJump?.focus();
-    return;
-  }
-  savedListWindowStart = Math.floor((requested - 1) / SAVED_LIST_PAGE_SIZE) * SAVED_LIST_PAGE_SIZE;
-  savedListVisibleCount = Math.min(total, savedListWindowStart + SAVED_LIST_PAGE_SIZE);
-  renderSavedWords();
-  const row = elements.savedList.querySelector(`[data-saved-index="${requested}"]`);
-  row?.scrollIntoView({ behavior: "smooth", block: "center" });
-  row?.classList.add("is-jump-target");
-  window.setTimeout(() => row?.classList.remove("is-jump-target"), 1200);
-  setStatus(`${requested}番を表示しました（${savedListWindowStart + 1}〜${savedListVisibleCount}番）。`);
 }
 
 function formatTrashTime(ts) {
@@ -9124,16 +8967,13 @@ function updateSavedWordRow(word) {
 function learningLabel(word) {
   // データ値の "mastered" 自体は変更しない（同期・既存データが壊れるため）。表示文字列のみ日本語化。
   if (word.learning.status === "mastered") return "習得済み";
-  if (
-    word.stats.correct + word.stats.wrong === 0 &&
-    !word.learning.firstAttempted
-  ) return "未着手";
   if (word.learning.status === "review") {
     const remaining = Math.max(0, word.learning.reviewAt - appState.quizCounter);
-    return remaining === 0 ? "復習中（出題待ち）" : `復習中（あと${remaining}問）`;
+    return remaining === 0 ? "復習出題待ち" : `あと${remaining}問後に復習`;
   }
-  // 出題歴がある旧データで status が new のままでも、3分類では「復習中」に統一する。
-  return "復習中";
+  // 「未出題」は本当に出題回数0のときだけ。出題歴があるのに status が "new" のままの
+  // 旧データ（復習セッションで解答した場合など）は「学習中」と表示して矛盾を避ける
+  return word.stats.correct + word.stats.wrong > 0 ? "学習中" : "未出題";
 }
 
 // クイズカード上部のピル／細い進捗バーを最新状態に合わせる。
@@ -9169,19 +9009,10 @@ function renderQuizProgress() {
 function renderQuiz() {
   renderAccuracy();
   renderQuizProgress();
-  renderQuizScope();
-  renderQuizLearningProgress();
   updateResumeButton();
 
   if (elements.generalReviewButton) {
-    const count = eligibleReviewWords().length;
-    elements.generalReviewButton.textContent = `復習対象を解く（${count}語）`;
-    elements.generalReviewButton.disabled = count === 0;
-  }
-  if (elements.difficultQuizButton) {
-    const count = difficultQuizWords().length;
-    elements.difficultQuizButton.textContent = `苦手だけ解く（${count}語）`;
-    elements.difficultQuizButton.disabled = count === 0;
+    elements.generalReviewButton.disabled = appState.words.length === 0;
   }
 
   if (reviewSession) {
@@ -9189,6 +9020,8 @@ function renderQuiz() {
     updateQuizControls();
     return;
   }
+
+  renderQuizScope();
 
   // 復習セッション完走直後は、通常クイズ中(quizStarted=true)かどうかに関わらず
   // 専用の結果表示（正解数・間違えた単語・再挑戦導線）を最優先で出す。
@@ -9249,14 +9082,14 @@ function renderQuizIntro() {
   elements.quizFeedback.textContent =
     availableQuizWords().length > 0
       ? "下の「クイズを始める（おまかせ）」を押すと、保存した単語の意味クイズが始まります。"
-      : "通常出題できる単語がありません。CEFRや単語帳の条件を変えるか、一覧から選んで復習できます。";
+      : "通常出題できる単語がありません。「総復習」か、一覧から選んで「選択した単語を解く」で復習できます。";
 }
 
 function renderQuizEmpty() {
   elements.choices.innerHTML = "";
   elements.quizWord.textContent = "今出せる問題はありません";
   elements.quizFeedback.textContent =
-    "2回連続で正解した単語は習得済みとして保存され、通常クイズからは外れています。復習対象ができるまで待つか、一覧から選んで復習できます。";
+    "2回連続で正解した単語は習得済みとして保存され、通常クイズからは外れています。「総復習」や「選択した単語を解く」で復習できます。";
 }
 
 function updateQuizControls() {
@@ -9276,8 +9109,6 @@ function updateQuizControls() {
   // 出題中はクイズ設定欄を隠して、問題と選択肢を上に表示する
   if (elements.quizSetup) elements.quizSetup.hidden = quizActive || showingResult;
   elements.startQuizButton.hidden = quizActive || showingResult;
-  if (elements.difficultQuizButton) elements.difficultQuizButton.hidden = quizActive || showingResult;
-  if (elements.generalReviewButton) elements.generalReviewButton.hidden = quizActive || showingResult;
   elements.nextQuizButton.hidden = !quizActive || showingResult;
   elements.dontKnowButton.hidden = !questionActive || showingResult;
   elements.exitReviewButton.hidden = !inReview;
@@ -9287,7 +9118,7 @@ function updateQuizControls() {
 }
 
 function renderAccuracy() {
-  const totals = quizSelectedDeckWords().reduce(
+  const totals = scopedWords().reduce(
     (sum, word) => {
       sum.correct += word.stats.correct;
       sum.wrong += word.stats.wrong;
@@ -9449,40 +9280,13 @@ function startReview(ids, options = {}) {
 }
 
 // 全単語を定着度スコアの低い順（未出題=最優先）で出題する。
-function eligibleReviewWords(words = quizSelectedDeckWords()) {
-  const now = Date.now();
-  return words.filter(
-    (word) =>
-      word.learning.status === "review" &&
-      (word.learning.reviewAt <= appState.quizCounter ||
-        (word.learning.blockedUntil > 0 && word.learning.blockedUntil <= now)),
-  );
-}
-
-// 一度でも誤答し、かつ正答率80%未満の語だけを既存の定着度順で復習する。
-// 未出題語は含めないため、「苦手だけ」という表示と実際の対象が一致する。
-function difficultQuizWords(words = quizSelectedDeckWords()) {
-  return words.filter((word) => word.stats.wrong > 0 && wordAccuracy(word) < 0.8);
-}
-
-function startDifficultQuiz() {
-  const words = difficultQuizWords();
-  if (words.length === 0) {
-    setStatus("この条件には苦手な単語がありません。");
-    return;
-  }
-  startReview(words.map((word) => word.id), { order: "priority", label: "苦手復習" });
-}
-
-// 現行の問数ベース判定で「今すぐ復習できる review 語」だけを1周する。
-// 日付ベースSRSではないため、日単位の期日を示す表記はしない。
 function startGeneralReview() {
-  const words = eligibleReviewWords();
-  if (words.length === 0) {
-    setStatus("この条件には今すぐ解ける復習対象がありません。");
+  if (appState.words.length === 0) {
+    setStatus("保存した単語がありません。");
     return;
   }
-  startReview(words.map((word) => word.id), { order: "priority", label: "復習対象" });
+  const ids = appState.words.map((word) => word.id);
+  startReview(ids, { order: "priority", label: "総復習" });
 }
 
 // クイズの「出題する単語帳」プルダウンを最新の単語帳で作り直す（選択は保持）。
@@ -9502,15 +9306,13 @@ function populateQuizDeckSelect() {
 // クイズ設定で選ばれている単語帳の単語（保存順＝ライブラリの番号と同じ並び）
 function quizSelectedDeckWords() {
   const id = elements.quizDeckSelect ? elements.quizDeckSelect.value : "all";
-  const cefr = elements.quizCefrSelect?.value || "all";
-  const words = id === "all" ? appState.words : appState.words.filter((word) => word.deckId === id);
-  return words.filter((word) => cefrMatches(word, cefr));
+  return id === "all" ? appState.words : appState.words.filter((word) => word.deckId === id);
 }
 
 function updateQuizDeckCount() {
   if (!elements.quizDeckCount) return;
   const n = quizSelectedDeckWords().length;
-  elements.quizDeckCount.textContent = n ? `出題対象: ${n}語` : "対象なし";
+  elements.quizDeckCount.textContent = n ? `この単語帳: ${n}語` : "単語なし";
 }
 
 // 選んだ単語帳・番号の範囲でクイズ（出題セッション）を開始する
@@ -9766,7 +9568,7 @@ function buildQuiz() {
     lastAnswerId && words.length > 1 ? words.filter((word) => word.id !== lastAnswerId) : words;
   const answer = chooseNextWord(candidates);
   if (!answer) return null;
-  const pool = quizSelectedDeckWords().filter((word) => word.id !== answer.id);
+  const pool = scopedWords().filter((word) => word.id !== answer.id);
   const basePool = pool.length >= 3 ? pool : appState.words.filter((word) => word.id !== answer.id);
   const distractors = pickDistractors(basePool, answer, 3);
   const choices = shuffle([answer, ...distractors]);
@@ -9777,12 +9579,18 @@ function buildQuiz() {
 }
 
 function availableQuizWords() {
-  const scoped = quizSelectedDeckWords();
+  const now = Date.now();
+  const scoped = scopedWords();
   // 誤答した単語は「◯問後に復習」(reviewAt) と「5分経過」(blockedUntil) の早い方で出題対象に戻る。
   // 5分ルールはcounterが進まないまま放置された時の保険であり、通常は◯問後の条件が先に成立する。
   // blockedUntil は誤答時にのみセットされる。未設定(0)を「0 <= now で常に復習可」と
   // 扱うと、正解直後の review 単語が即座に最優先で戻り、同じ問題が2連続で出てしまう。
-  const dueReviews = eligibleReviewWords(scoped);
+  const dueReviews = scoped.filter(
+    (word) =>
+      word.learning.status === "review" &&
+      (word.learning.reviewAt <= appState.quizCounter ||
+        (word.learning.blockedUntil > 0 && word.learning.blockedUntil <= now)),
+  );
   if (dueReviews.length > 0) return dueReviews;
 
   const freshWords = scoped.filter((word) => word.learning.status === "new");
@@ -11119,7 +10927,6 @@ elements.nextQuizButton.addEventListener("click", () => {
 });
 
 elements.generalReviewButton.addEventListener("click", startGeneralReview);
-elements.difficultQuizButton?.addEventListener("click", startDifficultQuiz);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
 elements.resumeQuizButton?.addEventListener("click", resumeSavedReview);
@@ -11133,14 +10940,7 @@ elements.streakBadge?.addEventListener("click", () => {
     setStatus(`今日はまだ解いていません。1問解くと連続記録が続きます（現在${streak.count}日）。`);
   }
 });
-elements.quizDeckSelect?.addEventListener("change", () => {
-  updateQuizDeckCount();
-  renderQuiz();
-});
-elements.quizCefrSelect?.addEventListener("change", () => {
-  updateQuizDeckCount();
-  renderQuiz();
-});
+elements.quizDeckSelect?.addEventListener("change", updateQuizDeckCount);
 elements.quizRangeToggle?.addEventListener("click", () => {
   const show = elements.quizRangeRow.hidden;
   elements.quizRangeRow.hidden = !show;
@@ -11170,18 +10970,6 @@ elements.wordSearchClear?.addEventListener("click", () => {
 elements.wordSortSelect?.addEventListener("change", () => {
   wordSortMode = elements.wordSortSelect.value;
   renderSavedWords();
-});
-
-elements.libraryCefrSelect?.addEventListener("change", () => {
-  libraryCefrLevel = elements.libraryCefrSelect.value;
-  renderSavedWords();
-});
-
-elements.savedNumberJumpButton?.addEventListener("click", jumpToSavedWordNumber);
-elements.savedNumberJump?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") return;
-  event.preventDefault();
-  jumpToSavedWordNumber();
 });
 
 // お気に入り（★）だけ表示の切り替え
