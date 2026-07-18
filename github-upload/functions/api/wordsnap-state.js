@@ -206,9 +206,12 @@ export async function onRequest(context) {
         Math.floor(Number(latest.state?.learningSchemaVersion) || 0),
       );
       if (storedLearningVersion >= 1) {
+        // 旧クライアントは data.error をそのまま同期ステータスに表示するため、
+        // 機械可読コードは code に分け、error は人間向けの日本語にする。
         return json(
           {
-            error: "downgrade_conflict",
+            error: "アプリが古いため保存できません。ページを開き直して最新版に更新してください。",
+            code: "downgrade_conflict",
             syncId,
             state: latest.state,
             stateRev: latest.rev,
