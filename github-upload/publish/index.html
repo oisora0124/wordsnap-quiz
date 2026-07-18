@@ -1108,7 +1108,6 @@ button.ghost.danger:hover {
   padding: 4px 16px 16px;
 }
 
-/* OCRの精度が低いことを伝える注意書き */
 .ocr-notice {
   margin: 6px 0 14px;
   padding: 12px 14px;
@@ -1118,6 +1117,31 @@ button.ghost.danger:hover {
   color: var(--ink);
   font-size: 0.86rem;
   line-height: 1.7;
+}
+
+.ocr-options {
+  align-items: center;
+}
+
+.ocr-layout-pick {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.ocr-layout-pick select {
+  min-width: 7.5rem;
+}
+
+.ocr-local-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
 }
 
 .ocr-notice strong {
@@ -2418,6 +2442,31 @@ textarea:focus-visible {
   padding: 4px 0 2px;
 }
 
+.word-number-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.word-number-jump input {
+  width: 5.3rem;
+  padding: 0.45rem 0.5rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 16px;
+  text-align: center;
+}
+
+.word-number-jump button {
+  padding: 0.45rem 0.7rem;
+}
+
 /* ---------- 保存した単語の検索 ---------- */
 .word-search {
   position: relative;
@@ -2738,18 +2787,25 @@ textarea:focus-visible {
   transform: translateY(-1px);
 }
 
+.saved-item.is-jump-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-md);
+}
+
 .saved-row {
   display: grid;
-  grid-template-columns: minmax(150px, 0.6fr) minmax(0, 1fr) minmax(170px, 0.7fr) auto;
-  gap: 14px;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1fr) minmax(180px, 0.75fr) auto;
+  grid-template-areas: "head meaning meta actions";
+  gap: 8px 12px;
   align-items: center;
-  padding: 14px;
+  padding: 10px 12px;
 }
 
 .saved-head {
+  grid-area: head;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem;
+  gap: 0.35rem;
   align-items: center;
 }
 
@@ -2871,37 +2927,51 @@ textarea:focus-visible {
 }
 
 .saved-meaning {
+  grid-area: meaning;
   color: var(--ink);
+  line-height: 1.4;
 }
 
 .saved-meta {
-  display: grid;
-  gap: 8px;
-  justify-items: start;
+  grid-area: meta;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
 }
 
 .saved-meta small {
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.saved-meta .history-empty {
+  display: none;
 }
 
 .saved-actions {
+  grid-area: actions;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
   justify-content: flex-end;
+}
+
+.saved-actions .mini-button {
+  padding: 0.45rem 0.68rem;
 }
 
 /* ---------- Saved detail / enrichment ---------- */
 
 .saved-detail {
-  padding: 4px 16px 16px;
+  padding: 2px 12px 12px;
   border-top: 1px solid var(--line);
   animation: rise 220ms ease both;
 }
 
 .enrich-hint {
-  margin: 12px 0;
+  margin: 8px 0;
   color: var(--muted);
   font-size: 0.88rem;
 }
@@ -2909,11 +2979,11 @@ textarea:focus-visible {
 .enrich-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .enrich-chip {
-  padding: 0.5rem 0.9rem;
+  padding: 0.4rem 0.72rem;
   color: var(--ink);
   background: var(--surface-2);
   border: 1px solid var(--line);
@@ -2938,8 +3008,8 @@ textarea:focus-visible {
 
 .enrich-results {
   display: grid;
-  gap: 12px;
-  margin-top: 14px;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .enrich-results:empty {
@@ -2947,7 +3017,7 @@ textarea:focus-visible {
 }
 
 .enrich-section {
-  padding: 14px 16px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
@@ -3289,7 +3359,10 @@ textarea:focus-visible {
 }
 
 .choice-button {
-  gap: 0;
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: start;
   padding: 0.9rem 1rem;
   color: #fff;
   text-align: left;
@@ -3307,7 +3380,6 @@ textarea:focus-visible {
   justify-content: center;
   width: 1.5rem;
   height: 1.5rem;
-  margin-right: 0.65rem;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.2);
   font-size: 0.78rem;
@@ -3315,7 +3387,10 @@ textarea:focus-visible {
 }
 
 .choice-text {
-  flex: 1;
+  min-width: 0;
+  line-break: strict;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 /* 範囲クイズ・総復習を完走したときの結果表示（クイズカード内の専用サマリ） */
@@ -3472,8 +3547,7 @@ textarea:focus-visible {
   .sync-panel,
   .settings-grid,
   .word-row,
-  .candidate-row,
-  .saved-row {
+  .candidate-row {
     grid-template-columns: 1fr;
   }
 
@@ -3544,7 +3618,7 @@ textarea:focus-visible {
 
   /* 並び替えと「★お気に入りだけ」を折り返さず1行に並べる */
   .list-tools {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 0.45rem;
   }
 
@@ -3568,6 +3642,11 @@ textarea:focus-visible {
     padding: 0.4rem 0.6rem;
     font-size: 0.78rem;
     white-space: nowrap;
+  }
+
+  .word-number-jump {
+    width: 100%;
+    margin-left: 0;
   }
 
   /* クイズカードを縦に詰めてスクロール量を減らす（スマホ） */
@@ -3601,8 +3680,33 @@ textarea:focus-visible {
     margin: 8px 0 0;
   }
 
+  /* 保存済み単語は見出しを全幅にし、意味と操作を同じ段へ置いて高さを詰める。 */
+  .saved-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "head head"
+      "meaning actions"
+      "meta meta";
+    gap: 6px 8px;
+    padding: 9px 10px;
+  }
+
   .saved-actions {
-    justify-content: flex-start;
+    align-self: center;
+    flex-wrap: nowrap;
+  }
+
+  .saved-meta {
+    gap: 4px 8px;
+  }
+
+  .saved-meta .deck-move {
+    font-size: 0;
+  }
+
+  .saved-meta .deck-move select {
+    width: 6rem;
+    max-width: 6rem;
   }
 
   .selection-bar .secondary {
@@ -3955,13 +4059,13 @@ accurate 正確な"
 
         <div class="actions">
           <button id="parseButton" type="button">単語リストに変換</button>
-          <button id="sampleButton" class="ghost" type="button">サンプルを入れる</button>
+          <button id="sampleButton" class="ghost" type="button">大学受験上位60語</button>
           <label class="deck-pick">
             保存先
             <select id="saveDeckSelect" aria-label="保存先の単語帳"></select>
           </label>
         </div>
-        <p id="status" class="status" role="status">単語と訳をまとめて貼り付けてください（1行に「英単語 意味」）。写真からの読み取りは精度が低く非推奨です。</p>
+        <p id="status" class="status" role="status">単語と訳を貼り付けるか、写真を端末内OCRで読み取れます（1行に「英単語 意味」）。</p>
         <!-- 変換結果が「すべて保存済み」だったときだけ表示する導線。次の変換操作で自動的に消える。 -->
         <div id="importAllSavedActions" class="actions" hidden>
           <button id="importGoLibraryButton" class="secondary" type="button" data-goto-step="library">保存した単語を見る</button>
@@ -3969,18 +4073,18 @@ accurate 正確な"
         </div>
 
         <details class="ocr-details">
-          <summary><span class="summary-icon camera-icon" aria-hidden="true"></span>写真から読み取る（任意・OCR｜精度が低く非推奨）</summary>
+          <summary><span class="summary-icon camera-icon" aria-hidden="true"></span>写真から読み取る（無料・端末内OCR）</summary>
           <div class="ocr-body">
             <p class="ocr-notice">
-              ⚠️ 写真からの読み取り（OCR）は<strong>現状かなり精度が低く、実用的ではありません</strong>。
-              お手数ですが、<strong>単語と訳はご自分でまとめて</strong>、上の入力欄に貼り付けてください
+              <strong>端末内OCRは無料で、写真を外部サービスへ送信しません。</strong>
+              初回だけ文字認識データをダウンロードします。読み取り後は必ず候補を確認してください
               （1行に「英単語<span aria-hidden="true"> </span>意味」、例: <em>apple りんご</em>）。
             </p>
             <div class="import-grid">
               <label class="drop-zone" for="imageInput">
                 <input id="imageInput" type="file" accept="image/*" />
                 <span>英単語帳の写真を選ぶ</span>
-                <small>明るく平らで、文字が水平な画像ほど精度が上がります。例文の少ない部分を枠で囲むと精度が上がります。</small>
+                <small>ページを正面から明るく撮り、影・反射・指を避けて文字を水平にします。余白や例文を枠から外し、2段組なら下の「2列」を選んでください。</small>
               </label>
               <div class="preview-card">
                 <div id="editorViewport" class="editor-viewport">
@@ -4021,20 +4125,30 @@ accurate 正確な"
               <span class="editor-hint">傾き・縦方向・横方向でページの歪みを補正。拡大はピンチ／スライダー、ドラッグで移動。枠で範囲指定。</span>
             </div>
 
-            <div class="actions">
-              <button id="aiOcrButton" type="button" disabled><span class="button-icon spark-icon" aria-hidden="true"></span>AIで抽出（高精度）</button>
-              <button id="ocrButton" class="secondary" type="button" disabled>OCRで文字を読む</button>
+            <div class="actions ocr-options">
+              <button id="ocrButton" type="button" disabled>端末内OCRで読む（無料）</button>
+              <button id="aiOcrButton" class="secondary" type="button" disabled><span class="button-icon spark-icon" aria-hidden="true"></span>外部AIで抽出（任意）</button>
+              <label class="ocr-layout-pick">
+                レイアウト
+                <select id="ocrLayoutSelect" aria-label="写真の文字レイアウト">
+                  <option value="auto">自動</option>
+                  <option value="one">1列</option>
+                  <option value="two">2列（左→右）</option>
+                </select>
+              </label>
               <label class="hi-acc">
                 <input type="checkbox" id="hiAccToggle" />
-                高精度OCR（初回DL大・低速）
+                高精度（前処理を比較・低速）
               </label>
+              <p class="ocr-local-note">端末内OCRは画像をアップロードしません。高精度では通常画像と照明むら補正画像を比較するため、時間とメモリを多く使います。</p>
             </div>
 
             <details class="ai-settings">
-              <summary>AI設定（無料・複数登録で自動切替）</summary>
+              <summary>外部AI設定（任意・各サービスの利用条件を確認）</summary>
               <div class="ai-settings-body">
                 <p class="ai-hint">
-                  いずれかの無料APIキーを設定してください。複数登録すると上から順に使い、制限（レート制限など）に達したら次のAIへ自動で切り替えます。
+                  外部AIは今回の無料・端末内OCRとは別機能です。無料枠には回数上限があり、条件は変更されることがあります。複数登録すると上から順に使います。
+                  画像は選んだ外部サービスへ送信されます。個人情報を含む画像は送信しないでください。Geminiの無料枠では、送信内容がGoogleの製品改善に使われる場合があります。
                   キーはこの端末のブラウザにのみ保存され、配布用HTMLには含まれません。複数人で使う場合は各自のキーを設定してください。
                 </p>
                 <div id="aiKeyFields" class="ai-key-fields"></div>
@@ -4080,6 +4194,7 @@ accurate 正確な"
           </div>
           <div class="pill-group">
             <span id="quizScope" class="pill subtle">出題: すべて</span>
+            <span id="quizLearningProgress" class="pill subtle">習得済み 0 / 復習中 0 / 未着手 0</span>
             <span id="quizProgress" class="pill subtle" hidden></span>
             <span id="accuracy" class="pill">正答率 0%</span>
           </div>
@@ -4096,6 +4211,19 @@ accurate 正確な"
               <span>単語帳</span>
               <select id="quizDeckSelect"></select>
             </label>
+            <label class="quiz-setup-field">
+              <span>CEFR</span>
+              <select id="quizCefrSelect">
+                <option value="all">すべて</option>
+                <option value="A1">A1</option>
+                <option value="A2">A2</option>
+                <option value="B1">B1</option>
+                <option value="B2">B2</option>
+                <option value="C1">C1</option>
+                <option value="C2">C2</option>
+                <option value="unknown">未判定</option>
+              </select>
+            </label>
             <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false">範囲</button>
             <label class="quiz-setup-check">
               <input id="quizShuffle" type="checkbox" checked />
@@ -4110,12 +4238,13 @@ accurate 正確な"
             <span aria-hidden="true">〜</span>
             <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
             <span class="quiz-range-hint">空欄なら全部</span>
-            <span class="quiz-range-hint quiz-range-note">※番号は単語帳の追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
+            <span class="quiz-range-hint quiz-range-note">※番号は選択した単語帳・CEFR条件での追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
           </div>
           <!-- 2つの開始ボタンの違いが分かりにくいという指摘への補足（文言のみ・挙動は不変） -->
           <p class="settings-desc quiz-setup-hint">
             「この設定で出題」＝上の単語帳・範囲を<strong>1周だけ</strong>出題（習得済みも含む）。
             「クイズを始める（おまかせ）」＝覚えていない単語を自動で選んで<strong>エンドレス</strong>に出題。
+            「苦手だけ」＝誤答歴があり正答率80%未満の単語、「今日の復習」＝日付が来た単語だけを1周。
           </p>
         </div>
 
@@ -4129,8 +4258,9 @@ accurate 正確な"
 
         <div class="actions">
           <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
+          <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
-          <button id="generalReviewButton" class="secondary" type="button">総復習</button>
+          <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
           <button id="exitQuizButton" class="ghost" type="button" hidden>クイズをやめる</button>
           <span class="kbd-hint">キー 1–4＝解答 / N＝次へ / 0＝わからない</span>
@@ -4153,10 +4283,13 @@ accurate 正確な"
           <div class="actions compact">
             <button id="undoButton" class="ghost" type="button" hidden>元に戻す</button>
             <button id="trashToggleButton" class="ghost" type="button" aria-expanded="false">削除済み 0</button>
-            <button id="exportButton" class="secondary" type="button">JSONを書き出す</button>
             <label class="import-json">
               JSONを読み込む
               <input id="importJsonInput" type="file" accept="application/json" />
+            </label>
+            <label class="import-json">
+              共有単語帳を追加
+              <input id="importDeckShareInput" type="file" accept="application/json,.json" />
             </label>
           </div>
         </div>
@@ -4223,7 +4356,25 @@ accurate 正確な"
               <option value="wrong">間違えた回数が多い順</option>
             </select>
           </label>
+          <label class="sort-field">
+            CEFR
+            <select id="libraryCefrSelect" aria-label="CEFRレベルで単語一覧を絞り込み">
+              <option value="all">すべて</option>
+              <option value="A1">A1</option>
+              <option value="A2">A2</option>
+              <option value="B1">B1</option>
+              <option value="B2">B2</option>
+              <option value="C1">C1</option>
+              <option value="C2">C2</option>
+              <option value="unknown">未判定</option>
+            </select>
+          </label>
           <button id="favoriteFilterButton" class="favorite-filter" type="button" aria-pressed="false">★ お気に入りだけ</button>
+          <div class="word-number-jump">
+            <label for="savedNumberJump">番号へ</label>
+            <input id="savedNumberJump" type="number" min="1" inputmode="numeric" placeholder="例 9900" aria-label="表示する単語番号" />
+            <button id="savedNumberJumpButton" class="ghost mini" type="button">移動</button>
+          </div>
         </div>
         <div id="trashPanel" class="trash-panel" hidden>
           <div class="trash-panel-heading">
@@ -4262,7 +4413,8 @@ accurate 正確な"
                 <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。※写真からの読み取り(OCR)は精度が低く非推奨です。</li>
                 <li><strong>確認</strong>：取り込んだ候補をチェックして「保存」。保存先の単語帳も選べます。</li>
                 <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
-                <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲削除。<strong>JSONを書き出す</strong>でバックアップできます。</li>
+                <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲削除。</li>
+                <li><strong>設定</strong>：「JSONバックアップ」から単語・成績・単語帳を書き出せます。</li>
                 <li><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
               </ol>
               <p class="usage-tip">💡 Safariで開いて「ホーム画面に追加」しておくと、データが消えにくく、ワンタップで起動できます。</p>
@@ -4351,6 +4503,17 @@ accurate 正確な"
                   </p>
                 </div>
               </details>
+            </div>
+          </details>
+
+          <details class="settings-section">
+            <summary>💾 JSONバックアップ</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">保存した単語・成績・単語帳を、端末にJSONファイルとして書き出します。</p>
+              <div class="settings-row">
+                <button id="exportButton" class="secondary" type="button">JSONを書き出す</button>
+              </div>
+              <p class="settings-desc">復元するときは「保存した単語」にある「JSONを読み込む」を使ってください。</p>
             </div>
           </details>
 
@@ -4851,6 +5014,24 @@ const Enrich = (() => {
     };
   }
 
+  async function pronunciation(term) {
+    const data = await dict(term);
+    const seen = new Set();
+    const texts = [];
+    const add = (value) => {
+      const text = String(value || "").replace(/\s+/g, " ").trim();
+      const key = text.replace(/^\/+|\/+$/g, "").trim().toLowerCase();
+      if (!key || seen.has(key) || texts.length >= 3) return;
+      seen.add(key);
+      texts.push(text);
+    };
+    for (const entry of data || []) {
+      add(entry?.phonetic);
+      for (const item of entry?.phonetics || []) add(item?.text);
+    }
+    return { texts };
+  }
+
   async function examples(term) {
     const data = await dict(term);
     const exampleList = [];
@@ -4900,6 +5081,8 @@ const Enrich = (() => {
 
   function fetchType(type, term, posTag = null) {
     switch (type) {
+      case "pronunciation":
+        return pronunciation(term);
       case "synonyms":
         return synonyms(term, posTag);
       case "collocations":
@@ -4916,6 +5099,8 @@ const Enrich = (() => {
   function isEmpty(type, data) {
     if (!data) return true;
     switch (type) {
+      case "pronunciation":
+        return !data.texts || data.texts.length === 0;
       case "synonyms":
         return !data.items || data.items.length === 0;
       case "collocations":
@@ -4941,14 +5126,70 @@ window.Enrich = Enrich;
     <script>
 const LEGACY_STORAGE_KEY = "wordsnap-quiz:v1";
 const CLIENT_KEY = "wordsnap-client:v1";
-const SAMPLE_TEXT = `abandon 捨てる、放棄する
-ability 能力
-accurate 正確な
-ancient 古代の
-benefit 利益、恩恵
-compare 比較する
-describe 説明する
-effort 努力`;
+const LEARNING_SCHEMA_VERSION = 1;
+const SRS_DAY_MS = 24 * 60 * 60 * 1000;
+const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];
+// 特定の教材を転載せず、大学受験で役立つ語を本アプリ向けに独自選定したリスト。
+const SAMPLE_TEXT = `acknowledge 認める
+acquire 習得する
+adapt 適応する
+advocate 支持する
+allocate 割り当てる
+anticipate 予期する
+apparent 明らかな
+arbitrary 恣意的な
+assess 評価する
+assume 想定する
+attribute ～に原因があると考える
+coherent 一貫した
+compel 強いる
+comprehensive 包括的な
+conceive 思い描く
+consecutive 連続した
+constitute 構成する
+contemplate 熟考する
+contradict 矛盾する
+conventional 従来の
+correspond 対応する
+crucial 極めて重要な
+decline 減少する
+derive 引き出す
+diminish 減少させる
+distinguish 区別する
+diverse 多様な
+elaborate 詳しく述べる
+eliminate 排除する
+emerge 現れる
+empirical 実証的な
+enhance 高める
+equivalent 同等の
+evaluate 評価する
+explicit 明示的な
+facilitate 促進する
+feasible 実行可能な
+fundamental 根本的な
+generate 生み出す
+hypothesis 仮説
+imply 暗に示す
+inevitable 避けられない
+inhibit 妨げる
+integrate 統合する
+interpret 解釈する
+intervene 介入する
+justify 正当化する
+maintain 維持する
+notion 考え
+obscure 曖昧な
+perceive 認識する
+persistent 根強い
+plausible もっともらしい
+precede 先行する
+prominent 著名な
+reluctant 気が進まない
+sustain 持続させる
+transform 変える
+undergo 経験する
+undermine 徐々に弱める`;
 
 const elements = {
   imageInput: document.querySelector("#imageInput"),
@@ -4966,6 +5207,7 @@ const elements = {
   perspHSlider: document.querySelector("#perspHSlider"),
   perspHValue: document.querySelector("#perspHValue"),
   ocrButton: document.querySelector("#ocrButton"),
+  ocrLayoutSelect: document.querySelector("#ocrLayoutSelect"),
   aiOcrButton: document.querySelector("#aiOcrButton"),
   aiKeyFields: document.querySelector("#aiKeyFields"),
   stepTabs: [...document.querySelectorAll("[data-step-tab]")],
@@ -4986,6 +5228,9 @@ const elements = {
   wordSearchInput: document.querySelector("#wordSearchInput"),
   wordSearchClear: document.querySelector("#wordSearchClear"),
   wordSearchCount: document.querySelector("#wordSearchCount"),
+  libraryCefrSelect: document.querySelector("#libraryCefrSelect"),
+  savedNumberJump: document.querySelector("#savedNumberJump"),
+  savedNumberJumpButton: document.querySelector("#savedNumberJumpButton"),
   rangeSelectFrom: document.querySelector("#rangeSelectFrom"),
   rangeSelectTo: document.querySelector("#rangeSelectTo"),
   rangeSelectButton: document.querySelector("#rangeSelectButton"),
@@ -4997,6 +5242,7 @@ const elements = {
   deckBar: document.querySelector("#deckBar"),
   deckStats: document.querySelector("#deckStats"),
   quizScope: document.querySelector("#quizScope"),
+  quizLearningProgress: document.querySelector("#quizLearningProgress"),
   quizProgress: document.querySelector("#quizProgress"),
   quizProgressTrack: document.querySelector("#quizProgressTrack"),
   quizProgressFill: document.querySelector("#quizProgressFill"),
@@ -5008,11 +5254,13 @@ const elements = {
   choices: document.querySelector("#choices"),
   quizFeedback: document.querySelector("#quizFeedback"),
   startQuizButton: document.querySelector("#startQuizButton"),
+  difficultQuizButton: document.querySelector("#difficultQuizButton"),
   nextQuizButton: document.querySelector("#nextQuizButton"),
   dontKnowButton: document.querySelector("#dontKnowButton"),
   generalReviewButton: document.querySelector("#generalReviewButton"),
   exitReviewButton: document.querySelector("#exitReviewButton"),
   quizDeckSelect: document.querySelector("#quizDeckSelect"),
+  quizCefrSelect: document.querySelector("#quizCefrSelect"),
   quizRangeToggle: document.querySelector("#quizRangeToggle"),
   quizRangeRow: document.querySelector("#quizRangeRow"),
   quizRangeFrom: document.querySelector("#quizRangeFrom"),
@@ -5029,6 +5277,7 @@ const elements = {
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   exportButton: document.querySelector("#exportButton"),
   importJsonInput: document.querySelector("#importJsonInput"),
+  importDeckShareInput: document.querySelector("#importDeckShareInput"),
   importConfirmBar: document.querySelector("#importConfirmBar"),
   importConfirmText: document.querySelector("#importConfirmText"),
   importConfirmButton: document.querySelector("#importConfirmButton"),
@@ -5097,6 +5346,8 @@ const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
 // 誤って巨大ファイルを選んだときのフリーズ・ストレージ溢れだけを防ぐ。
 const IMPORT_MAX_FILE_BYTES = 8 * 1024 * 1024; // JSON読み込み: 8MB
 const IMPORT_MAX_WORDS = 50000; // JSON読み込み: 5万語
+const DECK_SHARE_MAX_FILE_BYTES = 2 * 1024 * 1024;
+const DECK_SHARE_MAX_WORDS = 5000;
 const OCR_MAX_FILE_BYTES = 40 * 1024 * 1024; // 画像取り込み(OCR/AI): 40MB
 const OCR_MAX_PIXELS = 80 * 1000 * 1000; // 画像取り込み(OCR/AI): 8,000万画素
 // エラーメッセージ中の上限表記は定数から作る（値を変えたら文言も自動で揃う）
@@ -5114,6 +5365,8 @@ const dirtyPanels = new Set();
 const SAVED_LIST_PAGE_SIZE = 100;
 // 案2: 現在DOM化する上限件数（検索・並び替え・フィルタ・単語帳が変わると先頭に戻す）
 let savedListVisibleCount = SAVED_LIST_PAGE_SIZE;
+// 番号ジャンプ時に表示する100件窓の先頭（0始まり）。通常は0で「さらに表示」を維持する。
+let savedListWindowStart = 0;
 // 案2: ページングを先頭に戻すべきか判定するための「表示条件」の合成キー
 let savedListSignature = null;
 // 案3: Libraryの表示条件・ページ・表示状態が変わるたびに世代を進める。
@@ -5610,6 +5863,8 @@ let wordSearchQuery = "";
 let wordSortMode = "added";
 // お気に入り（★）だけを表示するかどうか
 let favoritesOnly = false;
+// 一覧用CEFRフィルタ。保存データには含めず、この画面を開いている間だけ保持する。
+let libraryCefrLevel = "all";
 let currentQuiz = null;
 let reviewSession = null;
 // 範囲クイズ・総復習を完走した直後の結果表示用データ（次のクイズを始めると消える）
@@ -5688,7 +5943,7 @@ const idb = {
 
 // Writes the app state to localStorage AND the IndexedDB mirror, stamped with
 // a save time so we can tell which copy is newer when recovering.
-function persistAppState() {
+function persistAppState(options = {}) {
   appState.deletions = sanitizeDeletions(appState.deletions, Date.now());
   appState.trash = sanitizeTrash(appState.trash, Date.now());
   appState.savedAt = Date.now();
@@ -5699,11 +5954,12 @@ function persistAppState() {
     // storage may be full / unavailable; the IndexedDB mirror still applies
   }
   idb.set(STORAGE_KEY, json);
-  scheduleSyncPush();
+  if (options.sync !== false) scheduleSyncPush();
 }
 
 function defaultState() {
   return {
+    learningSchemaVersion: LEARNING_SCHEMA_VERSION,
     words: [],
     decks: [{ id: createId(), name: "単語帳1", updatedAt: 0 }],
     quizCounter: 0,
@@ -5913,6 +6169,10 @@ function normalizeState(state) {
   if (activeDeckId !== "all" && !deckIds.has(activeDeckId)) activeDeckId = "all";
 
   return {
+    learningSchemaVersion: Math.max(
+      LEARNING_SCHEMA_VERSION,
+      Math.floor(Number(source.learningSchemaVersion) || 0),
+    ),
     words,
     decks,
     quizCounter: Number(source.quizCounter || 0),
@@ -5947,6 +6207,7 @@ function normalizeWord(word) {
 }
 
 const ENRICH_TYPES = [
+  { key: "pronunciation", label: "発音記号" },
   { key: "collocations", label: "コロケーション" },
   { key: "examples", label: "例文" },
   { key: "etymology", label: "語源" },
@@ -5954,7 +6215,7 @@ const ENRICH_TYPES = [
 ];
 
 function emptyEnrich() {
-  return { collocations: null, examples: null, etymology: null, synonyms: null };
+  return { pronunciation: null, collocations: null, examples: null, etymology: null, synonyms: null };
 }
 
 function normalizeEnrich(enrich) {
@@ -6024,6 +6285,10 @@ function normalizeHistory(history) {
 
 function normalizeLearning(word) {
   if (word.learning) {
+    const rawStage = Math.floor(Number(word.learning.srsStage) || 0);
+    const rawNextReviewAt = Number(word.learning.nextReviewAt || 0);
+    const rawSrsUpdatedAt = Number(word.learning.srsUpdatedAt || 0);
+    const rawLastResult = String(word.learning.lastSrsResult || "");
     return {
       status: word.learning.status || "new",
       firstAttempted: Boolean(word.learning.firstAttempted),
@@ -6031,6 +6296,10 @@ function normalizeLearning(word) {
       blockedUntil: Number(word.learning.blockedUntil || 0), // 誤答した単語がこの時刻まで再出題されない（旧データは0=足止めなし）
       // 連続正解数（2回連続で習得済みになる）。旧データには無いフィールドなので0で補う
       correctStreak: Math.max(0, Math.floor(Number(word.learning.correctStreak) || 0)),
+      srsStage: Math.max(0, Math.min(SRS_INTERVAL_DAYS.length - 1, rawStage)),
+      nextReviewAt: Number.isFinite(rawNextReviewAt) && rawNextReviewAt > 0 ? rawNextReviewAt : 0,
+      srsUpdatedAt: Number.isFinite(rawSrsUpdatedAt) && rawSrsUpdatedAt > 0 ? rawSrsUpdatedAt : 0,
+      lastSrsResult: rawLastResult === "correct" || rawLastResult === "wrong" ? rawLastResult : "",
     };
   }
 
@@ -6044,6 +6313,11 @@ function normalizeLearning(word) {
     blockedUntil: 0,
     // 誤答が無い旧データは正解数をそのまま連続正解数とみなす
     correctStreak: attempted && wrong === 0 ? correct : 0,
+    // 旧データは一斉に期限到来させず、次回の解答時からSRSを開始する。
+    srsStage: 0,
+    nextReviewAt: 0,
+    srsUpdatedAt: 0,
+    lastSrsResult: "",
   };
 }
 
@@ -6106,7 +6380,7 @@ function bumpSyncRequestGen() {
   syncState.abortControllers.clear();
 }
 
-async function syncRequest(method, body = null) {
+async function syncRequest(method, body = null, requestOptions = {}) {
   // 送信時の世代を覚え、応答受信時に世代が変わっていたら結果を破棄する
   const gen = syncState.requestGen;
   const controller = typeof AbortController === "function" ? new AbortController() : null;
@@ -6121,7 +6395,13 @@ async function syncRequest(method, body = null) {
   let response;
   let data;
   try {
-    response = await fetch(syncEndpoint(), options);
+    let endpoint = syncEndpoint();
+    // 定期ポーリングでは既知revisionを渡す。対応サーバーは未変更時に巨大なstate本体を
+    // 返さずメタデータだけ返せる。旧サーバーは未知queryを無視するため後方互換。
+    if (method === "GET" && Number.isFinite(Number(requestOptions.sinceRev))) {
+      endpoint += `&sinceRev=${encodeURIComponent(String(Number(requestOptions.sinceRev)))}`;
+    }
+    response = await fetch(endpoint, options);
     data = await response.json().catch(() => ({}));
   } catch (error) {
     // abort例外（キー切替による中断）は番兵エラーに変換して静かに破棄させる
@@ -6149,6 +6429,10 @@ async function syncRequest(method, body = null) {
 function buildSyncPayloadState() {
   return {
     ...appState,
+    learningSchemaVersion: Math.max(
+      LEARNING_SCHEMA_VERSION,
+      Math.floor(Number(appState.learningSchemaVersion) || 0),
+    ),
     words: appState.words.map((word) => {
       const { enrich, ...rest } = word;
       return rest;
@@ -6298,6 +6582,7 @@ function updateSyncBadge() {
 
 function stateSignature(state) {
   return JSON.stringify({
+    learningSchemaVersion: Number(state.learningSchemaVersion || 0),
     words: state.words,
     decks: state.decks,
     quizCounter: state.quizCounter,
@@ -6305,12 +6590,15 @@ function stateSignature(state) {
     deletions: Object.entries(state.deletions || {}).sort((a, b) => a[0].localeCompare(b[0])),
     trash: state.trash || [],
     streak: normalizeStreak(state.streak),
-  });
+  }, (key, value) => key === "enrich" ? undefined : value);
 }
 
-function mergeAppStates(localState, remoteState) {
-  const local = normalizeState(localState || defaultState());
-  const remote = normalizeState(remoteState || defaultState());
+function mergeAppStates(localState, remoteState, suppliedOptions) {
+  const options = suppliedOptions || {};
+  // connect時は直前に正規化済みの状態を渡せる。1万語を同じ同期処理内で何度も
+  // normalizeWordするコストを避けつつ、通常呼び出しは従来どおり必ず正規化する。
+  const local = options.normalized ? localState : normalizeState(localState || defaultState());
+  const remote = options.normalized ? remoteState : normalizeState(remoteState || defaultState());
   const decks = [];
   const deckIdMap = new Map();
   const deckNameMap = new Map();
@@ -6368,14 +6656,17 @@ function mergeAppStates(localState, remoteState) {
   // 旧形式の墓標（term単体キー）を別デッキの同名語に波及させないための下調べ。
   // その単語が両端末を合わせて1つのデッキにしか無いときだけ旧墓標を適用する。
   const termDecks = new Map();
-  for (const word of [...local.words, ...remote.words]) {
-    const term = normalizeTerm(word.term);
-    if (!termDecks.has(term)) termDecks.set(term, new Set());
-    termDecks.get(term).add(remapDeckId(word.deckId));
+  for (const words of [local.words, remote.words]) {
+    for (const word of words) {
+      const term = normalizeTerm(word.term);
+      if (!termDecks.has(term)) termDecks.set(term, new Set());
+      termDecks.get(term).add(remapDeckId(word.deckId));
+    }
   }
 
   const addWord = (word, source) => {
-    const next = normalizeWord({ ...word, deckId: remapDeckId(word.deckId) });
+    // local/remoteは上で正規化済み。ここではマージ中にdeckIdだけ読み替えた浅いコピーで十分。
+    const next = { ...word, deckId: remapDeckId(word.deckId) };
     // 追加時刻より後に削除された単語は、合算で復活させない（削除を確実に反映）
     const term = normalizeTerm(next.term);
     let deletedAt = mergedDeletions[deletionKeyForWord(next)];
@@ -6402,8 +6693,9 @@ function mergeAppStates(localState, remoteState) {
   local.words.forEach((word) => addWord(word, "local"));
   remote.words.forEach((word) => addWord(word, "remote"));
 
+  const mergedWordKeys = new Set(mergedWords.map(wordKey));
   const mergedTrash = mergeTrashEntries([local.trash, remote.trash], remapDeckId).filter(
-    (entry) => !mergedWords.some((word) => wordKey(word) === trashKeyForWord(entry.word)),
+    (entry) => !mergedWordKeys.has(trashKeyForWord(entry.word)),
   );
 
   const localDeckIds = new Set(decks.map((deck) => deck.id));
@@ -6413,7 +6705,12 @@ function mergeAppStates(localState, remoteState) {
       ? local.activeDeckId
       : remoteActive || "all";
 
-  return normalizeState({
+  return {
+    learningSchemaVersion: Math.max(
+      LEARNING_SCHEMA_VERSION,
+      Number(local.learningSchemaVersion || 0),
+      Number(remote.learningSchemaVersion || 0),
+    ),
     words: mergedWords,
     decks,
     quizCounter: Math.max(local.quizCounter, remote.quizCounter),
@@ -6422,7 +6719,7 @@ function mergeAppStates(localState, remoteState) {
     deletions: mergedDeletions,
     trash: mergedTrash,
     streak: mergeStreaks(local.streak, remote.streak),
-  });
+  };
 }
 
 function mergeTrashEntries(sources, remapDeckId) {
@@ -6489,25 +6786,67 @@ function mergeEnrichData(a, b) {
   return base;
 }
 
-// 学習状態のマージ。「より進んだ側」を尊重して統合する：
-// status は mastered > review > new の優先順で強い方、correctStreak は大きい方、
-// reviewAt は早く復習する方（minPositive）、blockedUntil は遅い方、firstAttempted は OR。
-// 旧実装は history 末尾1件だけから status を決め直していたため、タップ同期しただけで
-// 片側の習得状態が上書きされて壊れていた（stats/history は別途マージ済みなので再計算しない）。
 function mergeLearningState(a, b) {
   const rank = { new: 0, review: 1, mastered: 2 };
   const statusOf = (learning) =>
     learning && rank[learning.status] !== undefined ? learning.status : "new";
   const statusA = statusOf(a);
   const statusB = statusOf(b);
-  const status = rank[statusA] >= rank[statusB] ? statusA : statusB;
+  const updatedA = Number(a?.srsUpdatedAt || 0);
+  const updatedB = Number(b?.srsUpdatedAt || 0);
+
+  // SRS対応端末同士では最後に答えた側を優先する。これにより、新しい誤答が
+  // 古い mastered 状態にマージで負けて復習対象から消えることを防ぐ。
+  if (updatedA !== updatedB && (updatedA > 0 || updatedB > 0)) {
+    const newer = updatedA > updatedB ? a || {} : b || {};
+    const status = statusOf(newer);
+    const stage = Math.max(
+      0,
+      Math.min(SRS_INTERVAL_DAYS.length - 1, Math.floor(Number(newer.srsStage) || 0)),
+    );
+    return {
+      status,
+      firstAttempted: Boolean(a?.firstAttempted || b?.firstAttempted) || status !== "new",
+      reviewAt: status === "review" ? Number(newer.reviewAt || 0) : 0,
+      blockedUntil: Math.max(Number(a?.blockedUntil || 0), Number(b?.blockedUntil || 0)),
+      correctStreak: Math.max(0, Math.floor(Number(newer.correctStreak) || 0)),
+      srsStage: stage,
+      nextReviewAt: Math.max(0, Number(newer.nextReviewAt || 0)),
+      srsUpdatedAt: Math.max(updatedA, updatedB),
+      lastSrsResult:
+        newer.lastSrsResult === "correct" || newer.lastSrsResult === "wrong"
+          ? newer.lastSrsResult
+          : "",
+    };
+  }
+
+  // 同時更新または旧形式同士は、従来どおり「進んだ状態を失わない」保守的マージ。
+  // SRS値は早い期日・低い段階へ倒し、同時競合時に復習を取りこぼさない。
+  const hasWrongConflict = a?.lastSrsResult === "wrong" || b?.lastSrsResult === "wrong";
+  const status = hasWrongConflict
+    ? "review"
+    : rank[statusA] >= rank[statusB]
+      ? statusA
+      : statusB;
+  const lastSrsResult =
+    hasWrongConflict
+      ? "wrong"
+      : a?.lastSrsResult === "correct" || b?.lastSrsResult === "correct"
+        ? "correct"
+        : "";
   return {
     status,
     firstAttempted: Boolean(a?.firstAttempted || b?.firstAttempted) || status !== "new",
     reviewAt: status === "review" ? minPositiveNumber(a?.reviewAt, b?.reviewAt) : 0,
     // 5分ブロックは両端末の遅い方（＝より安全な方）を採用し、マージで足止めが消えないようにする
     blockedUntil: Math.max(Number(a?.blockedUntil || 0), Number(b?.blockedUntil || 0)),
-    correctStreak: Math.max(Number(a?.correctStreak || 0), Number(b?.correctStreak || 0)),
+    correctStreak: hasWrongConflict
+      ? 0
+      : Math.max(Number(a?.correctStreak || 0), Number(b?.correctStreak || 0)),
+    srsStage: Math.min(Number(a?.srsStage || 0), Number(b?.srsStage || 0)),
+    nextReviewAt: minPositiveNumber(a?.nextReviewAt, b?.nextReviewAt),
+    srsUpdatedAt: Math.max(updatedA, updatedB),
+    lastSrsResult,
   };
 }
 
@@ -6516,10 +6855,12 @@ function minPositiveNumber(...values) {
   return positives.length ? Math.min(...positives) : 0;
 }
 
-function applyMergedRemoteState(remoteState) {
-  const before = stateSignature(appState);
-  const merged = mergeAppStates(appState, remoteState);
-  const changed = stateSignature(merged) !== before;
+function applyMergedRemoteState(remoteState, suppliedOptions) {
+  const options = suppliedOptions || {};
+  const before = options.beforeSignature || stateSignature(appState);
+  const merged = options.merged || mergeAppStates(appState, remoteState);
+  const mergedSignature = options.mergedSignature || stateSignature(merged);
+  const changed = mergedSignature !== before;
   if (changed) {
     syncState.applyingRemote = true;
     appState = merged;
@@ -6569,9 +6910,16 @@ async function connectWordsnapSync(options = {}) {
     if (remote.state) {
       // ローカル側だけにある単語・学習履歴をマージしても、ローカル自身との比較だけでは
       // changed=false になり得る。マージ結果をリモートとも比較し、欠けている分だけ送る。
-      const merged = mergeAppStates(appState, remote.state);
-      needsPush = stateSignature(merged) !== stateSignature(normalizeState(remote.state));
-      applyMergedRemoteState(remote.state);
+      const localSignature = stateSignature(appState);
+      const normalizedRemote = normalizeState(remote.state);
+      const merged = mergeAppStates(appState, normalizedRemote, { normalized: true });
+      const mergedSignature = stateSignature(merged);
+      needsPush = mergedSignature !== stateSignature(normalizedRemote);
+      applyMergedRemoteState(remote.state, {
+        merged,
+        beforeSignature: localSignature,
+        mergedSignature,
+      });
     }
     startSyncPolling();
     if (needsPush) {
@@ -6701,7 +7049,11 @@ async function pullWordsnapState(options = {}) {
     // 取得中に個人キーが切り替わったら（他人リンクへの切り替え等）、古いキーの
     // 内容を新しいキーへマージ・送信してしまわないよう、結果を破棄する。
     const requestedId = syncState.id;
-    const remote = await syncRequest("GET");
+    const remote = await syncRequest(
+      "GET",
+      null,
+      options.silent && syncState.rev > 0 ? { sinceRev: syncState.rev } : {},
+    );
     if (requestedId !== syncState.id) return false;
     const remoteRev = Number(remote.stateRev) || 0;
     const changed = remote.state && (remoteRev > syncState.rev || !options.silent)
@@ -7353,6 +7705,7 @@ function renderDeckBar() {
   }
   html += `<button type="button" class="deck-tab deck-add" data-deck-action="add">＋新規</button>`;
   if (appState.activeDeckId !== "all") {
+    html += `<button type="button" class="deck-tool" data-deck-action="share">共有</button>`;
     html += `<button type="button" class="deck-tool" data-deck-action="rename">名前変更</button>`;
     html += `<button type="button" class="deck-tool danger" data-deck-action="delete">削除</button>`;
   }
@@ -7369,8 +7722,43 @@ function renderSaveDeckSelect() {
   elements.saveDeckSelect.innerHTML = deckOptionsMarkup(preferred);
 }
 
+function learningBuckets(words) {
+  return words.reduce(
+    (counts, word) => {
+      const status = word.learning?.status;
+      if (status === "mastered") counts.mastered += 1;
+      else if (
+        word.stats.correct + word.stats.wrong === 0 &&
+        !word.learning?.firstAttempted
+      ) counts.new += 1;
+      else counts.review += 1;
+      return counts;
+    },
+    { mastered: 0, review: 0, new: 0 },
+  );
+}
+
+function cefrMatches(word, level) {
+  // 保存済み判定を優先し、メモリ内キャッシュがあればそれも利用する。絞り込みのために
+  // 全件を外部APIへ問い合わせることはしない（大きな単語帳でも即時に動く）。
+  const stored = word.cefr?.level || window.Cefr?.peek?.(word.term)?.level || null;
+  if (!level || level === "all") return true;
+  if (level === "unknown") return !stored;
+  return stored === level;
+}
+
 function renderQuizScope() {
-  if (elements.quizScope) elements.quizScope.textContent = `出題: ${activeDeckLabel()}`;
+  if (!elements.quizScope) return;
+  const deckId = elements.quizDeckSelect?.value || "all";
+  const deckLabel = deckId === "all" ? "すべて" : deckName(deckId);
+  const cefr = elements.quizCefrSelect?.value || "all";
+  elements.quizScope.textContent = `出題: ${deckLabel}${cefr === "all" ? "" : ` / CEFR ${cefr === "unknown" ? "未判定" : cefr}`}`;
+}
+
+function renderQuizLearningProgress() {
+  if (!elements.quizLearningProgress) return;
+  const counts = learningBuckets(quizSelectedDeckWords());
+  elements.quizLearningProgress.textContent = `習得済み ${counts.mastered} / 復習中 ${counts.review} / 未着手 ${counts.new}`;
 }
 
 function renderDeckStats() {
@@ -7385,26 +7773,13 @@ function renderDeckStats() {
   }
   elements.deckStats.hidden = false;
 
-  let correct = 0;
-  let wrong = 0;
-  const buckets = { c3: 0, c2: 0, c1: 0, c0: 0 };
-  for (const word of words) {
-    correct += word.stats.correct;
-    wrong += word.stats.wrong;
-    const c = word.stats.correct;
-    if (c >= 3) buckets.c3 += 1;
-    else if (c === 2) buckets.c2 += 1;
-    else if (c === 1) buckets.c1 += 1;
-    else buckets.c0 += 1;
-  }
-  const attempts = correct + wrong;
-  const rate = attempts === 0 ? null : Math.round((correct / attempts) * 100);
+  const buckets = learningBuckets(words);
+  const masteredRate = Math.round((buckets.mastered / total) * 100);
 
   const segs = [
-    { label: "3回以上正解", color: "#16a34a", count: buckets.c3 },
-    { label: "2回正解", color: "#22c55e", count: buckets.c2 },
-    { label: "1回正解", color: "#f59e0b", count: buckets.c1 },
-    { label: "0回正解", color: "#94a3b8", count: buckets.c0 },
+    { label: "習得済み", color: "#16a34a", count: buckets.mastered },
+    { label: "復習中", color: "#f59e0b", count: buckets.review },
+    { label: "未着手", color: "#94a3b8", count: buckets.new },
   ];
 
   let acc = 0;
@@ -7420,7 +7795,7 @@ function renderDeckStats() {
     ? `conic-gradient(${stops.join(", ")})`
     : "conic-gradient(var(--surface-3) 0 100%)";
 
-  const ariaLabel = `${activeDeckLabel()}の正答率${rate == null ? "未挑戦" : rate + "%"}。3回以上正解${buckets.c3}語、2回正解${buckets.c2}語、1回正解${buckets.c1}語、0回正解${buckets.c0}語。`;
+  const ariaLabel = `${activeDeckLabel()}の学習進捗。習得済み${buckets.mastered}語、復習中${buckets.review}語、未着手${buckets.new}語。`;
 
   // 再描画のたびに開閉状態が消えないよう、既存の open 状態を引き継ぐ（初回はデフォルトで閉じておく）
   const wasOpen = elements.deckStats.querySelector("details.deck-stats-card")?.open || false;
@@ -7428,14 +7803,14 @@ function renderDeckStats() {
   elements.deckStats.innerHTML = `
     <details class="deck-stats-card"${wasOpen ? " open" : ""}>
       <summary class="deck-stats-summary">
-        <span class="donut-rate-mini">正答率 ${rate == null ? "—" : rate + "%"}</span>
-        <span class="donut-title-mini">${escapeHtml(activeDeckLabel())} の内訳（${total}語）</span>
+        <span class="donut-rate-mini">習得 ${buckets.mastered}/${total}</span>
+        <span class="donut-title-mini">復習中 ${buckets.review} / 未着手 ${buckets.new}</span>
       </summary>
       <div class="deck-stats-body">
         <div class="donut" role="img" aria-label="${escapeHtml(ariaLabel)}" style="background:${gradient}">
           <div class="donut-hole">
-            <span class="donut-rate">${rate == null ? "—" : rate + "%"}</span>
-            <span class="donut-rate-label">正答率</span>
+            <span class="donut-rate">${masteredRate}%</span>
+            <span class="donut-rate-label">習得済み</span>
           </div>
         </div>
         <div class="donut-legend">
@@ -7457,6 +7832,7 @@ function renderDecks() {
   renderDeckBar();
   renderSaveDeckSelect();
   renderQuizScope();
+  renderQuizLearningProgress();
   renderDeckStats();
 }
 
@@ -7724,19 +8100,25 @@ function validPair(term, meaning) {
   return { term: cleanTerm, meaning: cleanMeaning };
 }
 
-function loadTesseract() {
-  return new Promise((resolve, reject) => {
-    if (window.Tesseract) {
-      resolve(window.Tesseract);
-      return;
-    }
+let tesseractLoadPromise = null;
 
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (tesseractLoadPromise) return tesseractLoadPromise;
+
+  tesseractLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    // バージョンを固定し、CDN側の更新で突然挙動が変わらないようにする。
+    script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js";
+    script.crossOrigin = "anonymous";
     script.onload = () => resolve(window.Tesseract);
-    script.onerror = () => reject(new Error("OCRライブラリを読み込めませんでした。"));
+    script.onerror = () => {
+      tesseractLoadPromise = null;
+      reject(new Error("OCRライブラリを読み込めませんでした。通信状態を確認してください。"));
+    };
     document.head.appendChild(script);
   });
+  return tesseractLoadPromise;
 }
 
 function loadImageElement(file) {
@@ -7815,7 +8197,7 @@ function loadEditorImage(file) {
     elements.ocrButton.disabled = false;
     elements.aiOcrButton.disabled = false;
     renderEditorImage();
-    setStatus("画像を読み込みました。回転・傾き・縦横補正・範囲指定のうえ「AIで抽出」または「OCRで文字を読む」を押してください。");
+    setStatus("画像を読み込みました。回転・傾き・範囲と1列/2列を確認して「端末内OCRで読む（無料）」を押してください。");
   };
   img.onerror = () => {
     URL.revokeObjectURL(url);
@@ -8013,36 +8395,59 @@ function editorPointerUp(event) {
   }
 }
 
-// Improves OCR accuracy: scale toward a print-like resolution, convert to
-// grayscale, then stretch and lift contrast so text stands out from paper.
-// Otsu's method: pick the grayscale threshold that best separates ink from paper.
-function otsuThreshold(histogram, total) {
-  let sum = 0;
-  for (let i = 0; i < 256; i += 1) sum += i * histogram[i];
-  let sumB = 0;
-  let wB = 0;
-  let maxBetween = 0;
-  let threshold = 127;
-  for (let i = 0; i < 256; i += 1) {
-    wB += histogram[i];
-    if (wB === 0) continue;
-    const wF = total - wB;
-    if (wF === 0) break;
-    sumB += i * histogram[i];
-    const mB = sumB / wB;
-    const mF = (sum - sumB) / wF;
-    const between = wB * wF * (mB - mF) * (mB - mF);
-    if (between > maxBetween) {
-      maxBetween = between;
-      threshold = i;
+// 印刷文字の解像度を保ちながら、外れ値に影響されにくい濃度補正を行う。
+// adaptive は小さな区画ごとの背景色を推定し、ページ中央の影や照明むらを均す。
+function histogramPercentile(histogram, total, ratio) {
+  const target = total * ratio;
+  let seen = 0;
+  for (let value = 0; value < histogram.length; value += 1) {
+    seen += histogram[value];
+    if (seen >= target) return value;
+  }
+  return 255;
+}
+
+function localBackgroundMap(gray, width, height, blockSize = 48) {
+  const columns = Math.ceil(width / blockSize);
+  const rows = Math.ceil(height / blockSize);
+  const sums = new Float64Array(columns * rows);
+  const counts = new Uint32Array(columns * rows);
+  for (let y = 0, p = 0; y < height; y += 1) {
+    const row = Math.floor(y / blockSize);
+    for (let x = 0; x < width; x += 1, p += 1) {
+      const index = row * columns + Math.floor(x / blockSize);
+      sums[index] += gray[p];
+      counts[index] += 1;
     }
   }
-  return threshold;
+
+  const means = new Float32Array(columns * rows);
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      let sum = 0;
+      let count = 0;
+      // 3x3区画で平滑化して、区画の境目が文字として認識されるのを防ぐ。
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const yy = row + dy;
+        if (yy < 0 || yy >= rows) continue;
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const xx = column + dx;
+          if (xx < 0 || xx >= columns) continue;
+          const index = yy * columns + xx;
+          sum += sums[index];
+          count += counts[index];
+        }
+      }
+      means[row * columns + column] = count ? sum / count : 255;
+    }
+  }
+  return { means, columns, blockSize };
 }
 
 async function preprocessImage(source, options = {}) {
-  const maxSide = options.maxSide || 2200;
-  const binarize = Boolean(options.binarize);
+  const maxSide = options.maxSide || 3000;
+  const maxPixels = options.maxPixels || 12 * 1000 * 1000;
+  const variant = options.variant === "adaptive" ? "adaptive" : "normal";
   const img =
     source instanceof HTMLCanvasElement || source instanceof HTMLImageElement
       ? source
@@ -8050,10 +8455,13 @@ async function preprocessImage(source, options = {}) {
   const srcW = img.naturalWidth || img.width;
   const srcH = img.naturalHeight || img.height;
   const longer = Math.max(srcW, srcH) || 1;
-  const MIN = 1200;
+  const MIN = 1400;
   let scale = 1;
   if (longer > maxSide) scale = maxSide / longer;
   else if (longer < MIN) scale = Math.min(3, MIN / longer);
+  if (srcW * srcH * scale * scale > maxPixels) {
+    scale = Math.sqrt(maxPixels / (srcW * srcH));
+  }
 
   const w = Math.max(1, Math.round(srcW * scale));
   const h = Math.max(1, Math.round(srcH * scale));
@@ -8071,32 +8479,31 @@ async function preprocessImage(source, options = {}) {
   // Grayscale + luminance range / histogram.
   const gray = new Uint8ClampedArray(w * h);
   const histogram = new Array(256).fill(0);
-  let min = 255;
-  let max = 0;
   for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
     const g = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
     gray[p] = g;
     histogram[g] += 1;
-    if (g < min) min = g;
-    if (g > max) max = g;
   }
 
-  if (binarize) {
-    // Binarize and push faint show-through (lighter than ink) to white.
-    const t = otsuThreshold(histogram, w * h);
-    for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
-      const c = gray[p] < t ? 0 : 255;
-      data[i] = data[i + 1] = data[i + 2] = c;
+  // 最小・最大値ではなく2%〜99%点を使い、黒い枠や白飛び1点に引っ張られないようにする。
+  const low = histogramPercentile(histogram, w * h, 0.02);
+  const high = histogramPercentile(histogram, w * h, 0.99);
+  const range = Math.max(24, high - low);
+  const background = variant === "adaptive" ? localBackgroundMap(gray, w, h) : null;
+  for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
+    let value = gray[p];
+    if (background) {
+      const x = p % w;
+      const y = Math.floor(p / w);
+      const column = Math.min(background.columns - 1, Math.floor(x / background.blockSize));
+      const row = Math.floor(y / background.blockSize);
+      const localMean = background.means[row * background.columns + column];
+      value += 238 - localMean;
     }
-  } else {
-    const range = Math.max(1, max - min);
-    const contrast = 1.25;
-    for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
-      let v = ((gray[p] - min) * 255) / range; // stretch to full range
-      v = (v - 128) * contrast + 128; // lift contrast around mid-gray
-      const c = v < 0 ? 0 : v > 255 ? 255 : v | 0;
-      data[i] = data[i + 1] = data[i + 2] = c;
-    }
+    value = ((value - low) * 255) / range;
+    value = (value - 150) * (variant === "adaptive" ? 1.12 : 1.08) + 150;
+    const color = value < 0 ? 0 : value > 255 ? 255 : value | 0;
+    data[i] = data[i + 1] = data[i + 2] = color;
   }
   ctx.putImageData(imageData, 0, 0);
   return canvas;
@@ -8104,6 +8511,7 @@ async function preprocessImage(source, options = {}) {
 
 function rotateCanvas(src, deg) {
   const angle = ((deg % 360) + 360) % 360;
+  if (angle === 0) return src;
   const sw = src.naturalWidth || src.width;
   const sh = src.naturalHeight || src.height;
   const swap = angle === 90 || angle === 270;
@@ -8365,24 +8773,40 @@ function applyPerspective(src, v, h, mesh = 18) {
 }
 
 const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"];
-const GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
-const AI_PROMPT =
-  "この画像は英単語帳のページです。各見出し語について「英単語<半角スペース>第一義の日本語訳」の形式で1行ずつ出力してください。" +
-  "発音記号・品詞表記・例文（英文と和訳）・英語の類義語・第二義以降は出力しないでください。番号・記号・説明文も付けないでください。" +
-  "読み取れない行はスキップしてください。出力はプレーンテキストの行のみ。";
+const GROQ_MODEL = "qwen/qwen3.6-27b";
 
-// AI extraction providers (tried in order; user supplies their own free key).
+function aiPrompt() {
+  const layout = ["one", "two"].includes(elements.ocrLayoutSelect?.value)
+    ? elements.ocrLayoutSelect.value
+    : "auto";
+  const readingOrder =
+    layout === "two"
+      ? "ページは2列です。左列を上から下へ読み、その後に右列を上から下へ読んでください。"
+      : layout === "one"
+        ? "ページは1列です。上から下へ読んでください。"
+        : "列構成を画像から判断し、各列の上から下へ、列は左から右の順に読んでください。";
+  return (
+    "この画像は英単語帳のページです。" +
+    readingOrder +
+    "各見出し語について「英単語<半角スペース>画像に印刷されている先頭の日本語訳」の形式で1行ずつ出力してください。" +
+    "英単語の綴りと日本語訳は画像どおりに転記し、画像に見えない単語や訳を知識で補わないでください。" +
+    "発音記号・品詞表記・例文（英文と和訳）・英語の類義語・第二義以降は出力しないでください。番号・記号・説明文も付けないでください。" +
+    "英単語と対応する日本語訳の両方を確認できない行はスキップしてください。出力はプレーンテキストの行のみ。"
+  );
+}
+
+// AI extraction providers (tried in order; user supplies their own key).
 const AI_PROVIDERS = [
   {
     id: "gemini",
-    name: "Google Gemini",
+    name: "Google Gemini 3.5 Flash（無料枠）",
     placeholder: "AIza… を貼り付け",
     keyUrl: "https://aistudio.google.com/apikey",
     extract: extractWithGemini,
   },
   {
     id: "groq",
-    name: "Groq（無料）",
+    name: "Groq Qwen 3.6 Vision（無料枠）",
     placeholder: "gsk_… を貼り付け",
     keyUrl: "https://console.groq.com/keys",
     extract: extractWithGroq,
@@ -8433,11 +8857,32 @@ function setAiKeysPersisted(on) {
 }
 
 function imageDataUrl(canvas) {
-  return downscaleCanvas(canvas, 1600).toDataURL("image/jpeg", 0.85);
+  // Small textbook print loses detail at the old fixed 1600px size. Prefer a
+  // sharper image, but stay below Groq's base64 upload limit by stepping down.
+  const attempts = elements.hiAccToggle?.checked
+    ? [
+        { maxSide: 3000, quality: 0.9 },
+        { maxSide: 2400, quality: 0.86 },
+        { maxSide: 2000, quality: 0.82 },
+        { maxSide: 1600, quality: 0.78 },
+      ]
+    : [
+        { maxSide: 2400, quality: 0.88 },
+        { maxSide: 2000, quality: 0.82 },
+        { maxSide: 1600, quality: 0.78 },
+      ];
+  let lastDataUrl = "";
+  for (const attempt of attempts) {
+    const resized = downscaleCanvas(canvas, attempt.maxSide);
+    lastDataUrl = resized.toDataURL("image/jpeg", attempt.quality);
+    releaseTemporaryCanvas(resized, canvas);
+    if (lastDataUrl.length <= 3.5 * 1024 * 1024) return lastDataUrl;
+  }
+  return lastDataUrl;
 }
 
 // Sends the (rotated/cropped) image to Google Gemini and returns clean
-// "word meaning" lines. Uses the user's own free API key (kept on this device).
+// "word meaning" lines. Uses the user's own API key (kept on this device).
 // signal: タイムアウト/手動中断用のAbortSignal（省略可）
 async function extractWithGemini(canvas, key, signal) {
   const base64 = imageDataUrl(canvas).split(",")[1];
@@ -8445,7 +8890,7 @@ async function extractWithGemini(canvas, key, signal) {
     contents: [
       {
         parts: [
-          { text: AI_PROMPT },
+          { text: aiPrompt() },
           { inline_data: { mime_type: "image/jpeg", data: base64 } },
         ],
       },
@@ -8456,8 +8901,13 @@ async function extractWithGemini(canvas, key, signal) {
   let lastError = "不明なエラー";
   for (const model of GEMINI_MODELS) {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body, signal },
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body,
+        signal,
+      },
     );
     if (res.ok) {
       const data = await res.json();
@@ -8482,7 +8932,7 @@ async function extractWithGemini(canvas, key, signal) {
   throw new Error(lastError);
 }
 
-// OpenAI-compatible vision request to Groq (free tier, no credit card).
+// OpenAI-compatible vision request to Groq.
 // signal: タイムアウト/手動中断用のAbortSignal（省略可）
 async function extractWithGroq(canvas, key, signal) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -8492,11 +8942,13 @@ async function extractWithGroq(canvas, key, signal) {
     body: JSON.stringify({
       model: GROQ_MODEL,
       temperature: 0,
+      reasoning_effort: "none",
+      max_completion_tokens: 4096,
       messages: [
         {
           role: "user",
           content: [
-            { type: "text", text: AI_PROMPT },
+            { type: "text", text: aiPrompt() },
             { type: "image_url", image_url: { url: imageDataUrl(canvas) } },
           ],
         },
@@ -8517,19 +8969,70 @@ async function extractWithGroq(canvas, key, signal) {
   return (data?.choices?.[0]?.message?.content || "").trim();
 }
 
-// Higher score = more likely to be the correct (upright) orientation.
-// Rewards both Tesseract's confidence and the amount of real text found.
+function isOcrHeadwordLine(line) {
+  const candidate = String(line || "")
+    .replace(/^\s*\d{1,5}[.)-]?\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (candidate.length < 2 || candidate.length > 48) return false;
+  if (!/^[A-Za-z][A-Za-z' .-]*$/.test(candidate)) return false;
+  const letters = (candidate.match(/[A-Za-z]/g) || []).length;
+  const chunks = candidate.split(/\s+/).filter(Boolean);
+  return letters >= 2 && chunks.length <= 4 && letters / candidate.length >= 0.55;
+}
+
+function isOcrMeaningLine(line) {
+  const candidate = String(line || "").replace(/^[\s:：・,、;；-]+/, "").trim();
+  const japanese = (candidate.match(/[ぁ-んァ-ヶ一-龠々]/g) || []).length;
+  return japanese >= 1 && candidate.length <= 100;
+}
+
+function isOcrPairLine(line) {
+  const candidate = String(line || "").replace(/^\s*\d{1,5}[.)-]?\s*/, "").trim();
+  const japaneseAt = candidate.search(/[ぁ-んァ-ヶ一-龠々]/);
+  if (japaneseAt <= 0) return false;
+  const term = candidate.slice(0, japaneseAt).replace(/[\s:：・,、;；-]+$/, "").trim();
+  const meaning = candidate.slice(japaneseAt);
+  return isOcrHeadwordLine(term) && isOcrMeaningLine(meaning);
+}
+
+function ocrTextMetrics(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  let pairCount = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (isOcrPairLine(line)) {
+      pairCount += 1;
+      continue;
+    }
+    // OCRが「英語行」「日本語行」に分けた場合も1組として数える。
+    if (isOcrHeadwordLine(line) && isOcrMeaningLine(lines[index + 1] || "")) {
+      pairCount += 1;
+      index += 1;
+    }
+  }
+  const meaningful = (String(text || "").match(/[A-Za-zぁ-んァ-ヶ一-龠々]/g) || []).length;
+  return { lines: lines.length, pairCount, meaningful };
+}
+
+// 「単語＋日本語訳」の組を最優先し、同点に近いときだけTesseract confidenceを使う。
+function scoreOcrResult(data) {
+  const metrics = ocrTextMetrics(data?.text || "");
+  const confidence = Number.isFinite(data?.confidence) ? data.confidence : 0;
+  return metrics.pairCount * 500 + confidence * 2 + Math.min(metrics.meaningful, 800) * 0.2;
+}
+
 function scoreOrientation(data) {
-  const text = data && data.text ? data.text : "";
-  const meaningful = (text.match(/[A-Za-zぁ-んァ-ヶ一-龠]/g) || []).length;
-  const confidence = typeof data.confidence === "number" ? data.confidence : 0;
-  return confidence * Math.log2(1 + meaningful);
+  return scoreOcrResult(data);
 }
 
 // Tries the four right-angle orientations on a small probe image and returns
 // the rotation (deg) that reads best, so sideways/upside-down photos work.
 async function detectOrientation(worker, baseCanvas) {
-  const probe = downscaleCanvas(baseCanvas, 1000);
+  const probe = downscaleCanvas(baseCanvas, 1100);
   const angles = [0, 90, 270, 180];
   let best = { angle: 0, score: -1 };
   for (let i = 0; i < angles.length; i += 1) {
@@ -8541,19 +9044,138 @@ async function detectOrientation(worker, baseCanvas) {
   return best.angle;
 }
 
+let ocrWorker = null;
+let ocrWorkerMode = null;
+let ocrWorkerPromise = null;
+let ocrPhaseLabel = "文字を読んでいます";
+
+function reportOcrProgress(progress) {
+  if (progress.status === "recognizing text") {
+    const percent = Math.round(progress.progress * 100);
+    setStatus(`${ocrPhaseLabel}... ${percent}%`);
+  } else if (/load|download|initializ/i.test(progress.status || "")) {
+    setStatus("OCRモデルを準備中…（初回だけダウンロードします）");
+  }
+}
+
+async function resetOcrWorker() {
+  const worker = ocrWorker;
+  ocrWorker = null;
+  ocrWorkerMode = null;
+  if (worker) {
+    try {
+      await worker.terminate();
+    } catch {
+      // 壊れたworkerの後始末失敗は次回の再生成を妨げない。
+    }
+  }
+}
+
+async function getOcrWorker(Tesseract, highAccuracy) {
+  const mode = highAccuracy ? "best" : "fast";
+  if (ocrWorker && ocrWorkerMode === mode) return ocrWorker;
+  if (ocrWorkerPromise) {
+    await ocrWorkerPromise;
+    if (ocrWorker && ocrWorkerMode === mode) return ocrWorker;
+  }
+
+  ocrWorkerPromise = (async () => {
+    await resetOcrWorker();
+    const options = { logger: reportOcrProgress };
+    if (highAccuracy) options.langPath = "https://tessdata.projectnaptha.com/4.0.0_best";
+    const engineMode = Tesseract.OEM?.LSTM_ONLY ?? 1;
+    ocrWorker = await Tesseract.createWorker(["eng", "jpn"], engineMode, options);
+    ocrWorkerMode = mode;
+    return ocrWorker;
+  })();
+  try {
+    return await ocrWorkerPromise;
+  } finally {
+    ocrWorkerPromise = null;
+  }
+}
+
+function ocrRegions(canvas, layout) {
+  if (layout !== "two") return [canvas];
+  // 中央の文字を切らないよう、左右それぞれに幅の1.5%だけ重なりを持たせる。
+  const overlap = Math.max(2, Math.round(canvas.width * 0.015));
+  const middle = Math.floor(canvas.width / 2);
+  return [
+    cropCanvasArea(canvas, 0, 0, middle + overlap, canvas.height),
+    cropCanvasArea(canvas, middle - overlap, 0, canvas.width - middle + overlap, canvas.height),
+  ];
+}
+
+function releaseTemporaryCanvas(canvas, keep = null) {
+  if (!canvas || canvas === keep || !(canvas instanceof HTMLCanvasElement)) return;
+  canvas.width = 0;
+  canvas.height = 0;
+}
+
+async function recognizeOcrCanvas(worker, canvas, layout, variantLabel) {
+  const pageSegmentationMode = layout === "auto" ? "3" : "6";
+  await worker.setParameters({
+    tessedit_pageseg_mode: pageSegmentationMode,
+    preserve_interword_spaces: "1",
+    user_defined_dpi: "300",
+  });
+
+  const results = [];
+  const regions = ocrRegions(canvas, layout);
+  for (let index = 0; index < regions.length; index += 1) {
+    const regionLabel = regions.length > 1 ? `・${index === 0 ? "左列" : "右列"}` : "";
+    ocrPhaseLabel = `文字を読んでいます（${variantLabel}${regionLabel}）`;
+    try {
+      const { data } = await worker.recognize(regions[index]);
+      results.push(data || {});
+    } finally {
+      // 2列モードの切り出しCanvasは片列を読み終えた時点で解放する。
+      releaseTemporaryCanvas(regions[index], canvas);
+    }
+  }
+
+  const text = results.map((data) => String(data.text || "").trim()).filter(Boolean).join("\n");
+  let confidenceTotal = 0;
+  let confidenceWeight = 0;
+  for (const data of results) {
+    const weight = Math.max(1, ocrTextMetrics(data.text || "").meaningful);
+    confidenceTotal += (Number.isFinite(data.confidence) ? data.confidence : 0) * weight;
+    confidenceWeight += weight;
+  }
+  return { text, confidence: confidenceWeight ? confidenceTotal / confidenceWeight : 0 };
+}
+
+function isOcrResultReliable(result) {
+  const metrics = result?.metrics || ocrTextMetrics(result?.text || "");
+  const confidence = Number.isFinite(result?.confidence) ? result.confidence : 0;
+  const suspicious = (String(result?.text || "").match(/[�©®™|_~`]/g) || []).length;
+  return (
+    metrics.pairCount >= 2 &&
+    confidence >= 35 &&
+    metrics.meaningful >= metrics.pairCount * 5 &&
+    suspicious <= Math.max(2, metrics.pairCount)
+  );
+}
+
 async function runOcr(source) {
   const hiAcc = Boolean(elements.hiAccToggle && elements.hiAccToggle.checked);
+  const layout = ["one", "two"].includes(elements.ocrLayoutSelect?.value)
+    ? elements.ocrLayoutSelect.value
+    : "auto";
 
   setStatus("画像を補正しています…");
-  let baseCanvas = null;
+  let normalCanvas = null;
+  let adaptiveCanvas = null;
   try {
-    baseCanvas = await preprocessImage(source, {
-      maxSide: hiAcc ? 3200 : 2200,
-      binarize: hiAcc,
+    normalCanvas = await preprocessImage(source, {
+      maxSide: hiAcc ? 4000 : 3200,
+      maxPixels: hiAcc ? 9 * 1000 * 1000 : 7 * 1000 * 1000,
+      variant: "normal",
     });
   } catch {
-    baseCanvas = null;
+    if (source instanceof HTMLCanvasElement) normalCanvas = source;
   }
+  if (!normalCanvas) throw new Error("OCR用に画像を準備できませんでした。");
 
   setStatus(
     hiAcc
@@ -8561,46 +9183,64 @@ async function runOcr(source) {
       : "OCRを準備しています。初回は少し時間がかかります。",
   );
   const Tesseract = await loadTesseract();
-  let phaseLabel = "文字を読んでいます";
-  const workerOptions = {
-    logger(progress) {
-      if (progress.status === "recognizing text") {
-        const percent = Math.round(progress.progress * 100);
-        setStatus(`${phaseLabel}... ${percent}%`);
-      } else if (hiAcc && /load|download|initializ/i.test(progress.status)) {
-        setStatus("高精度モデルを準備中…（初回は時間がかかります）");
-      }
-    },
-  };
-  if (hiAcc) {
-    workerOptions.langPath = "https://tessdata.projectnaptha.com/4.0.0_best";
-  }
-  const worker = await Tesseract.createWorker("eng+jpn", 1, workerOptions);
+  const worker = await getOcrWorker(Tesseract, hiAcc);
 
   try {
+    // 向き判定は全文レイアウトの軽量画像で一度だけ行い、各補正候補・各列で再利用する。
     await worker.setParameters({
-      tessedit_pageseg_mode: "6", // assume a single uniform block of lines
+      tessedit_pageseg_mode: "3",
       preserve_interword_spaces: "1",
     });
-
-    if (!baseCanvas) {
-      const { data } = await worker.recognize(source);
-      return data.text;
-    }
-
-    phaseLabel = "写真の向きを判定しています";
+    ocrPhaseLabel = "写真の向きを判定しています";
     let angle = 0;
     try {
-      angle = await detectOrientation(worker, baseCanvas);
+      angle = await detectOrientation(worker, normalCanvas);
     } catch {
       angle = 0;
     }
 
-    phaseLabel = "文字を読んでいます";
-    const { data } = await worker.recognize(rotateCanvas(baseCanvas, angle));
-    return data.text;
+    const candidates = [];
+    let rotated = rotateCanvas(normalCanvas, angle);
+    try {
+      candidates.push(await recognizeOcrCanvas(worker, rotated, layout, "通常補正"));
+    } finally {
+      releaseTemporaryCanvas(rotated, normalCanvas);
+      releaseTemporaryCanvas(normalCanvas, source);
+      normalCanvas = null;
+    }
+
+    // 高精度候補は通常候補の認識・解放後に作り、2枚の大きなCanvasを同時保持しない。
+    if (hiAcc) {
+      try {
+        setStatus("照明むら補正を試しています…");
+        adaptiveCanvas = await preprocessImage(source, {
+          maxSide: 4000,
+          maxPixels: 9 * 1000 * 1000,
+          variant: "adaptive",
+        });
+        rotated = rotateCanvas(adaptiveCanvas, angle);
+        try {
+          candidates.push(await recognizeOcrCanvas(worker, rotated, layout, "照明むら補正"));
+        } finally {
+          releaseTemporaryCanvas(rotated, adaptiveCanvas);
+          releaseTemporaryCanvas(adaptiveCanvas, source);
+          adaptiveCanvas = null;
+        }
+      } catch {
+        // メモリ不足などで追加補正だけ失敗した場合は通常補正の結果で続行する。
+        releaseTemporaryCanvas(adaptiveCanvas, source);
+        adaptiveCanvas = null;
+      }
+    }
+    candidates.sort((a, b) => scoreOcrResult(b) - scoreOcrResult(a));
+    const best = candidates[0] || { text: "", confidence: 0 };
+    return { ...best, metrics: ocrTextMetrics(best.text) };
+  } catch (error) {
+    await resetOcrWorker();
+    throw error;
   } finally {
-    await worker.terminate();
+    releaseTemporaryCanvas(normalCanvas, source);
+    releaseTemporaryCanvas(adaptiveCanvas, source);
   }
 }
 
@@ -8658,6 +9298,9 @@ function visibleSavedWords() {
   const needle = wordSearchQuery.trim().toLowerCase();
   let words = scopedWords();
   if (favoritesOnly) words = words.filter((word) => word.favorite);
+  if (libraryCefrLevel !== "all") {
+    words = words.filter((word) => cefrMatches(word, libraryCefrLevel));
+  }
   if (needle) words = words.filter((word) => wordMatchesQuery(word, needle));
   return sortWordsForList(words);
 }
@@ -8683,10 +9326,17 @@ function renderSavedWords() {
 
   // 案2: 表示条件（単語帳・並び替え・お気に入り・検索語）が変わったらページングを
   // 先頭に戻す。同期反映などで条件が変わらない再描画では表示済み件数を維持する。
-  const signature = JSON.stringify([appState.activeDeckId, wordSortMode, favoritesOnly, needle]);
+  const signature = JSON.stringify([
+    appState.activeDeckId,
+    wordSortMode,
+    favoritesOnly,
+    libraryCefrLevel,
+    needle,
+  ]);
   if (signature !== savedListSignature) {
     savedListSignature = signature;
     savedListVisibleCount = SAVED_LIST_PAGE_SIZE;
+    savedListWindowStart = 0;
   }
 
   // 検索ボックスの状態（クリアボタン・件数）を更新
@@ -8694,6 +9344,9 @@ function renderSavedWords() {
   if (elements.wordSearchCount) {
     elements.wordSearchCount.hidden = !needle;
     if (needle) elements.wordSearchCount.textContent = `${words.length}件`;
+  }
+  if (elements.savedNumberJump) {
+    elements.savedNumberJump.max = String(Math.max(1, words.length));
   }
 
   if (words.length === 0) {
@@ -8709,13 +9362,23 @@ function renderSavedWords() {
     return;
   }
 
+  // ジャンプ先のページで削除・同期が起きて総件数が減った場合は、空白ページを残さず
+  // 最後に存在するページへ戻す。
+  if (savedListWindowStart >= words.length) {
+    savedListWindowStart = Math.floor((words.length - 1) / SAVED_LIST_PAGE_SIZE) * SAVED_LIST_PAGE_SIZE;
+  }
+  savedListVisibleCount = Math.min(
+    words.length,
+    Math.max(savedListVisibleCount, savedListWindowStart + SAVED_LIST_PAGE_SIZE),
+  );
+
   elements.savedList.className = "word-list";
   elements.savedList.innerHTML = "";
   // 案2: 先頭から一定件数だけDOM化する。番号（saved-index）や範囲選択の番号は
   // visibleSavedWords() 全体の1始まり通し番号のままなので、ページングでずれない。
-  const shownWords = words.slice(0, savedListVisibleCount);
-  appendSavedWordRows(shownWords, 0);
-  updateSavedListMore(words.length, shownWords.length);
+  const shownWords = words.slice(savedListWindowStart, savedListVisibleCount);
+  appendSavedWordRows(shownWords, savedListWindowStart);
+  updateSavedListMore(words.length, savedListVisibleCount);
 
   renderSelection();
   scheduleLibraryMetadataBackfill();
@@ -8731,6 +9394,7 @@ function appendSavedWordRows(words, startIndex) {
     const row = document.createElement("div");
     row.className = "saved-item";
     row.dataset.wordId = word.id;
+    row.dataset.savedIndex = String(index + 1);
     const safeTerm = escapeHtml(word.term);
     row.innerHTML = `
       <div class="saved-row">
@@ -8743,10 +9407,10 @@ function appendSavedWordRows(words, startIndex) {
           <strong>${safeTerm}</strong>
           ${posBadgeMarkup(word)}
           <button class="speak-button" type="button" data-speak-word="${word.id}" aria-label="${safeTerm} の発音を聞く" title="発音を聞く">🔊</button>
-          ${cefrBadgeMarkup(word.term, word.cefr)}
         </div>
         <span class="saved-meaning">${escapeHtml(word.meaning)}</span>
         <div class="saved-meta">
+          ${cefrBadgeMarkup(word.term, word.cefr)}
           <small>${status} / ${attempts}回出題 / ${word.stats.correct}回正解</small>
           ${historyMarkup(word)}
           <label class="deck-move">単語帳
@@ -8785,7 +9449,8 @@ function updateSavedListMore(total, shown) {
 
 function appendNextSavedWordsPage() {
   const words = visibleSavedWords();
-  const start = elements.savedList.querySelectorAll(".saved-item[data-word-id]").length;
+  const start =
+    savedListWindowStart + elements.savedList.querySelectorAll(".saved-item[data-word-id]").length;
   if (start >= words.length) return;
   invalidateLibraryMetadataWork();
   const end = Math.min(words.length, start + SAVED_LIST_PAGE_SIZE);
@@ -8798,6 +9463,31 @@ function appendNextSavedWordsPage() {
   // 押した「さらに表示」の代わりに、同じ役割の次ボタンへフォーカスを引き継ぐ。
   // 最終ページでは新しい行の末尾にフォーカスを強制せず、読み位置とスクロールを維持する。
   nextButton?.focus({ preventScroll: true });
+}
+
+// 指定番号を含む100件だけを描画する。#9900でも先頭から9900行をDOM化しないため、
+// 大きな単語帳で「さらに表示」を何十回も押す必要も、巨大な再描画もない。
+function jumpToSavedWordNumber() {
+  const words = visibleSavedWords();
+  const total = words.length;
+  const requested = parseInt(elements.savedNumberJump?.value, 10);
+  if (total === 0) {
+    setStatus("表示できる単語がありません。");
+    return;
+  }
+  if (!Number.isFinite(requested) || requested < 1 || requested > total) {
+    setStatus(`1〜${total}の番号を入力してください。`);
+    elements.savedNumberJump?.focus();
+    return;
+  }
+  savedListWindowStart = Math.floor((requested - 1) / SAVED_LIST_PAGE_SIZE) * SAVED_LIST_PAGE_SIZE;
+  savedListVisibleCount = Math.min(total, savedListWindowStart + SAVED_LIST_PAGE_SIZE);
+  renderSavedWords();
+  const row = elements.savedList.querySelector(`[data-saved-index="${requested}"]`);
+  row?.scrollIntoView({ behavior: "smooth", block: "center" });
+  row?.classList.add("is-jump-target");
+  window.setTimeout(() => row?.classList.remove("is-jump-target"), 1200);
+  setStatus(`${requested}番を表示しました（${savedListWindowStart + 1}〜${savedListVisibleCount}番）。`);
 }
 
 function formatTrashTime(ts) {
@@ -8965,15 +9655,28 @@ function updateSavedWordRow(word) {
 }
 
 function learningLabel(word) {
+  const nextReviewAt = Number(word.learning?.nextReviewAt || 0);
+  const due = nextReviewAt > 0 && nextReviewAt <= Date.now();
+  const nextDate = nextReviewAt > 0
+    ? new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }).format(nextReviewAt)
+    : "";
   // データ値の "mastered" 自体は変更しない（同期・既存データが壊れるため）。表示文字列のみ日本語化。
-  if (word.learning.status === "mastered") return "習得済み";
-  if (word.learning.status === "review") {
-    const remaining = Math.max(0, word.learning.reviewAt - appState.quizCounter);
-    return remaining === 0 ? "復習出題待ち" : `あと${remaining}問後に復習`;
+  if (word.learning.status === "mastered") {
+    if (due) return "習得済み（復習期日）";
+    return nextDate ? `習得済み（次回 ${nextDate}）` : "習得済み";
   }
-  // 「未出題」は本当に出題回数0のときだけ。出題歴があるのに status が "new" のままの
-  // 旧データ（復習セッションで解答した場合など）は「学習中」と表示して矛盾を避ける
-  return word.stats.correct + word.stats.wrong > 0 ? "学習中" : "未出題";
+  if (
+    word.stats.correct + word.stats.wrong === 0 &&
+    !word.learning.firstAttempted
+  ) return "未着手";
+  if (word.learning.status === "review") {
+    if (due) return "復習中（今日の復習）";
+    const remaining = Math.max(0, word.learning.reviewAt - appState.quizCounter);
+    const short = remaining === 0 ? "出題待ち" : `あと${remaining}問`;
+    return nextDate ? `復習中（${short}・次回 ${nextDate}）` : `復習中（${short}）`;
+  }
+  // 出題歴がある旧データで status が new のままでも、3分類では「復習中」に統一する。
+  return "復習中";
 }
 
 // クイズカード上部のピル／細い進捗バーを最新状態に合わせる。
@@ -9009,10 +9712,19 @@ function renderQuizProgress() {
 function renderQuiz() {
   renderAccuracy();
   renderQuizProgress();
+  renderQuizScope();
+  renderQuizLearningProgress();
   updateResumeButton();
 
   if (elements.generalReviewButton) {
-    elements.generalReviewButton.disabled = appState.words.length === 0;
+    const count = eligibleSrsWords().length;
+    elements.generalReviewButton.textContent = `今日の復習（${count}語）`;
+    elements.generalReviewButton.disabled = count === 0;
+  }
+  if (elements.difficultQuizButton) {
+    const count = difficultQuizWords().length;
+    elements.difficultQuizButton.textContent = `苦手だけ解く（${count}語）`;
+    elements.difficultQuizButton.disabled = count === 0;
   }
 
   if (reviewSession) {
@@ -9020,8 +9732,6 @@ function renderQuiz() {
     updateQuizControls();
     return;
   }
-
-  renderQuizScope();
 
   // 復習セッション完走直後は、通常クイズ中(quizStarted=true)かどうかに関わらず
   // 専用の結果表示（正解数・間違えた単語・再挑戦導線）を最優先で出す。
@@ -9082,14 +9792,14 @@ function renderQuizIntro() {
   elements.quizFeedback.textContent =
     availableQuizWords().length > 0
       ? "下の「クイズを始める（おまかせ）」を押すと、保存した単語の意味クイズが始まります。"
-      : "通常出題できる単語がありません。「総復習」か、一覧から選んで「選択した単語を解く」で復習できます。";
+      : "通常出題できる単語がありません。CEFRや単語帳の条件を変えるか、一覧から選んで復習できます。";
 }
 
 function renderQuizEmpty() {
   elements.choices.innerHTML = "";
   elements.quizWord.textContent = "今出せる問題はありません";
   elements.quizFeedback.textContent =
-    "2回連続で正解した単語は習得済みとして保存され、通常クイズからは外れています。「総復習」や「選択した単語を解く」で復習できます。";
+    "2回連続で正解した単語は習得済みとして保存され、通常クイズからは外れています。復習対象ができるまで待つか、一覧から選んで復習できます。";
 }
 
 function updateQuizControls() {
@@ -9109,6 +9819,8 @@ function updateQuizControls() {
   // 出題中はクイズ設定欄を隠して、問題と選択肢を上に表示する
   if (elements.quizSetup) elements.quizSetup.hidden = quizActive || showingResult;
   elements.startQuizButton.hidden = quizActive || showingResult;
+  if (elements.difficultQuizButton) elements.difficultQuizButton.hidden = quizActive || showingResult;
+  if (elements.generalReviewButton) elements.generalReviewButton.hidden = quizActive || showingResult;
   elements.nextQuizButton.hidden = !quizActive || showingResult;
   elements.dontKnowButton.hidden = !questionActive || showingResult;
   elements.exitReviewButton.hidden = !inReview;
@@ -9118,7 +9830,7 @@ function updateQuizControls() {
 }
 
 function renderAccuracy() {
-  const totals = scopedWords().reduce(
+  const totals = quizSelectedDeckWords().reduce(
     (sum, word) => {
       sum.correct += word.stats.correct;
       sum.wrong += word.stats.wrong;
@@ -9140,6 +9852,11 @@ function wordAccuracy(word) {
 // 正答率に「正解回数が増えるほど高まる信頼度(0→1)」を掛け合わせる。
 // 未出題・全問不正解は 0 で最優先、正解回数が多く正答率が高い単語ほど後回し。
 function reviewPriority(word) {
+  const nextReviewAt = Number(word.learning?.nextReviewAt || 0);
+  if (nextReviewAt > 0 && nextReviewAt <= Date.now()) {
+    // 期限超過が長い語ほど負の値を小さくし、正答率より先に並べる。
+    return -1 - Math.min(3650, (Date.now() - nextReviewAt) / SRS_DAY_MS);
+  }
   const accuracy = wordAccuracy(word);
   const confidence = 1 - 1 / (word.stats.correct + 1);
   return accuracy * confidence;
@@ -9280,13 +9997,52 @@ function startReview(ids, options = {}) {
 }
 
 // 全単語を定着度スコアの低い順（未出題=最優先）で出題する。
-function startGeneralReview() {
-  if (appState.words.length === 0) {
-    setStatus("保存した単語がありません。");
+function eligibleReviewWords(words = quizSelectedDeckWords()) {
+  const now = Date.now();
+  return words.filter(
+    (word) =>
+      word.learning.status === "review" &&
+      (word.learning.reviewAt <= appState.quizCounter ||
+        (word.learning.blockedUntil > 0 && word.learning.blockedUntil <= now)),
+  );
+}
+
+function eligibleSrsWords(words = quizSelectedDeckWords(), now = Date.now()) {
+  return words
+    .filter((word) => {
+      const nextReviewAt = Number(word.learning?.nextReviewAt || 0);
+      return nextReviewAt > 0 && nextReviewAt <= now;
+    })
+    .slice()
+    .sort((a, b) => {
+      const dueDiff = Number(a.learning.nextReviewAt) - Number(b.learning.nextReviewAt);
+      return dueDiff || reviewPriority(a) - reviewPriority(b);
+    });
+}
+
+// 一度でも誤答し、かつ正答率80%未満の語だけを既存の定着度順で復習する。
+// 未出題語は含めないため、「苦手だけ」という表示と実際の対象が一致する。
+function difficultQuizWords(words = quizSelectedDeckWords()) {
+  return words.filter((word) => word.stats.wrong > 0 && wordAccuracy(word) < 0.8);
+}
+
+function startDifficultQuiz() {
+  const words = difficultQuizWords();
+  if (words.length === 0) {
+    setStatus("この条件には苦手な単語がありません。");
     return;
   }
-  const ids = appState.words.map((word) => word.id);
-  startReview(ids, { order: "priority", label: "総復習" });
+  startReview(words.map((word) => word.id), { order: "priority", label: "苦手復習" });
+}
+
+function startGeneralReview() {
+  const words = eligibleSrsWords();
+  if (words.length === 0) {
+    setStatus("今日の復習はありません。学習した単語は次の復習日にここへ表示されます。");
+    return;
+  }
+  // eligibleSrsWords() が作った「期限超過が古い順」を、そのままセッションへ渡す。
+  startReview(words.map((word) => word.id), { shuffle: false, label: "今日の復習" });
 }
 
 // クイズの「出題する単語帳」プルダウンを最新の単語帳で作り直す（選択は保持）。
@@ -9306,13 +10062,15 @@ function populateQuizDeckSelect() {
 // クイズ設定で選ばれている単語帳の単語（保存順＝ライブラリの番号と同じ並び）
 function quizSelectedDeckWords() {
   const id = elements.quizDeckSelect ? elements.quizDeckSelect.value : "all";
-  return id === "all" ? appState.words : appState.words.filter((word) => word.deckId === id);
+  const cefr = elements.quizCefrSelect?.value || "all";
+  const words = id === "all" ? appState.words : appState.words.filter((word) => word.deckId === id);
+  return words.filter((word) => cefrMatches(word, cefr));
 }
 
 function updateQuizDeckCount() {
   if (!elements.quizDeckCount) return;
   const n = quizSelectedDeckWords().length;
-  elements.quizDeckCount.textContent = n ? `この単語帳: ${n}語` : "単語なし";
+  elements.quizDeckCount.textContent = n ? `出題対象: ${n}語` : "対象なし";
 }
 
 // 選んだ単語帳・番号の範囲でクイズ（出題セッション）を開始する
@@ -9521,7 +10279,14 @@ function buildReviewQuiz() {
     const choices = shuffle([answer, ...pickDistractors(pool, answer, 3)]);
     // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
     elements.quizFeedback.textContent = choiceCountNote(choices);
-    return { answer, choices, answered: false };
+    return {
+      answer,
+      choices,
+      answered: false,
+      srsDueAtStart:
+        Number(answer.learning?.nextReviewAt || 0) > 0 &&
+        Number(answer.learning.nextReviewAt) <= Date.now(),
+    };
   }
   return null;
 }
@@ -9568,29 +10333,33 @@ function buildQuiz() {
     lastAnswerId && words.length > 1 ? words.filter((word) => word.id !== lastAnswerId) : words;
   const answer = chooseNextWord(candidates);
   if (!answer) return null;
-  const pool = scopedWords().filter((word) => word.id !== answer.id);
+  const pool = quizSelectedDeckWords().filter((word) => word.id !== answer.id);
   const basePool = pool.length >= 3 ? pool : appState.words.filter((word) => word.id !== answer.id);
   const distractors = pickDistractors(basePool, answer, 3);
   const choices = shuffle([answer, ...distractors]);
   // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
   elements.quizFeedback.textContent = choiceCountNote(choices);
   normalQuizQuestionNumber += 1; // 通常クイズ（エンドレス）の「◯問目」表示用
-  return { answer, choices, answered: false };
+  return {
+    answer,
+    choices,
+    answered: false,
+    srsDueAtStart:
+      Number(answer.learning?.nextReviewAt || 0) > 0 &&
+      Number(answer.learning.nextReviewAt) <= Date.now(),
+  };
 }
 
 function availableQuizWords() {
-  const now = Date.now();
-  const scoped = scopedWords();
+  const scoped = quizSelectedDeckWords();
+  // 日次SRSはmasteredも含むため、従来のstatusベース候補より先に扱う。
+  const dueSrs = eligibleSrsWords(scoped);
+  if (dueSrs.length > 0) return dueSrs;
   // 誤答した単語は「◯問後に復習」(reviewAt) と「5分経過」(blockedUntil) の早い方で出題対象に戻る。
   // 5分ルールはcounterが進まないまま放置された時の保険であり、通常は◯問後の条件が先に成立する。
   // blockedUntil は誤答時にのみセットされる。未設定(0)を「0 <= now で常に復習可」と
   // 扱うと、正解直後の review 単語が即座に最優先で戻り、同じ問題が2連続で出てしまう。
-  const dueReviews = scoped.filter(
-    (word) =>
-      word.learning.status === "review" &&
-      (word.learning.reviewAt <= appState.quizCounter ||
-        (word.learning.blockedUntil > 0 && word.learning.blockedUntil <= now)),
-  );
+  const dueReviews = eligibleReviewWords(scoped);
   if (dueReviews.length > 0) return dueReviews;
 
   const freshWords = scoped.filter((word) => word.learning.status === "new");
@@ -9601,9 +10370,16 @@ function availableQuizWords() {
 }
 
 function chooseNextWord(words) {
+  const now = Date.now();
   return words
     .slice()
     .sort((a, b) => {
+      const dueA = Number(a.learning?.nextReviewAt || 0);
+      const dueB = Number(b.learning?.nextReviewAt || 0);
+      const isDueA = dueA > 0 && dueA <= now;
+      const isDueB = dueB > 0 && dueB <= now;
+      if (isDueA !== isDueB) return isDueA ? -1 : 1;
+      if (isDueA && dueA !== dueB) return dueA - dueB;
       if (a.learning.status !== b.learning.status) {
         return a.learning.status === "review" ? -1 : 1;
       }
@@ -9621,9 +10397,23 @@ function scheduleReview(word) {
 // 解答結果を学習状態（習得/復習）に反映する。通常クイズ・範囲クイズ・総復習で共通の判定。
 // 習得条件は「2回連続正解」：1回目の正解は復習スケジュールに留め、誤答は連続カウンタを0に戻す。
 // 正解で習得済みが取り消されることはない（既に mastered なら維持する）。
-function applyLearningResult(word, isCorrect) {
+function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.now()) {
   const learning = word.learning;
+  const srsWasUnstarted = Number(learning.nextReviewAt || 0) <= 0;
+  const currentStage = Math.max(
+    0,
+    Math.min(SRS_INTERVAL_DAYS.length - 1, Math.floor(Number(learning.srsStage) || 0)),
+  );
+  learning.srsUpdatedAt = now;
+  learning.lastSrsResult = isCorrect ? "correct" : "wrong";
   if (isCorrect) {
+    // 初回の正解、または問題を作った時点で期限到来していた正解だけ段階を進める。
+    // 期限前の手動復習や、誤答後に同一セッションで再出題された問題では進めない。
+    if (srsWasUnstarted || srsDueAtStart) {
+      const nextStage = Math.min(SRS_INTERVAL_DAYS.length - 1, currentStage + 1);
+      learning.srsStage = nextStage;
+      learning.nextReviewAt = now + SRS_INTERVAL_DAYS[nextStage] * SRS_DAY_MS;
+    }
     learning.correctStreak = Math.max(0, Math.floor(Number(learning.correctStreak) || 0)) + 1;
     learning.firstAttempted = true;
     if (learning.status === "mastered" || learning.correctStreak >= 2) {
@@ -9634,6 +10424,10 @@ function applyLearningResult(word, isCorrect) {
       scheduleReview(word);
     }
   } else {
+    // 誤答は日次SRSを最初からやり直し、翌日に再確認する。2〜3問後/5分後の
+    // 短期再確認は既存reviewAt・blockedUntilで別に維持する。
+    learning.srsStage = 0;
+    learning.nextReviewAt = now + SRS_DAY_MS;
     learning.correctStreak = 0;
     scheduleReview(word);
   }
@@ -9728,12 +10522,13 @@ function gradeQuiz(choiceId, dontKnow = false) {
   if (word.history.length > 50) word.history = word.history.slice(-50);
   // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
   // 場合の保険で、実際には◯問後の条件が先に成立することが多い（OR判定はavailableQuizWords側）
-  if (!isCorrect) word.learning.blockedUntil = Date.now() + WRONG_COOLDOWN_MS;
+  const answeredAt = Date.now();
+  if (!isCorrect) word.learning.blockedUntil = answeredAt + WRONG_COOLDOWN_MS;
   highlightChoices(choiceId);
 
   // 範囲クイズ・総復習でも通常クイズと同じ判定で学習状態（習得/復習）を更新する
   appState.quizCounter += 1;
-  applyLearningResult(word, isCorrect);
+  applyLearningResult(word, isCorrect, Boolean(currentQuiz.srsDueAtStart), answeredAt);
 
   if (reviewSession) {
     // セッションのキュー操作（誤答は末尾へ回す）と進捗カウントは従来どおり維持する
@@ -10202,6 +10997,23 @@ function etymologyLinks(term) {
 }
 
 function enrichBody(type, data, term) {
+  if (type === "pronunciation") {
+    const seen = new Set();
+    const texts = (Array.isArray(data?.texts) ? data.texts : [])
+      .map((value) => String(value || "").replace(/\s+/g, " ").trim())
+      .filter((value) => {
+        const key = value.replace(/^\/+|\/+$/g, "").trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 3);
+    if (!texts.length) return enrichEmpty("発音記号が見つかりませんでした。");
+    return `<div class="enrich-links">${texts
+      .map((text) => `<span class="enrich-link">${escapeHtml(text)}</span>`)
+      .join("")}</div>`;
+  }
+
   if (type === "etymology") {
     const norm = normalizeEtymologyData(data);
     const note = norm.text
@@ -10306,7 +11118,8 @@ async function handleEnrichChip(chip) {
   const data = await window.Enrich.fetch(type, word.term, word.pos?.tag || null);
   if (data && !window.Enrich.isEmpty(type, data)) {
     word.enrich[type] = data;
-    persistAppState();
+    // enrichは端末ローカルの再取得可能キャッシュで同期payloadから除外済み。
+    persistAppState({ sync: false });
   }
   if (chip.getAttribute("aria-pressed") !== "true") return;
   section.innerHTML = enrichSectionShell(type, enrichBody(type, data, word.term));
@@ -10362,7 +11175,7 @@ async function backfillTranslations(type, word, section, chip) {
     targets.forEach((target, i) => {
       target.ja = translated[i] !== undefined ? translated[i] : null;
     });
-    persistAppState();
+    persistAppState({ sync: false });
 
     // チップが開いたままであれば和訳を反映して再描画する。
     if (chip.getAttribute("aria-pressed") === "true" && section.isConnected) {
@@ -10450,8 +11263,17 @@ elements.ocrButton.addEventListener("click", async () => {
 
   elements.ocrButton.disabled = true;
   try {
-    elements.ocrText.value = await runOcr(getEditedCanvas());
-    setStatus("OCRが完了しました。必要ならテキストを直してから変換してください。");
+    const result = await runOcr(getEditedCanvas());
+    elements.ocrText.value = result.text;
+    if (isOcrResultReliable(result)) {
+      setStatus(
+        `端末内OCRが完了しました（単語と訳の組を約${result.metrics.pairCount}件検出）。内容を確認してから「単語リストに変換」を押してください。`,
+      );
+    } else {
+      setStatus(
+        "読み取り結果の確信度が低いため、自動登録していません。1列/2列を切り替えるか、範囲を狭くして再実行し、内容を修正してから変換してください。",
+      );
+    }
   } catch (error) {
     setStatus(`${error.message} 下の欄に単語と意味を貼り付ければ続けられます。`);
   } finally {
@@ -10480,7 +11302,7 @@ function renderAiKeyFields() {
   const fields = AI_PROVIDERS.map(
     (provider) => `
       <label class="field">
-        <span>${provider.name} APIキー — <a href="${provider.keyUrl}" target="_blank" rel="noopener noreferrer">無料キーを取得 ↗</a></span>
+        <span>${provider.name} APIキー — <a href="${provider.keyUrl}" target="_blank" rel="noopener noreferrer">設定ページを開く ↗</a></span>
         <div class="ai-key-row">
           <input class="ai-key" type="password" autocomplete="off" data-provider="${provider.id}" placeholder="${provider.placeholder}" />
           <button type="button" class="ghost mini ai-paste" data-paste="${provider.id}">貼り付け</button>
@@ -10586,11 +11408,12 @@ elements.aiOcrButton.addEventListener("click", async () => {
           getAiKey(provider.id),
           controller ? controller.signal : undefined,
         );
-        if (text) {
+        const metrics = ocrTextMetrics(text);
+        if (text && metrics.pairCount > 0) {
           result = { text, name: provider.name };
           break;
         }
-        errors.push(`${provider.name}: 空の結果`);
+        errors.push(`${provider.name}: 単語と日本語訳の組を検出できませんでした`);
       } catch (error) {
         if (error && error.name === "AbortError") {
           if (aiExtractCancelled) break; // 手動中断：他のプロバイダも試さず終了
@@ -10621,9 +11444,10 @@ renderAiKeyFields();
 
 elements.sampleButton.addEventListener("click", () => {
   playSound("tap");
-  elements.ocrText.value = SAMPLE_TEXT;
+  const existing = elements.ocrText.value.trimEnd();
+  elements.ocrText.value = existing ? `${existing}\n${SAMPLE_TEXT}` : SAMPLE_TEXT;
   if (elements.importAllSavedActions) elements.importAllSavedActions.hidden = true;
-  setStatus("サンプルを入れました。「単語リストに変換」を押して流れを試せます。");
+  setStatus("独自選定の大学受験上位60語を末尾に追加しました。既存の入力は保持されています。");
 });
 
 elements.parseButton.addEventListener("click", () => {
@@ -10709,7 +11533,17 @@ elements.saveParsedButton.addEventListener("click", () => {
       enrich: emptyEnrich(),
       stats: { correct: 0, wrong: 0 },
       history: [],
-      learning: { status: "new", firstAttempted: false, reviewAt: 0, blockedUntil: 0, correctStreak: 0 },
+      learning: {
+        status: "new",
+        firstAttempted: false,
+        reviewAt: 0,
+        blockedUntil: 0,
+        correctStreak: 0,
+        srsStage: 0,
+        nextReviewAt: 0,
+        srsUpdatedAt: 0,
+        lastSrsResult: "",
+      },
     }));
 
   appState.words.push(...cleaned);
@@ -10824,10 +11658,11 @@ elements.savedList.addEventListener("change", (event) => {
   if (select) moveWordToDeck(select.dataset.moveWord, select.value);
 });
 
-elements.deckBar.addEventListener("click", (event) => {
+elements.deckBar.addEventListener("click", async (event) => {
   const actionButton = event.target.closest("[data-deck-action]");
   const action = actionButton?.dataset.deckAction;
   if (action === "add") return addDeck();
+  if (action === "share") return shareActiveDeck();
   if (action === "rename") return renameDeck();
   if (action === "delete") return deleteDeck(actionButton); // 2段階確認用にボタン自身を渡す
 
@@ -10927,6 +11762,7 @@ elements.nextQuizButton.addEventListener("click", () => {
 });
 
 elements.generalReviewButton.addEventListener("click", startGeneralReview);
+elements.difficultQuizButton?.addEventListener("click", startDifficultQuiz);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
 elements.resumeQuizButton?.addEventListener("click", resumeSavedReview);
@@ -10940,7 +11776,14 @@ elements.streakBadge?.addEventListener("click", () => {
     setStatus(`今日はまだ解いていません。1問解くと連続記録が続きます（現在${streak.count}日）。`);
   }
 });
-elements.quizDeckSelect?.addEventListener("change", updateQuizDeckCount);
+elements.quizDeckSelect?.addEventListener("change", () => {
+  updateQuizDeckCount();
+  renderQuiz();
+});
+elements.quizCefrSelect?.addEventListener("change", () => {
+  updateQuizDeckCount();
+  renderQuiz();
+});
 elements.quizRangeToggle?.addEventListener("click", () => {
   const show = elements.quizRangeRow.hidden;
   elements.quizRangeRow.hidden = !show;
@@ -10970,6 +11813,18 @@ elements.wordSearchClear?.addEventListener("click", () => {
 elements.wordSortSelect?.addEventListener("change", () => {
   wordSortMode = elements.wordSortSelect.value;
   renderSavedWords();
+});
+
+elements.libraryCefrSelect?.addEventListener("change", () => {
+  libraryCefrLevel = elements.libraryCefrSelect.value;
+  renderSavedWords();
+});
+
+elements.savedNumberJumpButton?.addEventListener("click", jumpToSavedWordNumber);
+elements.savedNumberJump?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  jumpToSavedWordNumber();
 });
 
 // お気に入り（★）だけ表示の切り替え
@@ -11058,6 +11913,118 @@ elements.clearSelectionButton.addEventListener("click", () => {
   renderSavedWords();
 });
 
+function deckSharePayload(deckId) {
+  const deck = appState.decks.find((item) => item.id === deckId);
+  if (!deck) return null;
+  return {
+    kind: "wordbank-deck",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    deck: { name: deck.name },
+    words: appState.words
+      .filter((word) => word.deckId === deckId)
+      .map((word) => ({
+        term: word.term,
+        meaning: word.meaning,
+        cefr: word.cefr?.level || null,
+        pos: word.pos?.tag || null,
+      })),
+  };
+}
+
+function safeDeckFileName(name) {
+  const safe = String(name || "wordbank-deck")
+    .normalize("NFKC")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  return `${safe || "wordbank-deck"}.json`;
+}
+
+function downloadJsonBlob(blob, filename) {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(objectUrl);
+}
+
+async function shareActiveDeck() {
+  const payload = deckSharePayload(appState.activeDeckId);
+  if (!payload) return;
+  if (payload.words.length === 0) {
+    setStatus("この単語帳には共有できる単語がまだありません。");
+    return;
+  }
+  const json = JSON.stringify(payload, null, 2);
+  const filename = safeDeckFileName(payload.deck.name);
+  const blob = new Blob([json], { type: "application/json" });
+
+  if (typeof File === "function" && navigator.share && navigator.canShare) {
+    const file = new File([blob], filename, { type: "application/json" });
+    try {
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `WordSnap 単語帳「${payload.deck.name}」`,
+          text: `${payload.words.length}語の共有単語帳です。`,
+        });
+        setStatus(`単語帳「${payload.deck.name}」を共有しました。学習成績や履歴は含まれません。`);
+        return;
+      }
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      // OS共有に失敗した端末では、同じ安全なJSONをダウンロードする。
+    }
+  }
+
+  downloadJsonBlob(blob, filename);
+  setStatus(`単語帳「${payload.deck.name}」を共有用JSONとして保存しました。学習成績や履歴は含まれません。`);
+}
+
+function uniqueImportedDeckName(requestedName) {
+  const base = String(requestedName || "共有単語帳").replace(/\s+/g, " ").trim().slice(0, 80) || "共有単語帳";
+  const used = new Set(appState.decks.map((deck) => deck.name.trim().toLowerCase()));
+  if (!used.has(base.toLowerCase())) return base;
+  let suffix = 2;
+  while (used.has(`${base} (${suffix})`.toLowerCase())) suffix += 1;
+  return `${base} (${suffix})`;
+}
+
+function parseDeckSharePayload(raw) {
+  if (!raw || raw.kind !== "wordbank-deck" || raw.version !== 1) {
+    throw new Error("共有単語帳ではありません");
+  }
+  if (!raw.deck || typeof raw.deck.name !== "string" || !Array.isArray(raw.words)) {
+    throw new Error("共有単語帳の形式が壊れています");
+  }
+  if (raw.words.length > DECK_SHARE_MAX_WORDS) {
+    throw new Error(`共有単語帳は${DECK_SHARE_MAX_WORDS.toLocaleString("ja-JP")}語までです`);
+  }
+
+  const seen = new Set();
+  const allowedCefr = new Set(["A1", "A2", "B1", "B2", "C1", "C2"]);
+  const allowedPos = new Set(["n", "v", "adj", "adv"]);
+  const words = [];
+  for (const item of raw.words) {
+    if (!item || typeof item !== "object") continue;
+    const pair = validPair(String(item.term || ""), String(item.meaning || ""));
+    if (!pair) continue;
+    const key = normalizeTerm(pair.term);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const cefr = allowedCefr.has(String(item.cefr || "").toUpperCase())
+      ? { level: String(item.cefr).toUpperCase(), estimated: false }
+      : null;
+    const pos = allowedPos.has(String(item.pos || "")) ? { tag: String(item.pos) } : null;
+    words.push({ ...pair, cefr, pos });
+  }
+  if (!words.length) throw new Error("追加できる単語がありません");
+  return { name: uniqueImportedDeckName(raw.deck.name), words };
+}
+
 elements.exportButton.addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(appState, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -11066,6 +12033,57 @@ elements.exportButton.addEventListener("click", () => {
   link.download = "wordsnap-quiz-data.json";
   link.click();
   URL.revokeObjectURL(url);
+});
+
+elements.importDeckShareInput?.addEventListener("change", async () => {
+  const [file] = elements.importDeckShareInput.files;
+  if (!file) return;
+  try {
+    if (file.size > DECK_SHARE_MAX_FILE_BYTES) {
+      throw new Error(`共有JSONは${DECK_SHARE_MAX_FILE_BYTES / (1024 * 1024)}MBまでです`);
+    }
+    const shared = parseDeckSharePayload(JSON.parse(await file.text()));
+    const snapshot = snapshotState();
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const deck = { id: createId(), name: shared.name, updatedAt: nowMs };
+    const words = shared.words.map((item) => ({
+      id: createId(),
+      term: item.term,
+      meaning: item.meaning,
+      addedAt: nowIso,
+      deckId: deck.id,
+      cefr: item.cefr,
+      pos: item.pos,
+      enrich: emptyEnrich(),
+      favorite: false,
+      stats: { correct: 0, wrong: 0 },
+      history: [],
+      learning: {
+        status: "new",
+        firstAttempted: false,
+        reviewAt: 0,
+        blockedUntil: 0,
+        correctStreak: 0,
+        srsStage: 0,
+        nextReviewAt: 0,
+        srsUpdatedAt: 0,
+        lastSrsResult: "",
+      },
+    }));
+    appState.decks.push(deck);
+    appState.words.push(...words);
+    appState.activeDeckId = deck.id;
+    currentQuiz = null;
+    selectedIds.clear();
+    saveState();
+    offerUndo(snapshot);
+    setStatus(`共有単語帳「${deck.name}」を${words.length}語追加しました。学習成績は新規状態です。`);
+  } catch (error) {
+    setStatus(`共有単語帳を追加できませんでした：${error.message}`);
+  } finally {
+    elements.importDeckShareInput.value = "";
+  }
 });
 
 // JSON読み込みの上限値は先頭の「取り込み上限」ブロック（IMPORT_MAX_*）に集約している。
@@ -11272,6 +12290,14 @@ const HIACC_KEY = "wordsnap-ocr-hiacc";
 elements.hiAccToggle.checked = localStorage.getItem(HIACC_KEY) === "1";
 elements.hiAccToggle.addEventListener("change", () => {
   localStorage.setItem(HIACC_KEY, elements.hiAccToggle.checked ? "1" : "0");
+});
+const OCR_LAYOUT_KEY = "wordsnap-ocr-layout";
+const savedOcrLayout = localStorage.getItem(OCR_LAYOUT_KEY);
+if (["auto", "one", "two"].includes(savedOcrLayout)) {
+  elements.ocrLayoutSelect.value = savedOcrLayout;
+}
+elements.ocrLayoutSelect.addEventListener("change", () => {
+  localStorage.setItem(OCR_LAYOUT_KEY, elements.ocrLayoutSelect.value);
 });
 
 // Hardens data against eviction / localStorage clearing:
