@@ -3878,6 +3878,20 @@ textarea:focus-visible {
   }
 }
 
+/* 例文モード: 出題語の代わりに例文を表示するときは、見出しより読みやすい本文サイズにする */
+#quizWord.is-context {
+  font-size: 1.25rem;
+  font-weight: 500;
+  line-height: 1.6;
+  text-align: left;
+}
+#quizWord .ctx-term {
+  background: color-mix(in srgb, var(--accent, #6366f1) 22%, transparent);
+  color: inherit;
+  border-radius: 0.25rem;
+  padding: 0 0.15em;
+  font-weight: 700;
+}
 </style>
   </head>
   <body>
@@ -4259,6 +4273,7 @@ accurate 正確な"
         <div class="actions">
           <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
           <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
+          <button id="contextQuizButton" class="secondary" type="button" title="例文の中で意味を判断する問題。詳細で例文を取得した単語が対象です">例文で解く（0語）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
           <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
@@ -5129,6 +5144,13 @@ const CLIENT_KEY = "wordsnap-client:v1";
 const LEARNING_SCHEMA_VERSION = 1;
 const SRS_DAY_MS = 24 * 60 * 60 * 1000;
 const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];
+// リーディング用途では「時間をかければ分かる」より「一瞬で意味が取れる」ことが重要。
+// これ以上悩んで正解した語は"未定着"とみなし、習得（mastered）へは進めない。
+// 例文モードのように文を読む時間が乗る出題では、この速度判定は無効化する。
+const SLOW_ANSWER_MS = 5000;
+// これを超える回答時間は「悩んだ」ではなく「タブ放置・端末ロック・離席」とみなし、
+// 速度判定の対象外にする（既知語が中断のせいで永久に習得できないのを防ぐ）。
+const MAX_TIMED_ANSWER_MS = 60000;
 // TTL系定数。起動時の `let appState = loadState()` が normalizeState→sanitizeDeletions を
 // 呼ぶため、これらは必ずそれより前（＝ここ）で初期化しておく。後方で宣言すると
 // TDZ例外で localStorage の保存データが毎回捨てられる（実際に起きていたバグ）。
@@ -5263,6 +5285,7 @@ const elements = {
   quizFeedback: document.querySelector("#quizFeedback"),
   startQuizButton: document.querySelector("#startQuizButton"),
   difficultQuizButton: document.querySelector("#difficultQuizButton"),
+  contextQuizButton: document.querySelector("#contextQuizButton"),
   nextQuizButton: document.querySelector("#nextQuizButton"),
   dontKnowButton: document.querySelector("#dontKnowButton"),
   generalReviewButton: document.querySelector("#generalReviewButton"),
@@ -6806,7 +6829,10 @@ function mergeLearningState(a, b) {
   const clampSrsTs = (value) => {
     const n = Number(value || 0);
     if (!Number.isFinite(n) || n <= 0) return 0;
-    return n > mergeNow + SRS_CLOCK_SKEW_TOLERANCE_MS ? mergeNow : n;
+    // 明らかに未来（許容誤差超）のタイムスタンプは信頼せず 0 扱いにして LWW の優先権を与えない。
+    // mergeNow に頭打ちすると skew 端末値が正常端末の直近解答(now-ε)になお勝ててしまうため、
+    // 0 に落として「時刻の主張なし」とし、正常端末側を勝たせる（0 は保存もされない）。
+    return n > mergeNow + SRS_CLOCK_SKEW_TOLERANCE_MS ? 0 : n;
   };
   const updatedA = clampSrsTs(a?.srsUpdatedAt);
   const updatedB = clampSrsTs(b?.srsUpdatedAt);
@@ -7521,9 +7547,18 @@ function initWordsnapSync() {
   const pullIfConnected = () => {
     if (syncState.connected) pullWordsnapState({ silent: true });
   };
+  // タブが前面に戻ったら、表示中の未解答問題の回答計測を今から取り直す（バックグラウンド
+  // 放置時間を除外）。これで「離席していただけの既知語」が遅い正解扱いされて習得できなく
+  // なるのを防ぐ（上限 MAX_TIMED_ANSWER_MS と二段構えの保険）。
+  const resetQuizTimerOnResume = () => {
+    if (currentQuiz && !currentQuiz.answered) currentQuiz.shownAt = Date.now();
+  };
   window.addEventListener("focus", pullIfConnected);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) pullIfConnected();
+    if (!document.hidden) {
+      resetQuizTimerOnResume();
+      pullIfConnected();
+    }
   });
   window.addEventListener("pageshow", pullIfConnected);
   // オフライン復帰時：オフライン中に解いた進捗（stats・history・streak等）を即サーバーへ反映する。
@@ -9747,6 +9782,11 @@ function renderQuiz() {
     elements.difficultQuizButton.textContent = `苦手だけ解く（${count}語）`;
     elements.difficultQuizButton.disabled = count === 0;
   }
+  if (elements.contextQuizButton) {
+    const count = contextEligibleWords().length;
+    elements.contextQuizButton.textContent = `例文で解く（${count}語）`;
+    elements.contextQuizButton.disabled = count === 0;
+  }
 
   if (reviewSession) {
     renderReviewQuiz();
@@ -9780,7 +9820,7 @@ function renderQuiz() {
     return;
   }
 
-  elements.quizWord.textContent = currentQuiz.answer.term;
+  renderQuizPromptWord(currentQuiz);
   renderChoices(currentQuiz.choices);
   autoSpeakCurrentQuiz(); // 設定ONなら新しい問題の単語を1回だけ読み上げる
   updateQuizControls();
@@ -9841,6 +9881,7 @@ function updateQuizControls() {
   if (elements.quizSetup) elements.quizSetup.hidden = quizActive || showingResult;
   elements.startQuizButton.hidden = quizActive || showingResult;
   if (elements.difficultQuizButton) elements.difficultQuizButton.hidden = quizActive || showingResult;
+  if (elements.contextQuizButton) elements.contextQuizButton.hidden = quizActive || showingResult;
   if (elements.generalReviewButton) elements.generalReviewButton.hidden = quizActive || showingResult;
   elements.nextQuizButton.hidden = !quizActive || showingResult;
   elements.dontKnowButton.hidden = !questionActive || showingResult;
@@ -9908,6 +9949,7 @@ function persistReviewProgress() {
         queue: reviewSession.queue,
         label: reviewSession.label,
         total: reviewSession.total,
+        context: reviewSession.context, // 再開時に例文モードを維持する
         missedIds: reviewSession.missedIds,
         savedAt: Date.now(),
       }),
@@ -9971,6 +10013,7 @@ function resumeSavedReview() {
     queue: saved.queue,
     total: Number(saved.total) || saved.allIds.length,
     label: String(saved.label || "復習"),
+    context: Boolean(saved.context), // 例文モードかどうかも復元する
     missedIds: Array.isArray(saved.missedIds) ? saved.missedIds : [],
   };
   reviewResult = null; // 再開したら前回の結果表示は消す
@@ -10001,6 +10044,7 @@ function startReview(ids, options = {}) {
     queue,
     total: valid.length,
     label,
+    context: Boolean(options.context), // 例文モードか（true なら文中で意味を問う）
     missedIds: [], // このセッション中に一度でも間違えた単語ID（完走時のサマリ用）
   };
   reviewResult = null; // 新しいセッションを始めたら前回の結果表示は消す
@@ -10222,6 +10266,7 @@ function buildReviewResult(session) {
     missedCount: (session.missedIds || []).length,
     missedWords,
     allIds: (session.allIds || []).slice(),
+    context: Boolean(session.context), // 「もう一度解く」で例文モードを維持するため保持する
   };
 }
 
@@ -10268,7 +10313,7 @@ function renderReviewResult() {
   again.textContent = "もう一度解く";
   again.addEventListener("click", () => {
     reviewResult = null;
-    startReview(result.allIds, { label: result.label });
+    startReview(result.allIds, { label: result.label, context: result.context });
   });
   const close = document.createElement("button");
   close.type = "button";
@@ -10286,6 +10331,91 @@ function renderReviewResult() {
 
 // 復習セッションはキュー式の「誤答は末尾へ回す」だけで十分な間隔があくため、
 // 5分ブロックはここではチェックしない（通常クイズのavailableQuizWordsのみ対象）。
+// 単語に紐づく例文（英文）のうち、その語を実際に含む文だけを返す。
+// enrich.examples は {examples:[{en,ja}]} 形式に正規化してから取り出す。
+// 対象語を「独立した単語」として照合する正規表現（単語境界つき）。
+// 部分一致（he が The に、act が react に一致する等）で無関係な例文を拾うのを防ぐ。
+function termWordRegex(term, flags) {
+  const t = String(term || "").trim();
+  if (!t) return null;
+  try {
+    return new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, flags);
+  } catch {
+    return null;
+  }
+}
+
+function exampleSentencesFor(word) {
+  const re = termWordRegex(word?.term, "i");
+  if (!re) return [];
+  const data = normalizeExamplesData(word?.enrich?.examples);
+  return data.examples.filter((ex) => {
+    const en = String(ex?.en || "");
+    return en && re.test(en);
+  });
+}
+
+// 例文モードで出題できる語（＝その語を含む例文を1つ以上持つ語）。
+function contextEligibleWords(words = quizSelectedDeckWords()) {
+  return words.filter((word) => exampleSentencesFor(word).length > 0);
+}
+
+// 出題用に例文を1つ選ぶ（複数あればランダム）。無ければ null。
+function pickContextSentence(word) {
+  const sentences = exampleSentencesFor(word);
+  if (sentences.length === 0) return null;
+  const chosen = sentences[Math.floor(Math.random() * sentences.length)];
+  return { en: String(chosen.en || ""), ja: chosen.ja || null };
+}
+
+// 「例文で解く」独立モード。例文を持つ語だけを対象に、文中で意味を判断する復習セッションを開始する。
+function startContextQuiz() {
+  const words = contextEligibleWords();
+  if (words.length === 0) {
+    setStatus("例文で解ける単語がありません。詳細画面で例文を取得した単語がここの対象になります。");
+    return;
+  }
+  startReview(
+    words.map((word) => word.id),
+    { label: "例文クイズ", context: true },
+  );
+}
+
+// 例文中の対象語（独立した単語）をハイライトしたHTMLを返す。
+// 生テキスト上で単語境界照合し、各断片を都度エスケープしてから連結するので、
+// アポストロフィ等を含む語でも正しくハイライトでき、XSSも起きない
+//（先にエスケープしてから raw な term で照合すると don't → don&#039;t で一致しない問題を回避）。
+function highlightTermInSentence(sentence, term) {
+  const raw = String(sentence || "");
+  const re = termWordRegex(term, "ig");
+  if (!re) return escapeHtml(raw);
+  let out = "";
+  let last = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    out += escapeHtml(raw.slice(last, m.index));
+    out += `<mark class="ctx-term">${escapeHtml(m[0])}</mark>`;
+    last = m.index + m[0].length;
+    if (m.index === re.lastIndex) re.lastIndex++; // 空マッチ時の無限ループ回避
+  }
+  out += escapeHtml(raw.slice(last));
+  return out;
+}
+
+// 出題の見出し（単語 or 例文）を描画する。例文モードのときは文を表示し対象語をハイライトする。
+function renderQuizPromptWord(quiz) {
+  const label = document.querySelector("#quizCard .quiz-label");
+  if (quiz && quiz.context && quiz.context.en) {
+    if (label) label.textContent = "例文の意味は？";
+    elements.quizWord.innerHTML = highlightTermInSentence(quiz.context.en, quiz.answer.term);
+    elements.quizWord.classList.add("is-context");
+  } else {
+    if (label) label.textContent = "出題単語";
+    elements.quizWord.textContent = quiz ? quiz.answer.term : "";
+    elements.quizWord.classList.remove("is-context");
+  }
+}
+
 function buildReviewQuiz() {
   while (reviewSession.queue.length) {
     const answer = appState.words.find((word) => word.id === reviewSession.queue[0]);
@@ -10304,6 +10434,9 @@ function buildReviewQuiz() {
       answer,
       choices,
       answered: false,
+      shownAt: Date.now(),
+      // 例文モードのセッションでは、答えの語を含む例文を1つ添えて「文中での意味」を問う。
+      context: reviewSession.context ? pickContextSentence(answer) : null,
       srsDueAtStart:
         Number(answer.learning?.nextReviewAt || 0) > 0 &&
         Number(answer.learning.nextReviewAt) <= Date.now(),
@@ -10330,7 +10463,7 @@ function renderReviewQuiz() {
     return;
   }
 
-  elements.quizWord.textContent = currentQuiz.answer.term;
+  renderQuizPromptWord(currentQuiz);
   renderChoices(currentQuiz.choices);
   autoSpeakCurrentQuiz(); // 復習クイズでも新しい問題の単語を1回だけ読み上げる
 }
@@ -10365,6 +10498,7 @@ function buildQuiz() {
     answer,
     choices,
     answered: false,
+    shownAt: Date.now(), // 回答時間の計測起点（速度による習得判定に使う）
     srsDueAtStart:
       Number(answer.learning?.nextReviewAt || 0) > 0 &&
       Number(answer.learning.nextReviewAt) <= Date.now(),
@@ -10429,31 +10563,59 @@ function scheduleReview(word) {
 // 解答結果を学習状態（習得/復習）に反映する。通常クイズ・範囲クイズ・総復習で共通の判定。
 // 習得条件は「2回連続正解」：1回目の正解は復習スケジュールに留め、誤答は連続カウンタを0に戻す。
 // 正解で習得済みが取り消されることはない（既に mastered なら維持する）。
-function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.now()) {
+function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.now(), options = {}) {
   const learning = word.learning;
+  const responseMs = Number(options.responseMs);
+  // 「意味は選べたが即答できない」正解は未定着とみなす。ただし例文モード等
+  // （skipSpeedGate）は文を読む時間が乗るので速度判定を無効化する。
+  const slowCorrect =
+    isCorrect &&
+    !options.skipSpeedGate &&
+    Number.isFinite(responseMs) &&
+    responseMs >= SLOW_ANSWER_MS &&
+    responseMs < MAX_TIMED_ANSWER_MS; // 上限超は離席等とみなし速度判定しない
   const srsWasUnstarted = Number(learning.nextReviewAt || 0) <= 0;
   const currentStage = Math.max(
     0,
     Math.min(SRS_INTERVAL_DAYS.length - 1, Math.floor(Number(learning.srsStage) || 0)),
   );
+  const advanceSrs = () => {
+    const nextStage = Math.min(SRS_INTERVAL_DAYS.length - 1, currentStage + 1);
+    learning.srsStage = nextStage;
+    learning.nextReviewAt = now + SRS_INTERVAL_DAYS[nextStage] * SRS_DAY_MS;
+  };
+  const bumpStreak = () =>
+    (learning.correctStreak = Math.max(0, Math.floor(Number(learning.correctStreak) || 0)) + 1);
   learning.srsUpdatedAt = now;
   learning.lastSrsResult = isCorrect ? "correct" : "wrong";
   if (isCorrect) {
-    // 初回の正解、または問題を作った時点で期限到来していた正解だけ段階を進める。
-    // 期限前の手動復習や、誤答後に同一セッションで再出題された問題では進めない。
-    if (srsWasUnstarted || srsDueAtStart) {
-      const nextStage = Math.min(SRS_INTERVAL_DAYS.length - 1, currentStage + 1);
-      learning.srsStage = nextStage;
-      learning.nextReviewAt = now + SRS_INTERVAL_DAYS[nextStage] * SRS_DAY_MS;
-    }
-    learning.correctStreak = Math.max(0, Math.floor(Number(learning.correctStreak) || 0)) + 1;
     learning.firstAttempted = true;
-    if (learning.status === "mastered" || learning.correctStreak >= 2) {
-      learning.status = "mastered";
+    if (learning.status === "mastered") {
+      // 既に習得済みは維持する（遅くても降格させない＝従来の不変条件）。SRSは通常どおり前進。
+      if (srsWasUnstarted || srsDueAtStart) advanceSrs();
+      bumpStreak();
       learning.reviewAt = 0;
-    } else {
-      // 1回目の正解：まだ習得とせず、数問後にもう一度出して連続正解を確認する
+    } else if (slowCorrect) {
+      // 遅い正解＝「意味は出たが即答できない＝未定着」。習得へは進めず数問後に再確認する。
+      // 連続正解を1で頭打ちにするので、遅い正解が続いても習得（2連続）には到達しない
+      //（速い正解が入って初めて2連続＝習得になる）。SRS段階は前進させない（誤答のような降格もしない）。
+      // nextReviewAt は必ず翌日へ送る。期限到来語(過去のnextReviewAt)のまま残すと、候補選定が
+      // 期限到来語を最優先で返すため同じ語が即再出題されてしまう。翌日へ送って循環から外す。
+      learning.correctStreak = 1;
+      learning.nextReviewAt = now + SRS_DAY_MS;
       scheduleReview(word);
+    } else {
+      // 速い/通常の正解＝従来ロジック（2連続正解で習得）。
+      // 初回の正解、または問題を作った時点で期限到来していた正解だけ段階を進める。
+      if (srsWasUnstarted || srsDueAtStart) advanceSrs();
+      bumpStreak();
+      if (learning.correctStreak >= 2) {
+        learning.status = "mastered";
+        learning.reviewAt = 0;
+      } else {
+        // 1回目の正解：まだ習得とせず、数問後にもう一度出して連続正解を確認する
+        scheduleReview(word);
+      }
     }
   } else {
     // 誤答は日次SRSを最初からやり直し、翌日に再確認する。2〜3問後/5分後の
@@ -10487,13 +10649,49 @@ function choiceCountNote(choices) {
     : "";
 }
 
-// Picks up to `count` distractors whose displayed meaning differs from the
-// answer and from each other. Otherwise a distractor sharing the answer's
-// meaning would mark a semantically correct choice as wrong.
+// 綴りの近さ（Levenshtein距離・早期打ち切り）。affect/effect のような紛らわしい語を
+// 誤答に選ぶために使う。距離が3を超える時点で 99 を返して探索を打ち切る。
+function spellingDistance(a, b) {
+  const s = String(a || "").toLowerCase();
+  const t = String(b || "").toLowerCase();
+  if (s === t) return 0;
+  const n = s.length;
+  const m = t.length;
+  if (Math.abs(n - m) > 3) return 99;
+  let prev = Array.from({ length: m + 1 }, (_, i) => i);
+  for (let i = 1; i <= n; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= m; j++) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > 3) return 99;
+    prev = cur;
+  }
+  return prev[m];
+}
+
+// 4択の誤答を選ぶ。意味が答えと重複しないことを保ちつつ、リーディング学習で有効な
+// 「紛らわしい誤答」を優先する: (1)綴りが似た語 (2)答えと同じ品詞の語。該当が足りなければ
+// 残りはランダムで埋める。意味の重複除外は従来どおり（意味が同じ誤答は正解扱いになるため）。
 function pickDistractors(pool, answer, count = 3) {
   const seen = new Set([normalizeMeaning(answer.meaning)]);
+  const answerPos = answer.pos?.tag || null;
+  // まず shuffle して同点をランダム化してから、紛らわしさスコアの高い順に並べる。
+  // Array.prototype.sort は安定なので、同スコアはシャッフル順（＝ランダム）のまま残る。
+  const ranked = shuffle(pool)
+    .map((word) => {
+      let score = 0;
+      const dist = spellingDistance(answer.term, word.term);
+      if (dist > 0 && dist <= 2) score += 3; // 綴りが紛らわしい（affect/effect 等）
+      if (answerPos && word.pos?.tag === answerPos) score += 1; // 同じ品詞＝意味カテゴリが近い
+      return { word, score };
+    })
+    .sort((a, b) => b.score - a.score);
   const picked = [];
-  for (const word of shuffle(pool)) {
+  for (const { word } of ranked) {
     const key = normalizeMeaning(word.meaning);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -10558,9 +10756,17 @@ function gradeQuiz(choiceId, dontKnow = false) {
   if (!isCorrect) word.learning.blockedUntil = answeredAt + WRONG_COOLDOWN_MS;
   highlightChoices(choiceId);
 
+  // 回答時間（問題を表示してから解答するまで）。速い正解ほど定着とみなす。
+  // 例文モードは文を読む時間が乗るので速度判定を無効化する（skipSpeedGate）。
+  const responseMs = currentQuiz.shownAt ? answeredAt - currentQuiz.shownAt : NaN;
+  const skipSpeedGate = Boolean(currentQuiz.context);
+
   // 範囲クイズ・総復習でも通常クイズと同じ判定で学習状態（習得/復習）を更新する
   appState.quizCounter += 1;
-  applyLearningResult(word, isCorrect, Boolean(currentQuiz.srsDueAtStart), answeredAt);
+  applyLearningResult(word, isCorrect, Boolean(currentQuiz.srsDueAtStart), answeredAt, {
+    responseMs,
+    skipSpeedGate,
+  });
 
   if (reviewSession) {
     // セッションのキュー操作（誤答は末尾へ回す）と進捗カウントは従来どおり維持する
@@ -11795,6 +12001,7 @@ elements.nextQuizButton.addEventListener("click", () => {
 
 elements.generalReviewButton.addEventListener("click", startGeneralReview);
 elements.difficultQuizButton?.addEventListener("click", startDifficultQuiz);
+elements.contextQuizButton?.addEventListener("click", startContextQuiz);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
 elements.resumeQuizButton?.addEventListener("click", resumeSavedReview);

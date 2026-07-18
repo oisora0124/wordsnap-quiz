@@ -240,36 +240,54 @@ export async function onRequest(context) {
     const hasBase = body.baseRev !== undefined && body.baseRev !== null;
     const baseRev = hasBase ? Number(body.baseRev) : null;
 
-    let applied = false;
+    // 書き込みの実 rev/updatedAt は RETURNING で「その書き込み文が生成した値」を原子的に受け取る。
+    // 別クエリで読み直すと、書き込みと読み直しの間に別クライアントのPUTが割り込み、
+    // 他端末の rev を自分の結果として返してしまう（＝他端末更新のロストアップデート）。
+    // RETURNING なら競合ウィンドウが無い。
+    let savedRev = null;
+    let savedUpdatedAt = now;
     if (current.rev === 0 && !(await rowExists(db, syncId))) {
       // 新規キー: baseRev 未指定 or 0 のときだけ作成（原子的 INSERT）
       if (!hasBase || baseRev === 0) {
-        const res = await db
-          .prepare("INSERT OR IGNORE INTO states (key, state, rev, updatedAt) VALUES (?, ?, 1, ?)")
+        const row = await db
+          .prepare(
+            "INSERT OR IGNORE INTO states (key, state, rev, updatedAt) VALUES (?, ?, 1, ?) RETURNING rev, updatedAt",
+          )
           .bind(syncId, storedJson, now)
-          .run();
-        applied = (res.meta?.changes || 0) > 0;
+          .first();
+        if (row) {
+          savedRev = Number(row.rev);
+          savedUpdatedAt = Number(row.updatedAt);
+        }
       }
     } else if (!hasBase && incomingLearningVersion >= 1) {
       // baseRev 省略 = 強制上書き（「この端末を正にする」）。原子的に rev を進める。
-      const res = await db
-        .prepare("UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ?")
+      const row = await db
+        .prepare("UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ? RETURNING rev, updatedAt")
         .bind(storedJson, now, syncId)
-        .run();
-      applied = (res.meta?.changes || 0) > 0;
+        .first();
+      if (row) {
+        savedRev = Number(row.rev);
+        savedUpdatedAt = Number(row.updatedAt);
+      }
     } else {
       // 楽観的ロック: 現在の rev が baseRev と一致するときだけ書き込む（原子的 CAS）
       // 旧クライアントのbaseRev省略は、v1 INSERTとの競合でSRSを消さないよう
       // 最初に読んだrevisionを暗黙のbaseRevとして扱う。
       const expectedRev = hasBase ? baseRev : current.rev;
-      const res = await db
-        .prepare("UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ? AND rev = ?")
+      const row = await db
+        .prepare(
+          "UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ? AND rev = ? RETURNING rev, updatedAt",
+        )
         .bind(storedJson, now, syncId, expectedRev)
-        .run();
-      applied = (res.meta?.changes || 0) > 0;
+        .first();
+      if (row) {
+        savedRev = Number(row.rev);
+        savedUpdatedAt = Number(row.updatedAt);
+      }
     }
 
-    if (!applied) {
+    if (savedRev === null) {
       // 競合: 最新を読み直して 409 で返す（クライアントは pull→マージ→再push する）
       // state は readRow が解凍済みプレーンにして返す＝応答契約は従来と同じ。
       const latest = await readRow(db, syncId);
@@ -278,11 +296,7 @@ export async function onRequest(context) {
         409,
       );
     }
-    // 成功応答の stateRev は書き込み後の実 rev を読み直して返す（rev だけの軽い read）。
-    // 強制上書き経路(baseRev省略)では書き込み間に別PUTが割り込むと DB rev が current.rev+1 と
-    // 一致しないため、current.rev+1 を返すとクライアントの rev がサーバー実値とずれる。
-    const saved = await readRow(db, syncId, false);
-    return json({ ok: true, syncId, stateRev: saved.rev, updatedAt: saved.updatedAt });
+    return json({ ok: true, syncId, stateRev: savedRev, updatedAt: savedUpdatedAt });
   }
 
   return json({ error: "method not allowed" }, 405);
