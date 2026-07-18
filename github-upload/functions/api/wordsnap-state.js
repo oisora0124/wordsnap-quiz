@@ -31,6 +31,11 @@ const MAX_RAW_BODY = 4_000_000;
 const MAX_INFLATED_JSON = 50_000_000;
 // D1 は1行あたり約2MBの制限があるため、保存する base64 はその手前で拒否する
 const MAX_STORED_BASE64 = 1_900_000;
+// サーバーが認識している最新の learning スキーマ版。新しい learning スキーマを
+// リリースするたびに +1 する。これ未満の版で来た PUT だけ、保存済みより低い版
+// （＝未知フィールドを落とすダウングレード）でないかを確認する。最新版クライアントは
+// 追加の read/decompress 無しで通過するため、通常 PUT のコストは変わらない。
+const HIGHEST_LEARNING_VERSION = 1;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: HEADERS });
@@ -192,20 +197,22 @@ export async function onRequest(context) {
       return json({ error: "invalid state" }, 422);
     }
 
-    // SRS対応stateを一度保存したキーへ、旧クライアント（versionなし/0）が
-    // 未知フィールドを落としたstateを上書きするのを防ぐ。通常のv1 PUTでは
-    // revisionメタデータだけで通過し、巨大stateの追加read/decompressは発生しない。
+    // SRS対応stateを一度保存したキーへ、古い版のクライアントが未知フィールドを
+    // 落としたstateを上書きするのを防ぐ。最新版クライアント（incoming == HIGHEST）は
+    // この分岐に入らないため、通常PUTでは巨大stateの追加read/decompressは発生しない。
     const incomingLearningVersion = Math.max(
       0,
       Math.floor(Number(state.learningSchemaVersion) || 0),
     );
-    if (incomingLearningVersion < 1) {
+    if (incomingLearningVersion < HIGHEST_LEARNING_VERSION) {
       const latest = await readRow(db, syncId);
       const storedLearningVersion = Math.max(
         0,
         Math.floor(Number(latest.state?.learningSchemaVersion) || 0),
       );
-      if (storedLearningVersion >= 1) {
+      // 一般化したダウングレード判定: 保存済みより低い版なら（v0<v1 も、将来の
+      // v1<v2 も同様に）未知フィールド欠落での上書きとみなして拒否する。
+      if (incomingLearningVersion < storedLearningVersion) {
         // 旧クライアントは data.error をそのまま同期ステータスに表示するため、
         // 機械可読コードは code に分け、error は人間向けの日本語にする。
         return json(
@@ -229,7 +236,6 @@ export async function onRequest(context) {
     if (storedBase64.length > MAX_STORED_BASE64) return json({ error: "state too large" }, 413);
     const storedJson = JSON.stringify({ __gz: storedBase64 });
 
-    const nextRev = current.rev + 1;
     const now = Date.now();
     const hasBase = body.baseRev !== undefined && body.baseRev !== null;
     const baseRev = hasBase ? Number(body.baseRev) : null;
@@ -272,7 +278,11 @@ export async function onRequest(context) {
         409,
       );
     }
-    return json({ ok: true, syncId, stateRev: current.rev + 1, updatedAt: now });
+    // 成功応答の stateRev は書き込み後の実 rev を読み直して返す（rev だけの軽い read）。
+    // 強制上書き経路(baseRev省略)では書き込み間に別PUTが割り込むと DB rev が current.rev+1 と
+    // 一致しないため、current.rev+1 を返すとクライアントの rev がサーバー実値とずれる。
+    const saved = await readRow(db, syncId, false);
+    return json({ ok: true, syncId, stateRev: saved.rev, updatedAt: saved.updatedAt });
   }
 
   return json({ error: "method not allowed" }, 405);
