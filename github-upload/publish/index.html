@@ -6797,8 +6797,19 @@ function mergeLearningState(a, b) {
     learning && rank[learning.status] !== undefined ? learning.status : "new";
   const statusA = statusOf(a);
   const statusB = statusOf(b);
-  const updatedA = Number(a?.srsUpdatedAt || 0);
-  const updatedB = Number(b?.srsUpdatedAt || 0);
+  // srsUpdatedAt は各端末の Date.now()。時計が大きく進んだ端末が付けた「未来」の
+  // タイムスタンプは、実時間ではより新しい別端末の解答をLWWで負かし続けてしまう。
+  // これを防ぐため、比較・保存に使う値は「ローカルの現在時刻＋許容誤差」で頭打ちにする。
+  // （正常なタイムスタンプは now 以下なので通常マージの挙動は変わらない。）
+  const mergeNow = Date.now();
+  const SRS_CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+  const clampSrsTs = (value) => {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return n > mergeNow + SRS_CLOCK_SKEW_TOLERANCE_MS ? mergeNow : n;
+  };
+  const updatedA = clampSrsTs(a?.srsUpdatedAt);
+  const updatedB = clampSrsTs(b?.srsUpdatedAt);
 
   // SRS対応端末同士では最後に答えた側を優先する。これにより、新しい誤答が
   // 古い mastered 状態にマージで負けて復習対象から消えることを防ぐ。
@@ -7061,10 +7072,15 @@ async function pullWordsnapState(options = {}) {
     );
     if (requestedId !== syncState.id) return false;
     const remoteRev = Number(remote.stateRev) || 0;
-    const changed = remote.state && (remoteRev > syncState.rev || !options.silent)
+    // サーバーが state を返してきた（＝未変更ではない）なら、rev が上がった時だけでなく
+    // 下がった時（D1のバックアップ復元・rev再採番など）も取り込む。remoteRev===syncState.rev の
+    // ときはサーバーが notModified で state:null を返すため、ここは false になる。
+    const changed = remote.state && (remoteRev !== syncState.rev || !options.silent)
       ? applyMergedRemoteState(remote.state)
       : false;
-    syncState.rev = Math.max(syncState.rev, remoteRev);
+    // サーバーの revision を正として採用する（巻き戻りにも追従できるよう Math.max にしない）。
+    // 未変更応答なら remoteRev は現在値と同じなので影響はない。
+    syncState.rev = remoteRev;
     syncState.connected = true;
     if (changed) {
       await pushWordsnapState({ force: true });
@@ -10369,6 +10385,17 @@ function availableQuizWords() {
 
   const freshWords = scoped.filter((word) => word.learning.status === "new");
   if (freshWords.length > 0) return freshWords;
+
+  // 既存データの mastered 語は nextReviewAt=0（SRS未開始）で、上のどの候補にも入らないため、
+  // 手動で選ばない限り永久に自動出題されない。他に出す語が無いときの最後の受け皿として
+  // これらを出題対象に含める。1問答えれば applyLearningResult が nextReviewAt を付与し、
+  // 以後は通常のSRS（日次の期限到来）に自然に乗る。一斉に期限到来させるのではなく
+  // 「暇なときに1問ずつSRSへ移していく」ため、旧データの大量流入も起きない。
+  const unstartedMastered = scoped.filter(
+    (word) =>
+      word.learning.status === "mastered" && Number(word.learning.nextReviewAt || 0) === 0,
+  );
+  if (unstartedMastered.length > 0) return unstartedMastered;
 
   // Avoid a dead end when every remaining word is waiting for review but no filler questions exist.
   return scoped.filter((word) => word.learning.status === "review");

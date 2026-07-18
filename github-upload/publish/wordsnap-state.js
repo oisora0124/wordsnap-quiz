@@ -31,6 +31,11 @@ const MAX_RAW_BODY = 4_000_000;
 const MAX_INFLATED_JSON = 50_000_000;
 // D1 は1行あたり約2MBの制限があるため、保存する base64 はその手前で拒否する
 const MAX_STORED_BASE64 = 1_900_000;
+// サーバーが認識している最新の learning スキーマ版。新しい learning スキーマを
+// リリースするたびに +1 する。これ未満の版で来た PUT だけ、保存済みより低い版
+// （＝未知フィールドを落とすダウングレード）でないかを確認する。最新版クライアントは
+// 追加の read/decompress 無しで通過するため、通常 PUT のコストは変わらない。
+const HIGHEST_LEARNING_VERSION = 1;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: HEADERS });
@@ -96,20 +101,24 @@ async function gzipTextToBase64(text) {
 // 保存形式は2通りを受理する（後方互換）:
 //   新: {"__gz":"<base64>"} マーカー → 解凍してJSONパース
 //   旧: プレーンなstate JSONそのまま → そのまま採用
-async function readRow(db, syncId) {
+async function readRow(db, syncId, includeState = true) {
   const row = await db
-    .prepare("SELECT state, rev, updatedAt FROM states WHERE key = ?")
+    .prepare(includeState
+      ? "SELECT state, rev, updatedAt FROM states WHERE key = ?"
+      : "SELECT rev, updatedAt FROM states WHERE key = ?")
     .bind(syncId)
     .first();
   if (!row) return { state: null, rev: 0, updatedAt: 0 };
   let state = null;
-  try {
-    state = row.state ? JSON.parse(row.state) : null;
-    if (state && typeof state === "object" && !Array.isArray(state) && typeof state.__gz === "string") {
-      state = JSON.parse(await gunzipBase64ToText(state.__gz));
+  if (includeState) {
+    try {
+      state = row.state ? JSON.parse(row.state) : null;
+      if (state && typeof state === "object" && !Array.isArray(state) && typeof state.__gz === "string") {
+        state = JSON.parse(await gunzipBase64ToText(state.__gz));
+      }
+    } catch {
+      state = null; // 万一DB内が壊れていても500にせず null 扱い
     }
-  } catch {
-    state = null; // 万一DB内が壊れていても500にせず null 扱い
   }
   return { state, rev: Number(row.rev) || 0, updatedAt: Number(row.updatedAt) || 0 };
 }
@@ -124,10 +133,23 @@ export async function onRequest(context) {
   if (!syncId) return json({ error: "sync id required" }, 400);
 
   const db = env.DB;
-  const current = await readRow(db, syncId);
+  // まずrevisionだけを読む。未変更ポーリングや成功PUTでは巨大stateの解凍が不要。
+  const current = await readRow(db, syncId, false);
 
   if (request.method === "GET") {
-    return json({ syncId, state: current.state, stateRev: current.rev, updatedAt: current.updatedAt });
+    const sinceRaw = url.searchParams.get("sinceRev");
+    const sinceRev = sinceRaw !== null && sinceRaw !== "" ? Number(sinceRaw) : null;
+    if (Number.isFinite(sinceRev) && sinceRev === current.rev) {
+      return json({
+        syncId,
+        state: null,
+        stateRev: current.rev,
+        updatedAt: current.updatedAt,
+        notModified: true,
+      });
+    }
+    const latest = await readRow(db, syncId);
+    return json({ syncId, state: latest.state, stateRev: latest.rev, updatedAt: latest.updatedAt });
   }
 
   if (request.method === "PUT") {
@@ -175,6 +197,38 @@ export async function onRequest(context) {
       return json({ error: "invalid state" }, 422);
     }
 
+    // SRS対応stateを一度保存したキーへ、古い版のクライアントが未知フィールドを
+    // 落としたstateを上書きするのを防ぐ。最新版クライアント（incoming == HIGHEST）は
+    // この分岐に入らないため、通常PUTでは巨大stateの追加read/decompressは発生しない。
+    const incomingLearningVersion = Math.max(
+      0,
+      Math.floor(Number(state.learningSchemaVersion) || 0),
+    );
+    if (incomingLearningVersion < HIGHEST_LEARNING_VERSION) {
+      const latest = await readRow(db, syncId);
+      const storedLearningVersion = Math.max(
+        0,
+        Math.floor(Number(latest.state?.learningSchemaVersion) || 0),
+      );
+      // 一般化したダウングレード判定: 保存済みより低い版なら（v0<v1 も、将来の
+      // v1<v2 も同様に）未知フィールド欠落での上書きとみなして拒否する。
+      if (incomingLearningVersion < storedLearningVersion) {
+        // 旧クライアントは data.error をそのまま同期ステータスに表示するため、
+        // 機械可読コードは code に分け、error は人間向けの日本語にする。
+        return json(
+          {
+            error: "アプリが古いため保存できません。ページを開き直して最新版に更新してください。",
+            code: "downgrade_conflict",
+            syncId,
+            state: latest.state,
+            stateRev: latest.rev,
+            updatedAt: latest.updatedAt,
+          },
+          409,
+        );
+      }
+    }
+
     // --- D1へは常に圧縮形式で保存する（プレーン受信でもここで圧縮する） ---
     const stateJson = JSON.stringify(state);
     if (stateJson.length > MAX_INFLATED_JSON) return json({ error: "state too large" }, 413);
@@ -182,7 +236,6 @@ export async function onRequest(context) {
     if (storedBase64.length > MAX_STORED_BASE64) return json({ error: "state too large" }, 413);
     const storedJson = JSON.stringify({ __gz: storedBase64 });
 
-    const nextRev = current.rev + 1;
     const now = Date.now();
     const hasBase = body.baseRev !== undefined && body.baseRev !== null;
     const baseRev = hasBase ? Number(body.baseRev) : null;
@@ -197,7 +250,7 @@ export async function onRequest(context) {
           .run();
         applied = (res.meta?.changes || 0) > 0;
       }
-    } else if (!hasBase) {
+    } else if (!hasBase && incomingLearningVersion >= 1) {
       // baseRev 省略 = 強制上書き（「この端末を正にする」）。原子的に rev を進める。
       const res = await db
         .prepare("UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ?")
@@ -206,9 +259,12 @@ export async function onRequest(context) {
       applied = (res.meta?.changes || 0) > 0;
     } else {
       // 楽観的ロック: 現在の rev が baseRev と一致するときだけ書き込む（原子的 CAS）
+      // 旧クライアントのbaseRev省略は、v1 INSERTとの競合でSRSを消さないよう
+      // 最初に読んだrevisionを暗黙のbaseRevとして扱う。
+      const expectedRev = hasBase ? baseRev : current.rev;
       const res = await db
         .prepare("UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ? AND rev = ?")
-        .bind(storedJson, now, syncId, baseRev)
+        .bind(storedJson, now, syncId, expectedRev)
         .run();
       applied = (res.meta?.changes || 0) > 0;
     }
@@ -222,7 +278,10 @@ export async function onRequest(context) {
         409,
       );
     }
-    const saved = await readRow(db, syncId);
+    // 成功応答の stateRev は書き込み後の実 rev を読み直して返す（rev だけの軽い read）。
+    // 強制上書き経路(baseRev省略)では書き込み間に別PUTが割り込むと DB rev が current.rev+1 と
+    // 一致しないため、current.rev+1 を返すとクライアントの rev がサーバー実値とずれる。
+    const saved = await readRow(db, syncId, false);
     return json({ ok: true, syncId, stateRev: saved.rev, updatedAt: saved.updatedAt });
   }
 
