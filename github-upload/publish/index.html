@@ -3892,6 +3892,23 @@ textarea:focus-visible {
   padding: 0 0.15em;
   font-weight: 700;
 }
+/* 空所補充の空所（括弧）。文中で目立つように下線と色を付ける */
+#quizWord .ctx-blank {
+  display: inline-block;
+  min-width: 4.5em;
+  text-align: center;
+  color: var(--accent, #6366f1);
+  font-weight: 700;
+  border-bottom: 2px solid color-mix(in srgb, var(--accent, #6366f1) 55%, transparent);
+  border-radius: 0.15rem;
+  letter-spacing: 0.05em;
+}
+/* 空所補充の選択肢は英単語なので、読みやすい字送りにする */
+.choice-button.is-term-choice .choice-text {
+  font-variant-ligatures: none;
+  letter-spacing: 0.01em;
+}
+
 /* 例文を生成している間の表示（点滅で「待ち」だと分かるようにする） */
 #quizWord.is-generating {
   opacity: 0.75;
@@ -4286,7 +4303,7 @@ accurate 正確な"
         <div class="actions">
           <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
           <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
-          <button id="contextQuizButton" class="secondary" type="button" title="例文の中で意味を判断する問題。例文と選択肢はその場で自動生成します（設定で作り方を変更・停止できます）">例文で解く（0語）</button>
+          <button id="contextQuizButton" class="secondary" type="button" title="例文の空所に入る英単語を4択から選ぶ問題。例文と選択肢はその場で自動生成します（設定で作り方を変更・停止できます）">例文で解く（0語）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
           <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
@@ -4627,7 +4644,7 @@ accurate 正確な"
               </label>
               <div class="settings-row">
                 <label class="settings-field">
-                  例文モードの例文・誤答の作り方
+                  例文モード（空所補充）の例文・誤答の作り方
                   <select id="contextGenModeSelect" aria-label="例文モードで例文と誤答選択肢をどう用意するか">
                     <option value="auto">自動（AI優先 → 辞書）</option>
                     <option value="dict">辞書のみ（APIキー不要）</option>
@@ -9867,7 +9884,9 @@ function renderChoices(choices) {
     button.type = "button";
     button.dataset.choiceId = choice.id;
     button.innerHTML = `<span class="choice-num">${index + 1}</span><span class="choice-text"></span>`;
-    button.querySelector(".choice-text").textContent = choice.meaning;
+    // 空所補充（例文モード）の選択肢は英単語＝label、通常の4択は日本語の意味＝meaning
+    button.querySelector(".choice-text").textContent = choice.label || choice.meaning;
+    if (choice.label) button.classList.add("is-term-choice");
     elements.choices.append(button);
   });
 }
@@ -10372,7 +10391,9 @@ function renderReviewResult() {
 // 生成物はローカルキャッシュにだけ置く（同期stateには入れない）。
 // 理由: 同期stateには保存サイズ上限があり、全語分の例文を載せると上限に当たるうえ、
 // 生成物はいつでも作り直せるため同期する価値が低い。
-const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v1";
+// v2: 空所補充形式へ変更し、誤答が「日本語の意味」から「英単語」になったためキーを分ける
+// （旧v1のキャッシュを読むと誤答に日本語が混ざるので、そのまま捨てて作り直す）
+const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v2";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
 const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent"; // 外部APIへの送信に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
@@ -10495,10 +10516,10 @@ function contextGenPrompt(word) {
     `品詞: ${pos}`,
     "",
     "要件:",
-    '1. "sentence": その単語をそのままの形で含む自然な英文を1文（10〜20語）。文脈からその単語の意味が推測できる内容にし、他の難単語は避ける。',
-    '2. "distractors": 日本語の「誤った意味」を3つ。正しい意味と紛らわしいが明確に別物にする（同じ品詞・近いカテゴリ）。正しい意味とも、互いとも重複させない。',
+    '1. "sentence": その単語をそのままの形で含む自然な英文を1文（10〜20語）。空所補充問題にするので、文脈からその単語だけが当てはまると分かる内容にし、他の難単語は避ける。',
+    '2. "distractors": 空所に入れると誤りになる英単語を3つ。品詞は同じにし、文法的には入りそうだが意味的に合わないものを選ぶ。出題語と同じ語・活用形・意味が同じ語は避け、互いにも重複させない。日本語や説明は書かず、英単語1語だけを並べる。',
     "",
-    'JSON以外は何も出力しないこと: {"sentence":"...","distractors":["...","...","..."]}',
+    'JSON以外は何も出力しないこと: {"sentence":"...","distractors":["word1","word2","word3"]}',
   ].join("\n");
 }
 
@@ -10521,13 +10542,15 @@ function parseContextGenJson(text, word) {
   if (!data) return null;
   const en = String(data.sentence || "").trim();
   const re = termWordRegex(word.term, "i");
-  if (!en || !re || !re.test(en)) return null; // 対象語を含まない文は問題にならない
-  const seen = new Set([normalizeMeaning(word.meaning)]);
+  if (!en || !re || !re.test(en)) return null; // 対象語を含まない文は空所補充にできない
+  // 空所補充なので誤答は「英単語1語」。日本語・説明文・出題語と同じ語は弾く。
+  const seen = new Set([String(word.term || "").trim().toLowerCase()]);
   const distractors = (Array.isArray(data.distractors) ? data.distractors : [])
     .map((d) => String(d || "").trim())
     .filter((d) => {
-      const k = normalizeMeaning(d);
-      if (!d || seen.has(k)) return false;
+      if (!/^[A-Za-z][A-Za-z'’-]*$/.test(d)) return false; // 英単語1語のみ
+      const k = d.toLowerCase();
+      if (seen.has(k)) return false;
       seen.add(k);
       return true;
     })
@@ -10697,22 +10720,36 @@ async function ensureContextItem(word) {
 
 // 生成された誤答（意味の文字列）を選択肢オブジェクトに変換する。3つに満たない分は
 // 既存の単語プールから補う（意味の重複は従来どおり避ける）。
+// 空所補充の選択肢は「英単語」。正解も誤答も label に英単語を入れて表示を統一する。
+// 正解は登録単語オブジェクトそのものではなく id を保った包みにする（採点は id 比較のまま動く）。
 function buildContextChoices(answer, item) {
-  const generated = (item?.distractors || [])
-    .slice(0, 3)
-    .map((meaning, i) => ({ id: `gen-${i}`, meaning: String(meaning) }));
-  if (generated.length >= 3) return shuffle([answer, ...generated]);
-  const scoped = quizSelectedDeckWords().filter((w) => w.id !== answer.id);
-  const basePool = scoped.length >= 3 ? scoped : appState.words.filter((w) => w.id !== answer.id);
-  // 不足分だけを、生成済みの意味を除外したうえで取得する（除外で減った分は補われない仕様だったため）
-  const need = 3 - generated.length;
-  const extra = pickDistractors(
-    basePool,
-    answer,
-    need,
-    generated.map((g) => g.meaning),
-  );
-  return shuffle([answer, ...generated, ...extra]);
+  const answerTerm = String(answer.term || "").trim();
+  const seenTerms = new Set([answerTerm.toLowerCase()]);
+  const generated = [];
+  for (const raw of item?.distractors || []) {
+    const term = String(raw || "").trim();
+    const k = term.toLowerCase();
+    if (!term || seenTerms.has(k)) continue;
+    seenTerms.add(k);
+    generated.push({ id: `gen-${generated.length}`, label: term });
+    if (generated.length >= 3) break;
+  }
+  const choices = [{ id: answer.id, label: answerTerm }, ...generated];
+  if (generated.length < 3) {
+    // 足りない分は登録済みの他の単語から補う（同じ品詞・紛らわしい綴りが優先される）
+    const scoped = quizSelectedDeckWords().filter((w) => w.id !== answer.id);
+    const basePool = (scoped.length >= 3 ? scoped : appState.words.filter((w) => w.id !== answer.id))
+      .filter((w) => !seenTerms.has(String(w.term || "").trim().toLowerCase()));
+    for (const w of pickDistractors(basePool, answer, 3 - generated.length)) {
+      const term = String(w.term || "").trim();
+      const k = term.toLowerCase();
+      if (!term || seenTerms.has(k)) continue;
+      seenTerms.add(k);
+      choices.push({ id: w.id, label: term });
+      if (choices.length >= 4) break;
+    }
+  }
+  return shuffle(choices);
 }
 
 // 解いている間に次の問題を裏で用意しておく（待ち時間を体感させないため）。
@@ -10764,12 +10801,12 @@ function renderContextGenSettings() {
   const provider = aiProviderForContext();
   if (mode === "off") {
     hint.textContent =
-      "例文は作らず、詳細画面で取得済みの例文がある単語だけを出題します。通信は発生しません。";
+      "例文は作らず、詳細画面で取得済みの例文がある単語だけを空所補充で出題します。通信は発生しません。";
   } else if (mode === "dict") {
     hint.textContent =
-      "辞書API（キー不要）から実在の例文を取得します。誤答の選択肢は登録済みの他の単語から選びます。例文が見つからない単語は通常の単語出題になります。";
+      "辞書API（キー不要）から実在の例文を取得し、その語を空所にします。誤答の英単語は登録済みの他の単語から選びます。例文が見つからない単語は通常の単語出題になります。";
   } else if (provider) {
-    hint.textContent = `AI（${provider.name}）で例文と誤答の選択肢をその場で作ります。作った内容はこの端末に保存され、次回は再生成しません。AIが使えないときは辞書APIに切り替わります。`;
+    hint.textContent = `AI（${provider.name}）で例文と、空所に入れると誤りになる英単語3つをその場で作ります。作った内容はこの端末に保存され、次回は再生成しません。AIが使えないときは辞書APIに切り替わります（その場合の誤答は登録済みの他の単語から選びます）。`;
   } else {
     hint.textContent =
       "AIキーが未設定のため、いまは辞書API（キー不要）から例文を取得します。上の「AIで読み取る」欄にGeminiまたはGroqのキーを入れると、例文と誤答をAIが作るようになります。";
@@ -10791,7 +10828,7 @@ function startContextQuiz() {
   if (words.length === 0) {
     setStatus(
       contextGenMode() === "off"
-        ? "保存済みの例文がある単語がありません。設定の「例文モードの例文・誤答の作り方」を自動にすると、その場で作れます。"
+        ? "保存済みの例文がある単語がありません。設定の「例文モード（空所補充）の例文・誤答の作り方」を自動にすると、その場で作れます。"
         : "出題できる単語がありません。まず単語を登録してください。",
     );
     return;
@@ -10801,7 +10838,7 @@ function startContextQuiz() {
   if (contextGenMode() !== "off" && !contextNetworkConsented()) {
     if (!armDangerButton(elements.contextQuizButton, "もう一度押すと開始")) {
       setStatus(
-        "例文モードは、出題する単語とその意味を辞書API（およびAIキー設定時はAI）へ送って例文と選択肢を作ります。よければもう一度押してください。設定の「例文モードの例文・誤答の作り方」で「作らない」にすれば送信しません。",
+        "例文モード（空所補充）は、出題する単語とその意味を辞書API（およびAIキー設定時はAI）へ送って例文と選択肢を作ります。よければもう一度押してください。設定の「例文モード（空所補充）の例文・誤答の作り方」で「作らない」にすれば送信しません。",
       );
       return;
     }
@@ -10838,6 +10875,30 @@ function highlightTermInSentence(sentence, term) {
   return out;
 }
 
+// 空所補充用: 例文中の対象語を括弧の空所に置き換えたHTMLを返す。
+// 生テキスト上で単語境界照合し、各断片をエスケープしてから連結する（XSS安全）。
+// 対象語が見つからない場合は文をそのまま返す（呼び出し側で例文は検証済み）。
+function blankOutTermInSentence(sentence, term) {
+  const raw = String(sentence || "");
+  const re = termWordRegex(term, "ig");
+  if (!re) return escapeHtml(raw);
+  const blank = '<span class="ctx-blank">(&nbsp;&nbsp;&nbsp;&nbsp;)</span>';
+  let out = "";
+  let last = 0;
+  let m;
+  let replaced = false;
+  while ((m = re.exec(raw)) !== null) {
+    out += escapeHtml(raw.slice(last, m.index));
+    out += blank;
+    replaced = true;
+    last = m.index + m[0].length;
+    if (m.index === re.lastIndex) re.lastIndex++;
+  }
+  if (!replaced) return escapeHtml(raw);
+  out += escapeHtml(raw.slice(last));
+  return out;
+}
+
 // 出題の見出し（単語 or 例文）を描画する。例文モードのときは文を表示し対象語をハイライトする。
 function contextSourceLabel(src) {
   return { ai: "AI生成", dict: "辞書", stored: "保存済み例文" }[src] || "";
@@ -10855,8 +10916,8 @@ function renderQuizPromptWord(quiz) {
   elements.quizWord.classList.remove("is-generating");
   if (quiz && quiz.context && quiz.context.en) {
     const src = contextSourceLabel(quiz.context.src);
-    if (label) label.textContent = src ? `例文の意味は？（${src}）` : "例文の意味は？";
-    elements.quizWord.innerHTML = highlightTermInSentence(quiz.context.en, quiz.answer.term);
+    if (label) label.textContent = src ? `空所に入る語は？（${src}）` : "空所に入る語は？";
+    elements.quizWord.innerHTML = blankOutTermInSentence(quiz.context.en, quiz.answer.term);
     elements.quizWord.classList.add("is-context");
   } else {
     if (label) label.textContent = "出題単語";
