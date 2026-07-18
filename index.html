@@ -10397,6 +10397,8 @@ const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v3";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
 const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent"; // 外部APIへの送信に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
+// 誤答補強(Datamuse)は例文取得と並行して走らせる補助処理なので、待たせすぎないよう短くする
+const CONTEXT_DISTRACTOR_TIMEOUT_MS = 8000;
 const CONTEXT_CACHE_MAX = 400; // 古いものから捨てる上限
 // 生成に失敗した語もキャッシュして無限リトライを防ぐが、通信断やレート制限のような
 // 一時的な失敗が永久に焼き付かないよう、一定時間で再挑戦できるようにする。
@@ -10422,6 +10424,17 @@ function contextCapability() {
   if (mode === "off") return "stored";
   if (mode === "auto" && aiProviderForContext()) return "ai";
   return "dict";
+}
+
+// 形式変更で使わなくなった旧世代キャッシュを掃除する（放置すると容量を食い続ける）
+function purgeLegacyContextCaches() {
+  for (const legacy of ["wordsnap-ctxquiz:v1", "wordsnap-ctxquiz:v2"]) {
+    try {
+      localStorage.removeItem(legacy);
+    } catch {
+      // 消せなくても動作に支障はない
+    }
+  }
 }
 
 function ctxCache() {
@@ -10565,11 +10578,10 @@ function parseContextGenJson(text, word) {
       if (!/^[A-Za-z][A-Za-z'’-]*$/.test(d)) return false; // 英単語1語のみ
       const k = d.toLowerCase();
       if (seen.has(k)) return false;
-      // 出題語を単に活用しただけの語（mitigate/mitigated 等）は、空所に入れると
-      // 正解と区別がつかない場合があるため除外する。派生形は品詞が変わるものだけ使う。
-      if (k.startsWith(termLower) && /^(s|d|ed|ing)$/i.test(k.slice(termLower.length))) return false;
-      const wordRe = termWordRegex(d, "i");
-      if (wordRe && wordRe.test(enLower)) return false; // 例文中に既出の語は使わない
+      // 出題語を単に活用しただけの語（mitigate→mitigated、study→studies、stop→stopped 等）は、
+      // 空所に入れても文が成立してしまい正解が2つになるため除外する（Datamuse経路と同じ判定）。
+      if (isInflectionOf(termLower, k)) return false;
+      if (sentenceContainsTerm(enLower, d)) return false; // 例文中に既出の語は使わない
       seen.add(k);
       return true;
     })
@@ -10649,22 +10661,73 @@ async function generateContextWithAI(word) {
   }
 }
 
-// 検索用の語幹（末尾の e / y などを落とし、派生形をまとめて拾えるようにする）
+// Datamuse へ投げる検索用プレフィックス。ここは「広めに拾う」ためだけの値で、
+// 実際に派生形かどうかは isDerivedFormOf() で厳密に判定する。
 function derivationStem(term) {
   const t = String(term || "").trim().toLowerCase();
   if (t.length <= 4) return t;
-  return t.replace(/(e|y|ate|ize|ise)$/i, "").slice(0, Math.max(4, t.length - 3));
+  return t.slice(0, Math.max(4, t.length - 2));
+}
+
+// 出題語の「単なる活用形」か。活用形は空所に入れても文が成立してしまうことがあり
+// （例: I (  ) medicine. に learn/learned の両方が入る）、誤答にすると正解が2つになる。
+// AI経路とDatamuse経路の両方で同じ判定を使う（片方だけ緩いと事故る）。
+function isInflectionOf(term, candidate) {
+  const t = String(term || "").trim().toLowerCase();
+  const c = String(candidate || "").trim().toLowerCase();
+  if (!t || !c || t === c) return false;
+  const forms = new Set([t + "s", t + "es", t + "d", t + "ed", t + "ing"]);
+  if (/e$/.test(t)) {
+    const base = t.slice(0, -1);
+    forms.add(base + "ed").add(base + "ing"); // mitigate → mitigated / mitigating
+  }
+  if (/y$/.test(t)) {
+    const base = t.slice(0, -1);
+    forms.add(base + "ies").add(base + "ied"); // study → studies / studied
+  }
+  if (/[bcdfgklmnprstvz]$/.test(t)) {
+    const doubled = t + t.slice(-1);
+    forms.add(doubled + "ed").add(doubled + "ing"); // stop → stopped / running
+  }
+  return forms.has(c);
+}
+
+// 出題語から派生した「別の品詞」の語か。
+// 語幹（末尾を最大2文字まで落としたもの）＋既知の派生接尾辞、という形になっている場合だけ真。
+// 単なる前方一致だと novel→november、content→contrive のような無関係語を通してしまうため、
+// 接尾辞まで検査して「本当に派生語か」を確かめる。
+const DERIVATIONAL_SUFFIXES = [
+  "ion", "tion", "ation", "sion", "ment", "ness", "ity", "ty", "ance", "ence",
+  "ce", "cy", "ive", "ous", "ful", "less", "able", "ible", "al", "ic", "ical",
+  "ly", "ist", "ism", "ize", "ise", "ify", "er", "or", "ant", "ent", "ure",
+];
+function isDerivedFormOf(term, candidate) {
+  const t = String(term || "").trim().toLowerCase();
+  const c = String(candidate || "").trim().toLowerCase();
+  if (!t || !c || t === c || c.length <= t.length - 3) return false;
+  if (isInflectionOf(t, c)) return false; // 活用形は派生形として扱わない
+  for (let cut = 0; cut <= 2; cut++) {
+    const base = t.slice(0, t.length - cut);
+    if (base.length < 3 || !c.startsWith(base)) continue;
+    const suffix = c.slice(base.length);
+    if (!suffix) continue;
+    if (DERIVATIONAL_SUFFIXES.includes(suffix)) return true;
+  }
+  return false;
 }
 
 // 空所補充の誤答として「同じ語の別の品詞・派生形」を実在の語から集める（Datamuse、キー不要）。
 // 派生形は文法的に空所へ入らないので、同義語と違って“正解が2つ”にならない安全な誤答になる。
 // 逆に ml=（意味が近い語）は空所にそのまま入ってしまう恐れがあるため使わない。
-async function fetchDerivedFormDistractors(word, sentence) {
+async function fetchDerivedFormDistractors(word, sentence, signal) {
   const term = String(word?.term || "").trim().toLowerCase();
   const stem = derivationStem(term);
   if (!term || stem.length < 3) return [];
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CONTEXT_GEN_TIMEOUT_MS);
+  // 例文取得と並行して走らせるので、待たせすぎないよう短めに打ち切る
+  const timer = setTimeout(() => controller.abort(), CONTEXT_DISTRACTOR_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort);
   try {
     // md=f で使用頻度を取り、robustious のような古語・珍語を誤答に混ぜない
     const res = await fetch(
@@ -10673,36 +10736,31 @@ async function fetchDerivedFormDistractors(word, sentence) {
     );
     if (!res.ok) return [];
     const data = await res.json();
-    const inSentence = String(sentence || "").toLowerCase();
-    // 品詞が変わる派生（mitigation / robustness など）を優先し、
-    // 単なる活用（-s / -ed / -ing）は後回しにする（「ほかの品詞」を誤答にしたいため）
-    const POS_CHANGING = /(tion|sion|ment|ness|ity|ance|ence|ive|ous|ful|less|able|ible|al|ic|ly|ist|ism|er|or)$/i;
-    const INFLECTION = /^(s|es|d|ed|ing)$/i;
+    const picked = [];
     const seen = new Set([term]);
-    const derivational = [];
-    const inflectional = [];
     for (const entry of Array.isArray(data) ? data : []) {
       const w = String(entry?.word || "").trim();
       const k = w.toLowerCase();
       if (!/^[a-z][a-z'’-]*$/i.test(w)) continue; // 1語の英単語だけ
-      if (seen.has(k) || k === term) continue;
-      if (!k.startsWith(stem)) continue; // 同じ語幹＝派生形に絞る
-      if (k.length < 3) continue;
-      if (inSentence.includes(k)) continue; // 例文中に既に出ている語は誤答にしない
+      if (seen.has(k)) continue;
+      // 前方一致だけでは novel→november のような無関係語を拾うため、
+      // 「語幹＋既知の派生接尾辞」になっているものだけを採用する。
+      // 活用形（learn→learned 等）は空所に入って正解が2つになるので isDerivedFormOf が弾く。
+      if (!isDerivedFormOf(term, k)) continue;
+      if (sentenceContainsTerm(sentence, k)) continue; // 例文中に既出の語は誤答にしない
       const freqTag = (entry?.tags || []).find((t) => String(t).startsWith("f:"));
       const freq = freqTag ? Number(String(freqTag).slice(2)) : 0;
       if (!(freq >= 0.4)) continue; // ほとんど使われない語は誤答として不適切
       seen.add(k);
-      const suffix = k.startsWith(term) ? k.slice(term.length) : "";
-      if (suffix && INFLECTION.test(suffix)) inflectional.push(w);
-      else if (POS_CHANGING.test(k)) derivational.push(w);
-      else inflectional.push(w);
+      picked.push(w);
+      if (picked.length >= 3) break;
     }
-    return [...derivational, ...inflectional].slice(0, 2);
+    return picked;
   } catch {
     return [];
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -10737,11 +10795,19 @@ async function fetchContextFromDictionary(word) {
         }
       }
     }
-    // 品詞が一致する定義の例文を優先しつつ、無ければ他の例文も使う。
-    // 空所補充では「その語が空所に入る」こと自体は語義がずれても成立するため、
-    // ここで諦めて通常の単語出題に落とすより、例文を出したほうが学習になる。
-    const sentences = matched.length ? matched : others;
-    if (!sentences.length) return null;
+    // 品詞が一致する定義の例文を優先する。一致が無い場合は、ユーザー自身が保存した例文が
+    // あればそちらを使いたい（語義が合っている可能性が高い）ので、ここでは諦めて null を返す。
+    // 保存例文も無ければ呼び出し側が改めて品詞不一致の例文を使う（出題機会は落とさない）。
+    if (matched.length) {
+      return { en: matched[Math.floor(Math.random() * matched.length)], distractors: [], src: "dict" };
+    }
+    if (!others.length) return null;
+    return {
+      en: others[Math.floor(Math.random() * others.length)],
+      distractors: [],
+      src: "dict",
+      posMismatch: true, // 登録品詞と違う定義の例文＝優先度が低いことを示す
+    };
     return { en: sentences[Math.floor(Math.random() * sentences.length)], distractors: [], src: "dict" };
   } finally {
     clearTimeout(timer);
@@ -10759,32 +10825,44 @@ async function ensureContextItem(word) {
   if (contextInflight.has(key)) return contextInflight.get(key);
   const task = (async () => {
     const mode = contextGenMode();
+    // 処理中に「作らない」へ切り替えられたら、それ以降の外部送信は行わない
+    const networkAllowed = () => contextGenMode() !== "off";
     let item = null;
-    if (mode === "auto") {
+    // 誤答補強(Datamuse)は例文取得と並行して始める。直列にすると待ち時間が倍になるため。
+    const derivedPromise =
+      mode === "off" ? Promise.resolve([]) : fetchDerivedFormDistractors(word, "").catch(() => []);
+    if (mode === "auto" && networkAllowed()) {
       try {
         item = await generateContextWithAI(word);
       } catch {
         item = null;
       }
     }
-    if (!item && mode !== "off") {
+    if (!item && mode !== "off" && networkAllowed()) {
       try {
         item = await fetchContextFromDictionary(word);
       } catch {
         item = null;
       }
     }
-    if (!item) {
+    // 辞書が「登録品詞と違う定義の例文」しか出せなかった場合は、ユーザー自身が保存した例文を優先する。
+    // 保存例文はその語のために取得されたもので、語義が合っている可能性が高いため。
+    if (!item || item.posMismatch) {
       const stored = exampleSentencesFor(word);
       if (stored.length) {
         item = { en: String(stored[0].en), ja: stored[0].ja || null, distractors: [], src: "stored" };
+      } else if (item?.posMismatch) {
+        // 保存例文が無ければ、品詞は違っても辞書例文で出題する（出題機会を落とさない）
+        item = { ...item, posMismatch: undefined };
       }
     }
     // AIが誤答を用意できなかった経路（辞書・保存済み例文）では、同じ語の派生形を誤答に足す。
     // 派生形は品詞が違うので空所に入らず、「正解が2つある」事故を起こさない良質な誤答になる。
-    if (item && (item.distractors || []).length < 3 && mode !== "off") {
+    if (item && (item.distractors || []).length < 3) {
       try {
-        const derived = await fetchDerivedFormDistractors(word, item.en);
+        const derived = (await derivedPromise).filter(
+          (d) => !sentenceContainsTerm(item.en, d), // 例文が確定してから既出語を除外する
+        );
         if (derived.length) {
           const seen = new Set([
             String(word.term || "").trim().toLowerCase(),
@@ -10802,10 +10880,13 @@ async function ensureContextItem(word) {
       } catch {
         // 誤答の補強は任意。失敗しても例文だけで出題する
       }
+    } else {
+      derivedPromise.catch(() => []); // 未処理の rejection を残さない
     }
     const cache = ctxCache();
-    // cap（作った時点で使えた手段）を残しておき、設定やキーが変わったら作り直せるようにする
-    const cap = contextCapability();
+    // cap は「この結果を作った時点で使えた手段」。完了時の設定で計算すると、途中でモードを
+    // 変えられたときに実態と食い違うため、開始時のモードから決める。
+    const cap = mode === "off" ? "stored" : mode === "auto" && aiProviderForContext() ? "ai" : "dict";
     cache[key] = item
       ? { ...item, cap, at: Date.now() }
       : { failed: true, cap, at: Date.now() };
@@ -10875,6 +10956,12 @@ function termWordRegex(term, flags) {
   }
 }
 
+// 文中にその語が「独立した単語として」出てくるか（部分文字列一致だと cat が category に当たる）
+function sentenceContainsTerm(sentence, term) {
+  const re = termWordRegex(term, "i");
+  return re ? re.test(String(sentence || "")) : false;
+}
+
 function exampleSentencesFor(word) {
   const re = termWordRegex(word?.term, "i");
   if (!re) return [];
@@ -10906,9 +10993,9 @@ function renderContextGenSettings() {
       "例文は作らず、詳細画面で取得済みの例文がある単語だけを空所補充で出題します。通信は発生しません。";
   } else if (mode === "dict") {
     hint.textContent =
-      "辞書API（キー不要）から実在の例文を取得し、その語を空所にします。誤答は同じ語の派生形（別の品詞）を優先し、足りない分は登録済みの他の単語から選びます。例文が見つからない単語は通常の単語出題になります。";
+      "辞書API（dictionaryapi.dev）から実在の例文を取得し、その語を空所にします。誤答は同じ語の派生形（別の品詞）を datamuse.com から取得して優先採用し、足りない分は登録済みの他の単語から選びます。いずれもAPIキーは不要です。例文が見つからない単語は通常の単語出題になります。";
   } else if (provider) {
-    hint.textContent = `AI（${provider.name}）で例文と、空所に入れると誤りになる英単語3つをその場で作ります。作った内容はこの端末に保存され、次回は再生成しません。AIが使えないときは辞書APIに切り替わります（その場合の誤答は登録済みの他の単語から選びます）。`;
+    hint.textContent = `AI（${provider.name}）で例文と、空所に入れると誤りになる英単語3つをその場で作ります。作った内容はこの端末に保存され、次回は再生成しません。AIが使えないときは辞書API（dictionaryapi.dev）に切り替わり、誤答は datamuse.com の派生形と登録済みの単語から作ります。`;
   } else {
     hint.textContent =
       "AIキーが未設定のため、いまは辞書API（キー不要）から例文を取得します。上の「AIで読み取る」欄にGeminiまたはGroqのキーを入れると、例文と誤答をAIが作るようになります。";
@@ -10916,6 +11003,7 @@ function renderContextGenSettings() {
 }
 
 function initContextGenSettings() {
+  purgeLegacyContextCaches();
   renderContextGenSettings();
   elements.contextGenModeSelect?.addEventListener("change", (event) => {
     localStorage.setItem(CONTEXT_GEN_MODE_KEY, event.target.value);
@@ -10940,7 +11028,7 @@ function startContextQuiz() {
   if (contextGenMode() !== "off" && !contextNetworkConsented()) {
     if (!armDangerButton(elements.contextQuizButton, "もう一度押すと開始")) {
       setStatus(
-        "例文モード（空所補充）は、出題する単語とその意味を辞書API（およびAIキー設定時はAI）へ送って例文と選択肢を作ります。よければもう一度押してください。設定の「例文モード（空所補充）の例文・誤答の作り方」で「作らない」にすれば送信しません。",
+        "例文モード（空所補充）は、出題する単語とその意味を外部サービス（辞書API dictionaryapi.dev / 語彙API datamuse.com、AIキー設定時はGeminiまたはGroq）へ送って例文と選択肢を作ります。よければもう一度押してください。設定の「例文モード（空所補充）の例文・誤答の作り方」で「作らない」にすれば送信しません。",
       );
       return;
     }
