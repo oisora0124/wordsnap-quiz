@@ -5129,6 +5129,14 @@ const CLIENT_KEY = "wordsnap-client:v1";
 const LEARNING_SCHEMA_VERSION = 1;
 const SRS_DAY_MS = 24 * 60 * 60 * 1000;
 const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];
+// TTL系定数。起動時の `let appState = loadState()` が normalizeState→sanitizeDeletions を
+// 呼ぶため、これらは必ずそれより前（＝ここ）で初期化しておく。後方で宣言すると
+// TDZ例外で localStorage の保存データが毎回捨てられる（実際に起きていたバグ）。
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DELETION_TTL_MS = 90 * DAY_MS; // 90日で掃除
+const TRASH_TTL_MS = 30 * DAY_MS; // 30日で削除済みから掃除
+// 誤答した単語が通常クイズに戻れる時間ベースの保険（既存の「◯問後」SRSとOR＝早い方が優先）
+const WRONG_COOLDOWN_MS = 5 * 60 * 1000;
 // 特定の教材を転載せず、大学受験で役立つ語を本アプリ向けに独自選定したリスト。
 const SAMPLE_TEXT = `acknowledge 認める
 acquire 習得する
@@ -6012,11 +6020,8 @@ function mergeStreaks(a, b) {
 
 // 削除した単語の墓標（term→削除時刻）。これを同期で共有することで、
 // 片方で消した単語が、もう片方から「合算」で復活するのを防ぐ。
-const DAY_MS = 24 * 60 * 60 * 1000;
-const DELETION_TTL_MS = 90 * DAY_MS; // 90日で掃除
-const TRASH_TTL_MS = 30 * DAY_MS; // 30日で削除済みから掃除
-// 誤答した単語が通常クイズに戻れる時間ベースの保険（既存の「◯問後」SRSとOR＝早い方が優先）
-const WRONG_COOLDOWN_MS = 5 * 60 * 1000;
+// ※ DAY_MS 等のTTL定数は、起動時の loadState()（normalizeState→sanitizeDeletions）より
+//   前に初期化されている必要があるため、ファイル冒頭の定数ブロックで宣言している。
 
 function sanitizeDeletions(raw, now) {
   const out = {};
