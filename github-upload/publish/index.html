@@ -4286,7 +4286,7 @@ accurate 正確な"
         <div class="actions">
           <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
           <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
-          <button id="contextQuizButton" class="secondary" type="button" title="例文の中で意味を判断する問題。詳細で例文を取得した単語が対象です">例文で解く（0語）</button>
+          <button id="contextQuizButton" class="secondary" type="button" title="例文の中で意味を判断する問題。例文と選択肢はその場で自動生成します（設定で作り方を変更・停止できます）">例文で解く（0語）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
           <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
@@ -5718,6 +5718,9 @@ function autoSpeakEnabled() {
 // 再描画のたびに鳴らないよう、再生済みフラグを問題オブジェクト自体に立てておく。
 function autoSpeakCurrentQuiz() {
   if (!autoSpeakEnabled() || !currentQuiz || currentQuiz.answered) return;
+  // 例文の生成待ち中は読み上げない。まだ問題が出ていないうえ、例文モードで正解の単語を
+  // 音声で出してしまうと「文中から意味を推測する」出題の答えを先に漏らすことになる。
+  if (currentQuiz.contextPending) return;
   if (!("speechSynthesis" in window)) return; // 非対応端末では黙ってスキップ
   if (currentQuiz.autoSpoken) return;
   currentQuiz.autoSpoken = true;
@@ -8885,6 +8888,7 @@ const AI_PROVIDERS = [
     placeholder: "AIza… を貼り付け",
     keyUrl: "https://aistudio.google.com/apikey",
     extract: extractWithGemini,
+    generate: generateContextWithGemini,
   },
   {
     id: "groq",
@@ -8892,6 +8896,7 @@ const AI_PROVIDERS = [
     placeholder: "gsk_… を貼り付け",
     keyUrl: "https://console.groq.com/keys",
     extract: extractWithGroq,
+    generate: generateContextWithGroq,
   },
 ];
 
@@ -9910,7 +9915,10 @@ function updateQuizControls() {
   if (elements.difficultQuizButton) elements.difficultQuizButton.hidden = quizActive || showingResult;
   if (elements.contextQuizButton) elements.contextQuizButton.hidden = quizActive || showingResult;
   if (elements.generalReviewButton) elements.generalReviewButton.hidden = quizActive || showingResult;
-  elements.nextQuizButton.hidden = !quizActive || showingResult;
+  // 生成待ち中は「次の問題」を出さない。押しても同じ語のまま pending に戻るだけで、
+  // 押した回数だけ解決コールバックが積み上がる（進んだように見えて進まない）。
+  elements.nextQuizButton.hidden =
+    !quizActive || showingResult || currentQuiz?.contextPending === true;
   elements.dontKnowButton.hidden = !questionActive || showingResult;
   elements.exitReviewButton.hidden = !inReview;
   if (elements.exitQuizButton) {
@@ -10366,14 +10374,33 @@ function renderReviewResult() {
 // 生成物はいつでも作り直せるため同期する価値が低い。
 const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v1";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
+const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent"; // 外部APIへの送信に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
 const CONTEXT_CACHE_MAX = 400; // 古いものから捨てる上限
+// 生成に失敗した語もキャッシュして無限リトライを防ぐが、通信断やレート制限のような
+// 一時的な失敗が永久に焼き付かないよう、一定時間で再挑戦できるようにする。
+const CONTEXT_FAILURE_TTL_MS = 6 * 60 * 60 * 1000;
+// 用意できる手段の優劣。キャッシュが今より弱い手段で作られていたら作り直す。
+const CONTEXT_SRC_RANK = { stored: 0, dict: 1, ai: 2 };
 let contextQuizCache = null; // 遅延初期化（起動時の初期化順に依存しないため）
 const contextInflight = new Map(); // 同じ語の二重生成を防ぐ
 
 function contextGenMode() {
   const v = localStorage.getItem(CONTEXT_GEN_MODE_KEY);
   return v === "dict" || v === "off" ? v : "auto";
+}
+
+// 外部APIへ単語を送ることに同意済みか（初回のみ確認する）
+function contextNetworkConsented() {
+  return localStorage.getItem(CONTEXT_GEN_CONSENT_KEY) === "1";
+}
+
+// 今の設定・キーで使える最良の手段。キャッシュの鮮度判定に使う。
+function contextCapability() {
+  const mode = contextGenMode();
+  if (mode === "off") return "stored";
+  if (mode === "auto" && aiProviderForContext()) return "ai";
+  return "dict";
 }
 
 function ctxCache() {
@@ -10395,6 +10422,21 @@ function contextCacheKey(word) {
 
 function saveContextCache() {
   const cache = ctxCache();
+  // 別タブが書いた内容を消さないよう、保存直前に最新を読み直してマージする
+  // （メモリ上のスナップショットで丸ごと上書きすると相手タブの生成結果が消える）
+  let stored = null;
+  try {
+    stored = JSON.parse(localStorage.getItem(CONTEXT_QUIZ_CACHE_KEY));
+  } catch {
+    stored = null;
+  }
+  if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+    for (const [k, v] of Object.entries(stored)) {
+      if (!v || typeof v !== "object") continue;
+      const mine = cache[k];
+      if (!mine || (Number(v.at) || 0) > (Number(mine.at) || 0)) cache[k] = v;
+    }
+  }
   const keys = Object.keys(cache);
   if (keys.length > CONTEXT_CACHE_MAX) {
     keys
@@ -10409,14 +10451,34 @@ function saveContextCache() {
   }
 }
 
-// キャッシュ済みの生成物（失敗記録なら null 扱い）
-function contextItemFor(word) {
-  const item = ctxCache()[contextCacheKey(word)];
-  if (!item || item.failed) return null;
-  return item;
+function contextCacheEntry(word) {
+  const entry = ctxCache()[contextCacheKey(word)];
+  return entry && typeof entry === "object" ? entry : null;
 }
+
+// キャッシュを作り直すべきか。設定やAIキーが変われば作り直し、失敗記録は一定時間で失効させる。
+// これが無いと「キーを後から登録しても、前に失敗した語は二度と生成されない」状態になる。
+function contextEntryIsStale(entry) {
+  if (!entry) return true;
+  if ((entry.cap || "") !== contextCapability()) return true;
+  if (entry.failed) return Date.now() - (Number(entry.at) || 0) > CONTEXT_FAILURE_TTL_MS;
+  return false;
+}
+
+// キャッシュ済みの生成物（失敗記録なら null 扱い）。
+// 「作らない」設定では、保存済み例文から作ったものだけを使う（AI生成を勝手に出さない）。
+function contextItemFor(word) {
+  const entry = contextCacheEntry(word);
+  if (!entry || entry.failed) return null;
+  if (contextGenMode() === "off" && entry.src !== "stored") return null;
+  return entry;
+}
+
+// もう試したので今は生成を仕掛けない、と判断する（＝通常の単語出題へフォールバックする）
 function contextAttempted(word) {
-  return Boolean(ctxCache()[contextCacheKey(word)]);
+  const entry = contextCacheEntry(word);
+  if (!entry) return false;
+  return !contextEntryIsStale(entry);
 }
 
 // 設定済みのAIキーがある最初のプロバイダ（無ければ null）
@@ -10530,15 +10592,14 @@ async function generateContextWithGroq(word, key, signal) {
 
 async function generateContextWithAI(word) {
   const provider = aiProviderForContext();
-  if (!provider) return null;
+  // 生成関数は各プロバイダが持つ（extract と同じ設計）。分岐で「gemini以外はGroq」と
+  // 決め打ちすると、将来プロバイダを足したときにそのキーをGroqへ送ってしまう。
+  if (!provider || typeof provider.generate !== "function") return null;
   const key = getAiKey(provider.id);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CONTEXT_GEN_TIMEOUT_MS);
   try {
-    const text =
-      provider.id === "gemini"
-        ? await generateContextWithGemini(word, key, controller.signal)
-        : await generateContextWithGroq(word, key, controller.signal);
+    const text = await provider.generate(word, key, controller.signal);
     const parsed = parseContextGenJson(text, word);
     return parsed ? { ...parsed, src: "ai" } : null;
   } finally {
@@ -10560,15 +10621,24 @@ async function fetchContextFromDictionary(word) {
     );
     if (!res.ok) return null;
     const data = await res.json();
-    const sentences = [];
+    // 多義語で語義違いの例文を出さないよう、登録済みの品詞に一致する定義の例文を優先する。
+    // （品詞が分からない語は従来どおり全定義から選ぶ。辞書だけで語義までは特定できない）
+    const posMap = { n: "noun", v: "verb", adj: "adjective", adv: "adverb" };
+    const wantPos = posMap[word?.pos?.tag] || null;
+    const matched = [];
+    const others = [];
     for (const entry of Array.isArray(data) ? data : []) {
       for (const meaning of entry?.meanings || []) {
+        const partOfSpeech = String(meaning?.partOfSpeech || "").toLowerCase();
         for (const def of meaning?.definitions || []) {
           const ex = String(def?.example || "").trim();
-          if (ex && re.test(ex)) sentences.push(ex);
+          if (!ex || !re.test(ex)) continue;
+          if (wantPos && partOfSpeech === wantPos) matched.push(ex);
+          else others.push(ex);
         }
       }
     }
+    const sentences = matched.length ? matched : wantPos ? [] : others;
     if (!sentences.length) return null;
     return { en: sentences[Math.floor(Math.random() * sentences.length)], distractors: [], src: "dict" };
   } finally {
@@ -10580,8 +10650,10 @@ async function fetchContextFromDictionary(word) {
 // 失敗も記録して無限リトライを防ぐ（その語は通常の単語出題にフォールバックする）。
 async function ensureContextItem(word) {
   const key = contextCacheKey(word);
-  const cached = ctxCache()[key];
-  if (cached) return cached.failed ? null : cached;
+  const cached = contextCacheEntry(word);
+  // 鮮度が保たれているキャッシュはそのまま使う。設定・キーが変わった、または失敗記録が
+  // 古くなった場合だけ作り直す。
+  if (cached && !contextEntryIsStale(cached)) return cached.failed ? null : contextItemFor(word);
   if (contextInflight.has(key)) return contextInflight.get(key);
   const task = (async () => {
     const mode = contextGenMode();
@@ -10607,7 +10679,11 @@ async function ensureContextItem(word) {
       }
     }
     const cache = ctxCache();
-    cache[key] = item ? { ...item, at: Date.now() } : { failed: true, at: Date.now() };
+    // cap（作った時点で使えた手段）を残しておき、設定やキーが変わったら作り直せるようにする
+    const cap = contextCapability();
+    cache[key] = item
+      ? { ...item, cap, at: Date.now() }
+      : { failed: true, cap, at: Date.now() };
     saveContextCache();
     return item;
   })();
@@ -10628,18 +10704,14 @@ function buildContextChoices(answer, item) {
   if (generated.length >= 3) return shuffle([answer, ...generated]);
   const scoped = quizSelectedDeckWords().filter((w) => w.id !== answer.id);
   const basePool = scoped.length >= 3 ? scoped : appState.words.filter((w) => w.id !== answer.id);
-  const seen = new Set([
-    normalizeMeaning(answer.meaning),
-    ...generated.map((g) => normalizeMeaning(g.meaning)),
-  ]);
-  const extra = [];
-  for (const w of pickDistractors(basePool, answer, 3)) {
-    if (generated.length + extra.length >= 3) break;
-    const k = normalizeMeaning(w.meaning);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    extra.push(w);
-  }
+  // 不足分だけを、生成済みの意味を除外したうえで取得する（除外で減った分は補われない仕様だったため）
+  const need = 3 - generated.length;
+  const extra = pickDistractors(
+    basePool,
+    answer,
+    need,
+    generated.map((g) => g.meaning),
+  );
   return shuffle([answer, ...generated, ...extra]);
 }
 
@@ -10724,6 +10796,17 @@ function startContextQuiz() {
     );
     return;
   }
+  // 生成には出題語と日本語訳の外部送信（辞書API / AI）が伴うため、初回だけ確認を挟む。
+  // window.confirm は iOS のホーム画面起動で固まるため、既存の2段階タップ方式に合わせる。
+  if (contextGenMode() !== "off" && !contextNetworkConsented()) {
+    if (!armDangerButton(elements.contextQuizButton, "もう一度押すと開始")) {
+      setStatus(
+        "例文モードは、出題する単語とその意味を辞書API（およびAIキー設定時はAI）へ送って例文と選択肢を作ります。よければもう一度押してください。設定の「例文モードの例文・誤答の作り方」で「作らない」にすれば送信しません。",
+      );
+      return;
+    }
+    localStorage.setItem(CONTEXT_GEN_CONSENT_KEY, "1");
+  }
   startReview(
     words.map((word) => word.id),
     { label: "例文クイズ", context: true },
@@ -10802,19 +10885,32 @@ function buildReviewQuiz() {
       if (!item && !contextAttempted(answer)) {
         // 例文がまだ用意できていない：生成中プレースホルダを返し、用意でき次第この問題を作り直す。
         // shownAt は作り直し時に入れるので、生成の待ち時間は回答時間に含まれない。
+        // 解決時は「いま表示中の問題が、まさにこの語の生成待ち」であることまで確認する
+        // （別セッションや別の語の解決で、表示中の問題を壊さないため）。
+        const pendingSession = reviewSession;
+        const pendingId = answer.id;
         ensureContextItem(answer)
           .catch(() => null)
           .then(() => {
-            if (reviewSession && reviewSession.context && currentQuiz?.contextPending) {
+            if (
+              reviewSession === pendingSession &&
+              reviewSession?.context &&
+              currentQuiz?.contextPending &&
+              currentQuiz.answer?.id === pendingId
+            ) {
               currentQuiz = null;
               renderQuiz();
             }
           });
         prefetchNextContextItem();
+        // 前の問題の正誤メッセージが残ったままにならないよう、待機中の案内に差し替える
+        elements.quizFeedback.textContent = "例文と選択肢を用意しています…";
         return { answer, choices: [], answered: false, shownAt: 0, context: null, contextPending: true, srsDueAtStart };
       }
       prefetchNextContextItem();
       if (item) {
+        // 設定やキーが変わって、より良い手段で作り直せる場合は裏で更新しておく（表示はいまのままで進む）
+        if (contextEntryIsStale(contextCacheEntry(answer))) ensureContextItem(answer).catch(() => {});
         const contextChoices = buildContextChoices(answer, item);
         elements.quizFeedback.textContent = choiceCountNote(contextChoices);
         return {
@@ -11075,8 +11171,13 @@ function spellingDistance(a, b) {
 // 4択の誤答を選ぶ。意味が答えと重複しないことを保ちつつ、リーディング学習で有効な
 // 「紛らわしい誤答」を優先する: (1)綴りが似た語 (2)答えと同じ品詞の語。該当が足りなければ
 // 残りはランダムで埋める。意味の重複除外は従来どおり（意味が同じ誤答は正解扱いになるため）。
-function pickDistractors(pool, answer, count = 3) {
-  const seen = new Set([normalizeMeaning(answer.meaning)]);
+function pickDistractors(pool, answer, count = 3, excludeMeanings = []) {
+  // excludeMeanings: 既に選択肢に入っている意味（AI生成の誤答など）。ここで一緒に除外しないと、
+  // 呼び出し側で弾いた分だけ選択肢が減って4択に満たなくなる。
+  const seen = new Set([
+    normalizeMeaning(answer.meaning),
+    ...excludeMeanings.map((m) => normalizeMeaning(m)),
+  ]);
   const answerPos = answer.pos?.tag || null;
   // まず shuffle して同点をランダム化してから、紛らわしさスコアの高い順に並べる。
   // Array.prototype.sort は安定なので、同スコアはシャッフル順（＝ランダム）のまま残る。
