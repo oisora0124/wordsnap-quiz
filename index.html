@@ -10421,7 +10421,8 @@ const CONTEXT_FAILURE_TTL_MS = 6 * 60 * 60 * 1000;
 // 用意できる手段の優劣。キャッシュが今より弱い手段で作られていたら作り直す。
 const CONTEXT_SRC_RANK = { stored: 0, dict: 1, ai: 2 };
 let contextQuizCache = null; // 遅延初期化（起動時の初期化順に依存しないため）
-const contextInflight = new Map(); // 同じ語の二重生成を防ぐ
+// 同じ語・同じAI能力の二重生成だけを防ぐ。キーやプロバイダが変わった処理まで待たせない。
+const contextInflight = new Map();
 
 function contextGenMode() {
   const v = localStorage.getItem(CONTEXT_GEN_MODE_KEY);
@@ -10518,7 +10519,20 @@ function saveContextCache() {
     for (const [k, v] of Object.entries(stored)) {
       if (!v || typeof v !== "object") continue;
       const mine = cache[k];
-      if (!mine || (Number(v.at) || 0) > (Number(mine.at) || 0)) cache[k] = v;
+      if (!mine) {
+        cache[k] = v;
+        continue;
+      }
+      const storedValidated = v.validation?.status === "ok";
+      const mineValidated = mine.validation?.status === "ok";
+      // 別タブで完全な検証に成功した候補は、後から終わった失敗で復活させない。
+      // 成否が同じ場合だけ従来どおり新しい時刻を優先する。
+      if (
+        (storedValidated && !mineValidated) ||
+        (storedValidated === mineValidated && (Number(v.at) || 0) > (Number(mine.at) || 0))
+      ) {
+        cache[k] = v;
+      }
     }
   }
   const keys = Object.keys(cache);
@@ -10809,10 +10823,8 @@ function parseContextValidationJson(text, choiceTerms, answerTerm = choiceTerms?
       fit.push(allowed.get(key));
     }
   }
-  const answerKey = String(answerTerm || "").trim().toLowerCase();
-  // 空fitや正解漏れは、モデルが列挙に失敗したかデータ内の命令に影響された可能性がある。
-  // その応答で誤答を削ると安全網を迂回できるため、正解を含む非空の候補内fitだけを信用する。
-  if (!fit.length || !answerKey || !seen.has(answerKey)) return null;
+  // 正解の列挙漏れがあっても、候補内の語を「入る」とした情報は誤答を減らす方向にしか
+  // 働かないため返す。完全な検証成功かどうかは適用側で正解語の有無を別に判定する。
   return fit;
 }
 
@@ -10829,9 +10841,9 @@ async function validateContextChoicesWithAI(word, item, choiceTerms, provider, k
   }
 }
 
-// 検証が成功したときだけ fit の誤答を除き、失敗時は候補をそのまま残す。
-// この小さな境界にまとめることで、タイムアウトや壊れたJSONを「誤答なし」と誤解しない。
-function applyContextValidation(item, candidateTerms, fit) {
+// JSONとして読めた fit は、正解の列挙漏れがあっても候補の除外にだけ利用する。
+// 一方、正解を含まない応答は完全な検証成功にはせず、TTL後の再検証対象に残す。
+function applyContextValidation(item, candidateTerms, fit, answerTerm) {
   if (!Array.isArray(fit)) {
     return {
       ...item,
@@ -10840,10 +10852,14 @@ function applyContextValidation(item, candidateTerms, fit) {
     };
   }
   const fitSet = new Set(fit.map((term) => String(term).toLowerCase()));
+  const answerKey = String(answerTerm || "").trim().toLowerCase();
+  const validationComplete = Boolean(answerKey && fitSet.has(answerKey));
   return {
     ...item,
     distractors: candidateTerms.filter((term) => !fitSet.has(term.toLowerCase())),
-    validation: { status: "ok", fit: fit.slice(), at: Date.now() },
+    validation: validationComplete
+      ? { status: "ok", fit: fit.slice(), at: Date.now() }
+      : { status: "failed", at: Date.now() },
   };
 }
 
@@ -11246,14 +11262,16 @@ async function ensureContextItem(word) {
   // 鮮度が保たれているキャッシュはそのまま使う。設定・キーが変わった、または失敗記録が
   // 古くなった場合だけ作り直す。
   if (cached && !contextEntryIsStale(cached)) return cached.failed ? null : contextItemFor(word);
-  if (contextInflight.has(key)) return contextInflight.get(key);
+  // inflightの識別にも開始時点のcapを含め、設定変更後の生成・検証を旧タスクに直列化しない。
+  const mode = contextGenMode();
+  const aiProvider = mode === "auto" ? aiProviderForContext() : null;
+  const aiKey = aiProvider ? getAiKey(aiProvider.id) : "";
+  const willUseAI = Boolean(aiProvider && aiKey);
+  const cap = mode === "off" ? "stored" : willUseAI ? contextAiCapability(aiProvider) : "dict";
+  const inflightKey = `${key}::${cap}`;
+  if (contextInflight.has(inflightKey)) return contextInflight.get(inflightKey);
   const task = (async () => {
-    const mode = contextGenMode();
     // 開始後にAIキーが変更されても、開始時に使えた最良の手段とキャッシュの cap が食い違わないよう固定する。
-    const aiProvider = mode === "auto" ? aiProviderForContext() : null;
-    const aiKey = aiProvider ? getAiKey(aiProvider.id) : "";
-    const willUseAI = Boolean(aiProvider && aiKey);
-    const cap = mode === "off" ? "stored" : willUseAI ? contextAiCapability(aiProvider) : "dict";
     // 処理中に「作らない」へ切り替えられたら、それ以降の外部送信は行わない
     const networkAllowed = () => contextGenMode() !== "off";
     // 同じAI能力で検証だけ失敗してTTLを迎えた場合は、例文生成や辞書取得を繰り返さず
@@ -11342,6 +11360,8 @@ async function ensureContextItem(word) {
         .filter((term) => term && term.toLowerCase() !== answerTerm);
       item = { ...item, distractors: candidateTerms, choicesFinal: true };
 
+      // AI未設定時は形態論フィルタだけで続行するため、「空所に入る正解が1語だけ」という
+      // 条件を機械的には保証できない。候補が無い場合も検証APIへ送る対象がないため同様。
       if (willUseAI && networkAllowed() && candidateTerms.length > 0) {
         try {
           const choiceTerms = [String(word.term || "").trim(), ...candidateTerms];
@@ -11352,32 +11372,32 @@ async function ensureContextItem(word) {
             aiProvider,
             aiKey,
           );
-          if (Array.isArray(fit)) {
-            // 正解を含む完全な応答だけを受理したうえで、正解以外に自然に入る語を除外する。
-            item = applyContextValidation(item, candidateTerms, fit);
-          } else {
-            item = applyContextValidation(item, candidateTerms, null);
-          }
+          // 正解がfitから漏れていても、安全な誤答除外は適用する。ただしstatusはokにせず再検証する。
+          item = applyContextValidation(item, candidateTerms, fit, word.term);
         } catch {
           // AI検証は最後の補助線。失敗・タイムアウト時も、既存の語形安全判定を通った候補で続行する。
-          item = applyContextValidation(item, candidateTerms, null);
+          item = applyContextValidation(item, candidateTerms, null, word.term);
         }
       }
     }
     const cache = ctxCache();
     // src は実際に得られた取得元、cap は開始時に使えた最良の手段として別々に残す。
     // AI失敗後の辞書成功も「その能力で得た最良結果」なので、能力が上がるまでは再生成しない。
-    cache[key] = item
+    const entry = item
       ? { ...item, cap, at: Date.now() }
       : { failed: true, cap, at: Date.now() };
-    saveContextCache();
+    // 開始後にcapが変わった旧タスクは返却だけに留め、新しいcapの結果を後から上書きしない。
+    if (contextCapability() === cap) {
+      cache[key] = entry;
+      saveContextCache();
+    }
     return item;
   })();
-  contextInflight.set(key, task);
+  contextInflight.set(inflightKey, task);
   try {
     return await task;
   } finally {
-    contextInflight.delete(key);
+    contextInflight.delete(inflightKey);
   }
 }
 
@@ -11647,7 +11667,37 @@ function buildReviewQuiz() {
       if (item) {
         // ここで残る stale は検証失敗TTLだけ。形態論判定済みの問題は表示しつつ、
         // 例文生成をやり直さない短い再検証を裏で行う（キー変更などは item 自体を返さず上で待つ）。
-        if (contextEntryIsStale(contextCacheEntry(answer))) ensureContextItem(answer).catch(() => {});
+        if (contextEntryIsStale(contextCacheEntry(answer))) {
+          const pendingSession = reviewSession;
+          const pendingId = answer.id;
+          const previousDistractors = (item.distractors || [])
+            .map((term) => String(term).trim().toLowerCase())
+            .sort()
+            .join("\n");
+          ensureContextItem(answer)
+            .catch(() => null)
+            .then((refreshed) => {
+              const refreshedDistractors = (refreshed?.distractors || [])
+                .map((term) => String(term).trim().toLowerCase())
+                .sort()
+                .join("\n");
+              // 完全成功だけでなく、正解漏れ応答による安全な除外も現在の問題へ反映する。
+              // すでに解答済み、別セッション、別の語へ進んだ後は表示を壊さない。
+              if (
+                refreshed &&
+                (refreshed.validation?.status === "ok" ||
+                  refreshedDistractors !== previousDistractors) &&
+                reviewSession === pendingSession &&
+                reviewSession?.context &&
+                currentQuiz?.context &&
+                !currentQuiz.answered &&
+                currentQuiz.answer?.id === pendingId
+              ) {
+                currentQuiz = null;
+                renderQuiz();
+              }
+            });
+        }
         const contextChoices = buildContextChoices(answer, item);
         // 誤答が0件なら唯一の正解を押すだけで学習状態が進んでしまうため、空所補充にはしない。
         // 同じ answer の通常出題へそのまま落とし、既存の採点・SRS・回答速度判定を使う。
