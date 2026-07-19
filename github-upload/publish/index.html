@@ -10395,7 +10395,8 @@ function renderReviewResult() {
 // （旧v1のキャッシュを読むと誤答に日本語が混ざるので、そのまま捨てて作り直す）
 // v4: 活用形・比較級を誤答から除く検証を厳格化したため、旧生成物を破棄して作り直す
 // v5: 不規則変化を含む比較級・最上級の検証を追加したため、危険な旧生成物を再利用しない
-const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v5";
+// v6: 派生接尾辞を安全なものだけに絞り、不規則活用を含む全候補の最終検証を追加した
+const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v6";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
 const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent:v2"; // Datamuse追加後の送信先に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
@@ -10436,6 +10437,7 @@ function purgeLegacyContextCaches() {
     "wordsnap-ctxquiz:v2",
     "wordsnap-ctxquiz:v3",
     "wordsnap-ctxquiz:v4",
+    "wordsnap-ctxquiz:v5",
     "wordsnap-ctxquiz-consent",
   ]) {
     try {
@@ -10503,7 +10505,11 @@ function contextCacheEntry(word) {
 // これが無いと「キーを後から登録しても、前に失敗した語は二度と生成されない」状態になる。
 function contextEntryIsStale(entry) {
   if (!entry) return true;
-  if ((entry.cap || "") !== contextCapability()) return true;
+  const cachedRank = CONTEXT_SRC_RANK[entry.cap];
+  const currentRank = CONTEXT_SRC_RANK[contextCapability()];
+  // 未知の旧値も含め、実際に作れた品質と現在使える手段が違えば作り直す。
+  // AI失敗後の辞書例文を AI 品質として固定しないため、cap は保存時に item.src から入る。
+  if (cachedRank === undefined || cachedRank !== currentRank) return true;
   if (entry.failed) return Date.now() - (Number(entry.at) || 0) > CONTEXT_FAILURE_TTL_MS;
   return false;
 }
@@ -10587,13 +10593,9 @@ function parseContextGenJson(text, word) {
       if (!/^[A-Za-z][A-Za-z'’-]*$/.test(d)) return false; // 英単語1語のみ
       const k = d.toLowerCase();
       if (seen.has(k)) return false;
-      // 出題語を単に活用しただけの語（mitigate→mitigated、study→studies、stop→stopped 等）は、
-      // 空所に入れても文が成立してしまい正解が2つになるため除外する（Datamuse経路と同じ判定）。
-      if (isInflectionOf(termLower, k)) return false;
-      // 比較級・最上級も同様に除外する。ただし動詞・名詞の -er は行為者名詞になり得るため許可する。
-      // AI経路とDatamuse経路で判断が食い違わないよう、品詞別ルールは共通関数に集約する。
-      if (isUnsafeComparativeDistractor(termLower, k, word.pos?.tag || null)) return false;
-      if (sentenceContainsTerm(enLower, d)) return false; // 例文中に既出の語は使わない
+      // 活用・比較変化・曖昧な派生・例文中の既出語を、取得経路共通の安全判定で除外する。
+      // buildContextChoices でも再検証し、キャッシュ済み候補や登録語補充からの復活を防ぐ。
+      if (!isContextDistractorSafe(word, { en: enLower }, d)) return false;
       seen.add(k);
       return true;
     })
@@ -10681,31 +10683,107 @@ function derivationStem(term) {
   return t.slice(0, Math.max(4, t.length - 2));
 }
 
-// 出題語の「単なる活用形」か。活用形は空所に入れても文が成立してしまうことがあり
-// （例: I (  ) medicine. に learn/learned の両方が入る）、誤答にすると正解が2つになる。
-// AI経路とDatamuse経路の両方で同じ判定を使う（片方だけ緩いと事故る）。
+// 不規則変化は綴りから逆算できないため、学習用単語帳に出やすい基本語を同一語形群として持つ。
+// 方向を問わず同じ群の語を除外し、go→went だけでなく went→go のような逆方向の復活も防ぐ。
+const IRREGULAR_INFLECTION_GROUPS = [
+  ["be", "am", "is", "are", "was", "were", "been", "being"],
+  ["go", "goes", "went", "gone", "going"],
+  ["buy", "buys", "bought", "buying"],
+  ["run", "runs", "ran", "running"],
+  ["see", "sees", "saw", "seen", "seeing"],
+  ["take", "takes", "took", "taken", "taking"],
+  ["come", "comes", "came", "coming"],
+  ["give", "gives", "gave", "given", "giving"],
+  ["find", "finds", "found", "finding"],
+  ["think", "thinks", "thought", "thinking"],
+  ["know", "knows", "knew", "known", "knowing"],
+  ["do", "does", "did", "done", "doing"],
+  ["have", "has", "had", "having"],
+  ["make", "makes", "made", "making"],
+  ["say", "says", "said", "saying"],
+  ["get", "gets", "got", "gotten", "getting"],
+  ["write", "writes", "wrote", "written", "writing"],
+  ["speak", "speaks", "spoke", "spoken", "speaking"],
+  ["eat", "eats", "ate", "eaten", "eating"],
+  ["drink", "drinks", "drank", "drunk", "drinking"],
+  ["begin", "begins", "began", "begun", "beginning"],
+  ["break", "breaks", "broke", "broken", "breaking"],
+  ["choose", "chooses", "chose", "chosen", "choosing"],
+  ["drive", "drives", "drove", "driven", "driving"],
+  ["fall", "falls", "fell", "fallen", "falling"],
+  ["forget", "forgets", "forgot", "forgotten", "forgetting"],
+  ["sing", "sings", "sang", "sung", "singing"],
+  ["swim", "swims", "swam", "swum", "swimming"],
+  ["teach", "teaches", "taught", "teaching"],
+  ["catch", "catches", "caught", "catching"],
+  ["bring", "brings", "brought", "bringing"],
+  ["leave", "leaves", "left", "leaving"],
+  ["feel", "feels", "felt", "feeling"],
+  ["hear", "hears", "heard", "hearing"],
+  ["hold", "holds", "held", "holding"],
+  ["keep", "keeps", "kept", "keeping"],
+  ["lose", "loses", "lost", "losing"],
+  ["meet", "meets", "met", "meeting"],
+  ["pay", "pays", "paid", "paying"],
+  ["sell", "sells", "sold", "selling"],
+  ["send", "sends", "sent", "sending"],
+  ["sit", "sits", "sat", "sitting"],
+  ["sleep", "sleeps", "slept", "sleeping"],
+  ["stand", "stands", "stood", "standing"],
+  ["understand", "understands", "understood", "understanding"],
+  ["wear", "wears", "wore", "worn", "wearing"],
+  ["win", "wins", "won", "winning"],
+  ["lie", "lies", "lay", "lain", "lied", "lying"],
+  ["put", "puts", "putting"],
+  ["read", "reads", "reading"],
+  ["cut", "cuts", "cutting"],
+  ["hit", "hits", "hitting"],
+  ["let", "lets", "letting"],
+  ["child", "children"],
+  ["man", "men"],
+  ["woman", "women"],
+  ["foot", "feet"],
+  ["tooth", "teeth"],
+  ["mouse", "mice"],
+  ["person", "people"],
+  ["goose", "geese"],
+  ["ox", "oxen"],
+];
+
+function wordsShareGroup(term, candidate, groups) {
+  return groups.some((group) => group.includes(term) && group.includes(candidate));
+}
+
+function regularInflectionForms(term) {
+  const forms = new Set([term + "s", term + "es", term + "d", term + "ed", term + "ing"]);
+  if (/e$/.test(term)) {
+    const base = term.slice(0, -1);
+    forms.add(base + "ed").add(base + "ing"); // mitigate → mitigated / mitigating
+  }
+  if (/ie$/.test(term)) forms.add(term.slice(0, -2) + "ying"); // lie → lying
+  if (/y$/.test(term)) {
+    const base = term.slice(0, -1);
+    forms.add(base + "ies").add(base + "ied"); // study → studies / studied
+  }
+  if (/[bcdfgklmnprstvz]$/.test(term)) {
+    const doubled = term + term.slice(-1);
+    forms.add(doubled + "ed").add(doubled + "ing"); // stop → stopped / stopping
+  }
+  return forms;
+}
+
+// 出題語の「単なる活用形」か。規則・不規則とも双方向で調べることで、登録語補充に
+// learned→learn や children→child の順で現れても同じ安全基準で除外する。
 function isInflectionOf(term, candidate) {
   const t = String(term || "").trim().toLowerCase();
   const c = String(candidate || "").trim().toLowerCase();
   if (!t || !c || t === c) return false;
-  const forms = new Set([t + "s", t + "es", t + "d", t + "ed", t + "ing"]);
-  if (/e$/.test(t)) {
-    const base = t.slice(0, -1);
-    forms.add(base + "ed").add(base + "ing"); // mitigate → mitigated / mitigating
-  }
-  if (/y$/.test(t)) {
-    const base = t.slice(0, -1);
-    forms.add(base + "ies").add(base + "ied"); // study → studies / studied
-  }
-  if (/[bcdfgklmnprstvz]$/.test(t)) {
-    const doubled = t + t.slice(-1);
-    forms.add(doubled + "ed").add(doubled + "ing"); // stop → stopped / running
-  }
-  return forms.has(c);
+  if (wordsShareGroup(t, c, IRREGULAR_INFLECTION_GROUPS)) return true;
+  return regularInflectionForms(t).has(c) || regularInflectionForms(c).has(t);
 }
 
-// 不規則な比較変化。positive同士（many/much等）は互いを比較形とみなさず、
-// 原級→比較級／最上級と比較級→最上級だけを危険な組み合わせとして扱う。
+// 不規則比較は段階や方向を問わず同じ語形群として扱う。many↔more、better↔good、
+// farther↔further のいずれも、文脈次第で両方入るため誤答には使わない。
 const IRREGULAR_COMPARISON_GROUPS = [
   { positive: ["good", "well"], comparative: ["better"], superlative: ["best"] },
   { positive: ["bad"], comparative: ["worse"], superlative: ["worst"] },
@@ -10722,81 +10800,123 @@ const IRREGULAR_COMPARISON_GROUPS = [
 // 形容詞・副詞の比較級／最上級か（large→larger/largest、good→better/best等）。
 // これらは「別品詞の派生形」ではなく活用で、空所にそのまま入って正解が2つになる。
 // 例: "a (  ) animal" に large も larger も成立してしまう。
-// 戻り値を段階にしておくことで、動詞・名詞では行為者名詞になり得る比較級だけを許可できる。
+function regularComparativeDegree(term, candidate) {
+  const comparative = new Set([term + "er"]);
+  const superlative = new Set([term + "est"]);
+  if (/e$/.test(term)) {
+    comparative.add(term + "r");
+    superlative.add(term + "st"); // late → later / latest
+  }
+  if (/y$/.test(term)) {
+    const base = term.slice(0, -1);
+    comparative.add(base + "ier");
+    superlative.add(base + "iest"); // happy → happier / happiest
+  }
+  if (/[bcdfgklmnprstvz]$/.test(term)) {
+    const doubled = term + term.slice(-1);
+    comparative.add(doubled + "er");
+    superlative.add(doubled + "est"); // big → bigger / biggest
+  }
+  if (comparative.has(candidate)) return "comparative";
+  if (superlative.has(candidate)) return "superlative";
+  return null;
+}
+
+// 形容詞・副詞の比較級／最上級か（large↔larger、good↔better等）。
+// 戻り値の具体的な段階より「同じ比較変化群か」を重視し、逆方向も同段階異形も検出する。
 function comparativeFormDegree(term, candidate) {
   const t = String(term || "").trim().toLowerCase();
   const c = String(candidate || "").trim().toLowerCase();
   if (!t || !c || t === c) return null;
   for (const group of IRREGULAR_COMPARISON_GROUPS) {
-    if (group.positive.includes(t)) {
-      if (group.comparative.includes(c)) return "comparative";
-      if (group.superlative.includes(c)) return "superlative";
-    }
-    if (group.comparative.includes(t) && group.superlative.includes(c)) return "superlative";
+    const forms = [...group.positive, ...group.comparative, ...group.superlative];
+    if (forms.includes(t) && forms.includes(c)) return "irregular";
   }
-  const comparative = new Set([t + "er"]);
-  const superlative = new Set([t + "est"]);
-  if (/e$/.test(t)) {
-    comparative.add(t + "r");
-    superlative.add(t + "st"); // late → later / latest
-  }
-  if (/y$/.test(t)) {
-    const base = t.slice(0, -1);
-    comparative.add(base + "ier");
-    superlative.add(base + "iest"); // happy → happier / happiest
-  }
-  if (/[bcdfgklmnprstvz]$/.test(t)) {
-    const doubled = t + t.slice(-1);
-    comparative.add(doubled + "er");
-    superlative.add(doubled + "est"); // big → bigger / biggest
-  }
-  if (comparative.has(c)) return "comparative";
-  if (superlative.has(c)) return "superlative";
-  return null;
+  return regularComparativeDegree(t, c) || regularComparativeDegree(c, t);
 }
 
 function isComparativeFormOf(term, candidate) {
   return comparativeFormDegree(term, candidate) !== null;
 }
 
-// 形容詞・副詞、および品詞不明では比較級・最上級を安全側で除外する。
-// 動詞・名詞では work→worker / paint→painter のような -er 派生語を残す一方、
-// 最上級は別品詞として成立しにくいため、品詞にかかわらず除外する。
-function isUnsafeComparativeDistractor(term, candidate, posTag = null) {
-  const degree = comparativeFormDegree(term, candidate);
-  if (!degree) return false;
-  if (degree === "superlative") return true;
-  return posTag !== "v" && posTag !== "n";
+// 品詞情報が不正確でも安全性が揺れないよう、比較変化は品詞にかかわらず除外する。
+// -er が行為者名詞に見える場合も、元語と両方入る文脈があるため許可しない。
+function isUnsafeComparativeDistractor(term, candidate) {
+  return comparativeFormDegree(term, candidate) !== null;
 }
 
 // 出題語から派生した「別の品詞」の語か。
 // 語幹（末尾を最大2文字まで落としたもの）＋既知の派生接尾辞、という形になっている場合だけ真。
 // 単なる前方一致だと novel→november、content→contrive のような無関係語を通してしまうため、
 // 接尾辞まで検査して「本当に派生語か」を確かめる。
-// posTag: 出題語の品詞。-er は動詞・名詞なら行為者名詞(work→worker、paint→painter)で
-// 誤答に使えるが、形容詞・副詞だと比較級(large→larger)になり正解が2つになる。
-// 品詞不明なら安全側で使わず、-est はどの品詞でも除外する。
+// 接尾辞は「付くことで品詞が明確に変わり、元語の位置には入りにくい」名詞化に限定する。
+// -er/-or は比較級・行為者名詞、-ly は flat adverb、形容詞化接尾辞は元語も同じ位置に
+// 入る場合がある。品詞情報だけでは安全に判別できないため、迷うものは候補生成から外す。
 const DERIVATIONAL_SUFFIXES = [
-  "ion", "tion", "ation", "sion", "ment", "ness", "ity", "ty", "ance", "ence",
-  "ce", "cy", "ive", "ous", "ful", "less", "able", "ible", "al", "ic", "ical",
-  "ly", "ist", "ism", "ize", "ise", "ify", "er", "or", "ant", "ent", "ure",
+  "ion", "tion", "ation", "sion", "ment", "ness", "ity", "ance", "ence", "ism", "ist",
 ];
-function isDerivedFormOf(term, candidate, posTag = null) {
+const AMBIGUOUS_DERIVATIONAL_SUFFIXES = [
+  "er", "or", "ly", "y", "al", "ic", "ive", "ous", "ful", "less", "able", "ible",
+  "ize", "ise", "ify", "ure", "ant", "ent", "ce", "cy", "ty", "ical",
+];
+
+function hasDerivationalSuffix(term, candidate, suffixes) {
+  for (let cut = 0; cut <= 2; cut++) {
+    const base = term.slice(0, term.length - cut);
+    if (base.length < 3 || !candidate.startsWith(base)) continue;
+    const suffix = candidate.slice(base.length);
+    if (suffixes.includes(suffix)) return true;
+  }
+  // abundant→abundance / different→difference のような -ant/-ent からの名詞化は、
+  // 末尾を3文字置換するため通常の「最大2文字を落とす」照合とは別に扱う。
+  if (term.endsWith("ant") && candidate === term.slice(0, -3) + "ance") {
+    return suffixes.includes("ance");
+  }
+  if (term.endsWith("ent") && candidate === term.slice(0, -3) + "ence") {
+    return suffixes.includes("ence");
+  }
+  return false;
+}
+
+function isAmbiguousDerivationPair(term, candidate) {
+  const t = String(term || "").trim().toLowerCase();
+  const c = String(candidate || "").trim().toLowerCase();
+  if (!t || !c || t === c) return false;
+  // abundant→abundance は短い見方だと -ce にも見えるが、実際は安全側に残した -ance 名詞化。
+  // 長い安全な接尾辞として説明できる組み合わせを、短い曖昧接尾辞で重ねて除外しない。
+  if (
+    hasDerivationalSuffix(t, c, DERIVATIONAL_SUFFIXES) ||
+    hasDerivationalSuffix(c, t, DERIVATIONAL_SUFFIXES)
+  ) {
+    return false;
+  }
+  return (
+    hasDerivationalSuffix(t, c, AMBIGUOUS_DERIVATIONAL_SUFFIXES) ||
+    hasDerivationalSuffix(c, t, AMBIGUOUS_DERIVATIONAL_SUFFIXES)
+  );
+}
+
+function isDerivedFormOf(term, candidate) {
   const t = String(term || "").trim().toLowerCase();
   const c = String(candidate || "").trim().toLowerCase();
   if (!t || !c || t === c || c.length <= t.length - 3) return false;
   if (isInflectionOf(t, c)) return false; // 活用形は派生形として扱わない
-  // 比較級・最上級は活用。ただし動詞・名詞の -er は行為者名詞として派生形に使える。
-  // AI経路と同じ共通判定を使い、候補の採否が取得経路によって変わらないようにする。
-  if (isUnsafeComparativeDistractor(t, c, posTag)) return false;
-  for (let cut = 0; cut <= 2; cut++) {
-    const base = t.slice(0, t.length - cut);
-    if (base.length < 3 || !c.startsWith(base)) continue;
-    const suffix = c.slice(base.length);
-    if (!suffix) continue;
-    if (DERIVATIONAL_SUFFIXES.includes(suffix)) return true;
-  }
-  return false;
+  if (isUnsafeComparativeDistractor(t, c)) return false;
+  return hasDerivationalSuffix(t, c, DERIVATIONAL_SUFFIXES);
+}
+
+// AI生成・Datamuse・登録語補充のどの経路から来ても、選択肢へ入れる直前に通す共通安全判定。
+// 文法的に両方入り得る同一語の語形違いは、意味や品詞の推測に頼らず安全側で除外する。
+function isContextDistractorSafe(answer, item, candidate) {
+  const answerTerm = String(answer?.term || answer || "").trim().toLowerCase();
+  const candidateTerm = String(candidate || "").trim();
+  const c = candidateTerm.toLowerCase();
+  if (!answerTerm || !/^[A-Za-z][A-Za-z'’-]*$/.test(candidateTerm) || c === answerTerm) return false;
+  if (isInflectionOf(answerTerm, c)) return false;
+  if (isUnsafeComparativeDistractor(answerTerm, c)) return false;
+  if (isAmbiguousDerivationPair(answerTerm, c)) return false;
+  if (sentenceContainsTerm(item?.en || "", candidateTerm)) return false;
+  return true;
 }
 
 // 空所補充の誤答として「同じ語の別の品詞・派生形」を実在の語から集める（Datamuse、キー不要）。
@@ -10829,7 +10949,7 @@ async function fetchDerivedFormDistractors(word, sentence, signal) {
       // 前方一致だけでは novel→november のような無関係語を拾うため、
       // 「語幹＋既知の派生接尾辞」になっているものだけを採用する。
       // 活用形（learn→learned 等）は空所に入って正解が2つになるので isDerivedFormOf が弾く。
-      if (!isDerivedFormOf(term, k, word?.pos?.tag || null)) continue;
+      if (!isDerivedFormOf(term, k)) continue;
       if (sentenceContainsTerm(sentence, k)) continue; // 例文中に既出の語は誤答にしない
       const freqTag = (entry?.tags || []).find((t) => String(t).startsWith("f:"));
       const freq = freqTag ? Number(String(freqTag).slice(2)) : 0;
@@ -10976,8 +11096,11 @@ async function ensureContextItem(word) {
       }
     }
     const cache = ctxCache();
+    // 開始時に AI が使えても、失敗して辞書・保存例文へ落ちたなら、その実品質を cap に保存する。
+    // AI 品質と偽って fresh 扱いにすると再生成されないため、成功時は item.src を正とする。
+    const actualCap = item && CONTEXT_SRC_RANK[item.src] !== undefined ? item.src : cap;
     cache[key] = item
-      ? { ...item, cap, at: Date.now() }
+      ? { ...item, cap: actualCap, at: Date.now() }
       : { failed: true, cap, at: Date.now() };
     saveContextCache();
     return item;
@@ -11001,7 +11124,7 @@ function buildContextChoices(answer, item) {
   for (const raw of item?.distractors || []) {
     const term = String(raw || "").trim();
     const k = term.toLowerCase();
-    if (!term || seenTerms.has(k)) continue;
+    if (!term || seenTerms.has(k) || !isContextDistractorSafe(answer, item, term)) continue;
     seenTerms.add(k);
     generated.push({ id: `gen-${generated.length}`, label: term });
     if (generated.length >= 3) break;
@@ -11011,11 +11134,15 @@ function buildContextChoices(answer, item) {
     // 足りない分は登録済みの他の単語から補う（同じ品詞・紛らわしい綴りが優先される）
     const scoped = quizSelectedDeckWords().filter((w) => w.id !== answer.id);
     const basePool = (scoped.length >= 3 ? scoped : appState.words.filter((w) => w.id !== answer.id))
-      .filter((w) => !seenTerms.has(String(w.term || "").trim().toLowerCase()));
+      .filter((w) => !seenTerms.has(String(w.term || "").trim().toLowerCase()))
+      // pickDistractors 自体は通常クイズでも使うため意味重複の責務を保ち、空所補充固有の
+      // 語形安全性はここで先に絞る。足りなくても危険語で4択を埋めず、注記付きで続行する。
+      .filter((w) => isContextDistractorSafe(answer, item, w.term));
     for (const w of pickDistractors(basePool, answer, 3 - generated.length)) {
       const term = String(w.term || "").trim();
       const k = term.toLowerCase();
-      if (!term || seenTerms.has(k)) continue;
+      // 最終追加の直前にも再確認し、将来 pool の作り方が変わっても検証を迂回させない。
+      if (!term || seenTerms.has(k) || !isContextDistractorSafe(answer, item, term)) continue;
       seenTerms.add(k);
       choices.push({ id: w.id, label: term });
       if (choices.length >= 4) break;
