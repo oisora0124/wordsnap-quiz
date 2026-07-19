@@ -10393,9 +10393,10 @@ function renderReviewResult() {
 // 生成物はいつでも作り直せるため同期する価値が低い。
 // v2: 空所補充形式へ変更し、誤答が「日本語の意味」から「英単語」になったためキーを分ける
 // （旧v1のキャッシュを読むと誤答に日本語が混ざるので、そのまま捨てて作り直す）
-const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v3";
+// v4: 活用形・比較級を誤答から除く検証を厳格化したため、旧生成物を破棄して作り直す
+const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v4";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
-const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent"; // 外部APIへの送信に同意済みか
+const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent:v2"; // Datamuse追加後の送信先に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
 // 誤答補強(Datamuse)は例文取得と並行して走らせる補助処理なので、待たせすぎないよう短くする
 const CONTEXT_DISTRACTOR_TIMEOUT_MS = 8000;
@@ -10428,7 +10429,7 @@ function contextCapability() {
 
 // 形式変更で使わなくなった旧世代キャッシュを掃除する（放置すると容量を食い続ける）
 function purgeLegacyContextCaches() {
-  for (const legacy of ["wordsnap-ctxquiz:v1", "wordsnap-ctxquiz:v2"]) {
+  for (const legacy of ["wordsnap-ctxquiz:v1", "wordsnap-ctxquiz:v2", "wordsnap-ctxquiz:v3"]) {
     try {
       localStorage.removeItem(legacy);
     } catch {
@@ -10581,6 +10582,9 @@ function parseContextGenJson(text, word) {
       // 出題語を単に活用しただけの語（mitigate→mitigated、study→studies、stop→stopped 等）は、
       // 空所に入れても文が成立してしまい正解が2つになるため除外する（Datamuse経路と同じ判定）。
       if (isInflectionOf(termLower, k)) return false;
+      // 比較級・最上級も同様に除外する。動詞の -er だけは行為者名詞になり得るため許可する。
+      // 品詞不明は比較級の可能性を否定できないので、安全側で除外する。
+      if (isComparativeFormOf(termLower, k) && word.pos?.tag !== "v") return false;
       if (sentenceContainsTerm(enLower, d)) return false; // 例文中に既出の語は使わない
       seen.add(k);
       return true;
@@ -10692,20 +10696,44 @@ function isInflectionOf(term, candidate) {
   return forms.has(c);
 }
 
+// 形容詞・副詞の比較級／最上級か（large→larger/largest、big→bigger、happy→happier、late→later）。
+// これらは「別品詞の派生形」ではなく活用で、空所にそのまま入って正解が2つになる。
+// 例: "a (  ) animal" に large も larger も成立してしまう。
+function isComparativeFormOf(term, candidate) {
+  const t = String(term || "").trim().toLowerCase();
+  const c = String(candidate || "").trim().toLowerCase();
+  if (!t || !c || t === c) return false;
+  const forms = new Set([t + "er", t + "est"]);
+  if (/e$/.test(t)) forms.add(t + "r").add(t + "st"); // late → later / latest
+  if (/y$/.test(t)) {
+    const base = t.slice(0, -1);
+    forms.add(base + "ier").add(base + "iest"); // happy → happier / happiest
+  }
+  if (/[bcdfgklmnprstvz]$/.test(t)) {
+    const doubled = t + t.slice(-1);
+    forms.add(doubled + "er").add(doubled + "est"); // big → bigger / biggest
+  }
+  return forms.has(c);
+}
+
 // 出題語から派生した「別の品詞」の語か。
 // 語幹（末尾を最大2文字まで落としたもの）＋既知の派生接尾辞、という形になっている場合だけ真。
 // 単なる前方一致だと novel→november、content→contrive のような無関係語を通してしまうため、
 // 接尾辞まで検査して「本当に派生語か」を確かめる。
+// posTag: 出題語の品詞。-er は動詞なら行為者名詞(work→worker)で誤答に使えるが、
+// 形容詞・副詞だと比較級(large→larger)になり正解が2つになる。品詞不明なら安全側で使わない。
 const DERIVATIONAL_SUFFIXES = [
   "ion", "tion", "ation", "sion", "ment", "ness", "ity", "ty", "ance", "ence",
   "ce", "cy", "ive", "ous", "ful", "less", "able", "ible", "al", "ic", "ical",
   "ly", "ist", "ism", "ize", "ise", "ify", "er", "or", "ant", "ent", "ure",
 ];
-function isDerivedFormOf(term, candidate) {
+function isDerivedFormOf(term, candidate, posTag = null) {
   const t = String(term || "").trim().toLowerCase();
   const c = String(candidate || "").trim().toLowerCase();
   if (!t || !c || t === c || c.length <= t.length - 3) return false;
   if (isInflectionOf(t, c)) return false; // 活用形は派生形として扱わない
+  // 比較級・最上級は活用。動詞の -er（行為者名詞）だけは派生形として許可する。
+  if (isComparativeFormOf(t, c) && posTag !== "v") return false;
   for (let cut = 0; cut <= 2; cut++) {
     const base = t.slice(0, t.length - cut);
     if (base.length < 3 || !c.startsWith(base)) continue;
@@ -10746,7 +10774,7 @@ async function fetchDerivedFormDistractors(word, sentence, signal) {
       // 前方一致だけでは novel→november のような無関係語を拾うため、
       // 「語幹＋既知の派生接尾辞」になっているものだけを採用する。
       // 活用形（learn→learned 等）は空所に入って正解が2つになるので isDerivedFormOf が弾く。
-      if (!isDerivedFormOf(term, k)) continue;
+      if (!isDerivedFormOf(term, k, word?.pos?.tag || null)) continue;
       if (sentenceContainsTerm(sentence, k)) continue; // 例文中に既出の語は誤答にしない
       const freqTag = (entry?.tags || []).find((t) => String(t).startsWith("f:"));
       const freq = freqTag ? Number(String(freqTag).slice(2)) : 0;
@@ -10808,7 +10836,6 @@ async function fetchContextFromDictionary(word) {
       src: "dict",
       posMismatch: true, // 登録品詞と違う定義の例文＝優先度が低いことを示す
     };
-    return { en: sentences[Math.floor(Math.random() * sentences.length)], distractors: [], src: "dict" };
   } finally {
     clearTimeout(timer);
   }
@@ -10825,13 +10852,19 @@ async function ensureContextItem(word) {
   if (contextInflight.has(key)) return contextInflight.get(key);
   const task = (async () => {
     const mode = contextGenMode();
+    // 開始後にAIキーが変更されても、開始時に使えた最良の手段とキャッシュの cap が食い違わないよう固定する。
+    const willUseAI = mode === "auto" && Boolean(aiProviderForContext());
+    const cap = mode === "off" ? "stored" : willUseAI ? "ai" : "dict";
     // 処理中に「作らない」へ切り替えられたら、それ以降の外部送信は行わない
     const networkAllowed = () => contextGenMode() !== "off";
     let item = null;
-    // 誤答補強(Datamuse)は例文取得と並行して始める。直列にすると待ち時間が倍になるため。
-    const derivedPromise =
-      mode === "off" ? Promise.resolve([]) : fetchDerivedFormDistractors(word, "").catch(() => []);
-    if (mode === "auto" && networkAllowed()) {
+    // AIを使わない経路では誤答補強(Datamuse)を例文取得と並行して始める。
+    // AIが3件返す見込みなら先行送信せず、不足した時点でだけ呼ぶ。
+    let derivedPromise =
+      mode !== "off" && !willUseAI
+        ? fetchDerivedFormDistractors(word, "").catch(() => [])
+        : null;
+    if (willUseAI && networkAllowed()) {
       try {
         item = await generateContextWithAI(word);
       } catch {
@@ -10860,7 +10893,11 @@ async function ensureContextItem(word) {
     // 派生形は品詞が違うので空所に入らず、「正解が2つある」事故を起こさない良質な誤答になる。
     if (item && (item.distractors || []).length < 3) {
       try {
-        const derived = (await derivedPromise).filter(
+        // AI経路はここまで補強を遅らせ、AIだけで3件揃った場合は単語をDatamuseへ送らない。
+        if (!derivedPromise && mode !== "off" && networkAllowed()) {
+          derivedPromise = fetchDerivedFormDistractors(word, item.en).catch(() => []);
+        }
+        const derived = (await (derivedPromise || Promise.resolve([]))).filter(
           (d) => !sentenceContainsTerm(item.en, d), // 例文が確定してから既出語を除外する
         );
         if (derived.length) {
@@ -10880,13 +10917,8 @@ async function ensureContextItem(word) {
       } catch {
         // 誤答の補強は任意。失敗しても例文だけで出題する
       }
-    } else {
-      derivedPromise.catch(() => []); // 未処理の rejection を残さない
     }
     const cache = ctxCache();
-    // cap は「この結果を作った時点で使えた手段」。完了時の設定で計算すると、途中でモードを
-    // 変えられたときに実態と食い違うため、開始時のモードから決める。
-    const cap = mode === "off" ? "stored" : mode === "auto" && aiProviderForContext() ? "ai" : "dict";
     cache[key] = item
       ? { ...item, cap, at: Date.now() }
       : { failed: true, cap, at: Date.now() };
