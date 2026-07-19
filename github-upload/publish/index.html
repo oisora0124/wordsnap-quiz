@@ -8878,9 +8878,12 @@ function applyPerspective(src, v, h, mesh = 18) {
 
 const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"];
 const GEMINI_MODEL_PREF_KEY = "wordsnap-gemini-model:v1";
+const GEMINI_MODEL_DISCOVERY_FAILURE_KEY = "wordsnap-gemini-model-discovery-failure:v1";
+const GEMINI_MODEL_DISCOVERY_BACKOFF_MS = 3 * 60 * 1000;
 const GROQ_MODEL = "qwen/qwen3.6-27b";
 const geminiModelMemory = new Map();
 const geminiModelDiscoveryInflight = new Map();
+const geminiModelDiscoveryFailures = new Map();
 const geminiUnavailableModels = new Map();
 
 // モデル探索を単語生成のPOSTから切り離し、キーごとに一覧GETを1回だけ行う。
@@ -8928,41 +8931,100 @@ function forgetGeminiModel(key, model) {
   }
 }
 
+// 一覧GETが429・5xx・通信断で失敗した直後に、先読みを含む次の語が同じGETを繰り返すと
+// レート制限を悪化させる。キー指紋ごとに短いnegative cacheを持ち、その間は生成側へ
+// 同じ失敗を返して既存の辞書フォールバックへ流す。APIキー本体はここにも保存しない。
+function rememberedGeminiModelDiscoveryFailure(key) {
+  const fingerprint = shortKeyFingerprint(key);
+  const now = Date.now();
+  let failure = geminiModelDiscoveryFailures.get(fingerprint);
+  if (!failure) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(GEMINI_MODEL_DISCOVERY_FAILURE_KEY));
+      if (saved?.keyFingerprint === fingerprint) failure = saved;
+    } catch {
+      // 壊れた保存値は無視し、通常の一覧探索へ戻す
+    }
+  }
+  if (!failure || (Number(failure.retryAt) || 0) <= now) {
+    geminiModelDiscoveryFailures.delete(fingerprint);
+    return null;
+  }
+  geminiModelDiscoveryFailures.set(fingerprint, failure);
+  return failure;
+}
+
+function rememberGeminiModelDiscoveryFailure(key, error) {
+  const keyFingerprint = shortKeyFingerprint(key);
+  const failure = {
+    keyFingerprint,
+    retryAt: Date.now() + GEMINI_MODEL_DISCOVERY_BACKOFF_MS,
+    message: String(error?.message || "Geminiモデル一覧を取得できませんでした。"),
+  };
+  geminiModelDiscoveryFailures.set(keyFingerprint, failure);
+  try {
+    localStorage.setItem(GEMINI_MODEL_DISCOVERY_FAILURE_KEY, JSON.stringify(failure));
+  } catch {
+    // 永続保存できなくても、このセッション中はメモリ側で連続GETを防ぐ
+  }
+}
+
+function clearGeminiModelDiscoveryFailure(key) {
+  const fingerprint = shortKeyFingerprint(key);
+  geminiModelDiscoveryFailures.delete(fingerprint);
+  try {
+    const saved = JSON.parse(localStorage.getItem(GEMINI_MODEL_DISCOVERY_FAILURE_KEY));
+    if (saved?.keyFingerprint === fingerprint) {
+      localStorage.removeItem(GEMINI_MODEL_DISCOVERY_FAILURE_KEY);
+    }
+  } catch {
+    // 壊れた保存値は次回の失敗記録で上書きできるため、探索成功を優先する
+  }
+}
+
 async function discoverGeminiModel(key, signal) {
   const fingerprint = shortKeyFingerprint(key);
+  const recentFailure = rememberedGeminiModelDiscoveryFailure(key);
+  if (recentFailure) throw new Error(recentFailure.message);
   if (geminiModelDiscoveryInflight.has(fingerprint)) {
     return geminiModelDiscoveryInflight.get(fingerprint);
   }
   const task = (async () => {
-    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
-      method: "GET",
-      headers: { "x-goog-api-key": key },
-      signal,
-    });
-    if (!res.ok) {
-      let message = `HTTP ${res.status}`;
-      try {
-        const err = await res.json();
-        message = err.error?.message || message;
-      } catch {
-        // keep status
+    try {
+      const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+        method: "GET",
+        headers: { "x-goog-api-key": key },
+        signal,
+      });
+      if (!res.ok) {
+        let message = `HTTP ${res.status}`;
+        try {
+          const err = await res.json();
+          message = err.error?.message || message;
+        } catch {
+          // keep status
+        }
+        throw new Error(message);
       }
-      throw new Error(message);
+      const data = await res.json();
+      const available = new Set(
+        (Array.isArray(data?.models) ? data.models : [])
+          .filter((model) =>
+            !Array.isArray(model?.supportedGenerationMethods) ||
+            model.supportedGenerationMethods.includes("generateContent"),
+          )
+          .map((model) => String(model?.name || "").replace(/^models\//, "")),
+      );
+      const unavailable = geminiUnavailableModels.get(fingerprint) || new Set();
+      const model = GEMINI_MODELS.find((candidate) => available.has(candidate) && !unavailable.has(candidate));
+      if (!model) throw new Error("利用できるGeminiモデルが見つかりませんでした。");
+      clearGeminiModelDiscoveryFailure(key);
+      rememberGeminiModel(key, model);
+      return model;
+    } catch (error) {
+      rememberGeminiModelDiscoveryFailure(key, error);
+      throw error;
     }
-    const data = await res.json();
-    const available = new Set(
-      (Array.isArray(data?.models) ? data.models : [])
-        .filter((model) =>
-          !Array.isArray(model?.supportedGenerationMethods) ||
-          model.supportedGenerationMethods.includes("generateContent"),
-        )
-        .map((model) => String(model?.name || "").replace(/^models\//, "")),
-    );
-    const unavailable = geminiUnavailableModels.get(fingerprint) || new Set();
-    const model = GEMINI_MODELS.find((candidate) => available.has(candidate) && !unavailable.has(candidate));
-    if (!model) throw new Error("利用できるGeminiモデルが見つかりませんでした。");
-    rememberGeminiModel(key, model);
-    return model;
   })();
   geminiModelDiscoveryInflight.set(fingerprint, task);
   try {
@@ -10539,6 +10601,10 @@ const CONTEXT_VALIDATION_TIMEOUT_MS = CONTEXT_DISTRACTOR_TIMEOUT_MS;
 // 一般的なlocalStorage上限に余裕を残しつつ、大きめの単語帳を一周しても再生成しにくい1000件とする。
 // 上限超過時は生成時刻ではなく最終利用時刻で追い出し、復習で使っている問題を優先して残す。
 const CONTEXT_CACHE_MAX = 1000;
+// 本体を追い出しても同じcapでAIを再実行しないよう、語キー・cap・追い出し時刻だけの
+// tombstoneを本体より多く保持する。無限増加は件数と30日の保持期間の両方で防ぐ。
+const CONTEXT_TOMBSTONE_MAX = 5000;
+const CONTEXT_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // 生成に失敗した語もキャッシュして無限リトライを防ぐが、通信断やレート制限のような
 // 一時的な失敗が永久に焼き付かないよう、一定時間で再挑戦できるようにする。
 const CONTEXT_FAILURE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -10551,6 +10617,7 @@ let contextQuizCache = null; // 遅延初期化（起動時の初期化順に依
 let contextCacheTouchDirty = false;
 let contextCacheLastTouchSaveAt = 0;
 let contextCacheStorageFailed = false;
+let contextCacheLastSaveResult = { saved: false, shrunk: false };
 // 同じ語・同じAI能力の二重生成だけを防ぐ。キーやプロバイダが変わった処理まで待たせない。
 const contextInflight = new Map();
 const CONTEXT_GEN_MARKER_PREFIX = "wordsnap-ctxquiz-generating:v1:";
@@ -10669,15 +10736,30 @@ function migrateV10ContextCache() {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     migrated[key] = { ...entry, lastUsed: Number(entry.lastUsed) || Number(entry.at) || 0 };
   }
-  // v11側に同じ語があれば新形式を優先し、未移行の語だけv10から補う。
-  contextQuizCache = { ...migrated, ...current };
+  // v11側に同じ語の本体があれば新形式を優先する。ただし旧キーが残っている間のtombstoneは、
+  // 前回の容量不足による部分移行で作られた可能性があるため、v10の本体を再び移行対象に戻す。
+  // これにより「一度縮小したv11」が以後ずっと完全なv10データを覆い隠すことを防ぐ。
+  contextQuizCache = { ...migrated };
+  for (const [key, entry] of Object.entries(current)) {
+    if (entry?.tombstone && migrated[key]) continue;
+    contextQuizCache[key] = entry;
+  }
   for (const entry of Object.values(contextQuizCache)) {
-    if (entry && typeof entry === "object" && !Number(entry.lastUsed)) {
+    if (entry && typeof entry === "object" && !entry.tombstone && !Number(entry.lastUsed)) {
       entry.lastUsed = Number(entry.at) || 0;
     }
   }
-  // v11へ永続化できたことを確認してから旧キーを消す。容量不足時に元データまで失わないため。
-  if (saveContextCache()) {
+  // 安全側の一括移行を採る。保存処理が1件でも本体をtombstoneへ縮小した場合、または保存後に
+  // v10の全キーを本体として確認できない場合は旧キーを残す。一時的な二重保持で容量不足に
+  // なっても、完全なv10を最後のコピーとして保持するためデータを失わない。
+  const migratedKeys = Object.keys(migrated);
+  const saved = saveContextCache({ preferBodyKeys: new Set(migratedKeys) });
+  const persisted = saved ? readStoredContextCache() : null;
+  const migratedCount = migratedKeys.filter((key) => {
+    const entry = persisted?.[key];
+    return entry && typeof entry === "object" && !entry.tombstone;
+  }).length;
+  if (saved && !contextCacheLastSaveResult.shrunk && migratedCount === migratedKeys.length) {
     try {
       localStorage.removeItem(CONTEXT_QUIZ_V10_CACHE_KEY);
     } catch {
@@ -10710,7 +10792,7 @@ function storedContextResultForGeneration(key, cap) {
     return { found: false, value: null };
   }
   ctxCache()[key] = stored;
-  return { found: true, value: stored.failed ? null : touchContextCacheEntry(null, stored) };
+  return { found: true, value: stored.failed || stored.tombstone ? null : touchContextCacheEntry(null, stored) };
 }
 
 function contextGenerationOwner() {
@@ -10791,18 +10873,52 @@ async function runContextGenerationOnce(key, cap, generate) {
   return critical();
 }
 
-function contextEntriesOldestFirst(cache) {
-  return Object.keys(cache).sort(
-    (a, b) =>
-      (Number(cache[a]?.lastUsed) || Number(cache[a]?.at) || 0) -
-      (Number(cache[b]?.lastUsed) || Number(cache[b]?.at) || 0),
-  );
+function contextEntryRecency(entry) {
+  return entry?.tombstone
+    ? Number(entry.evictedAt) || 0
+    : Number(entry?.lastUsed) || Number(entry?.at) || 0;
 }
 
 function evictOldestContextEntries(cache, count) {
-  const keys = contextEntriesOldestFirst(cache);
-  // 最新の1件まで消すと、保存失敗のたびに生成直後の語を失って確実に再生成するため1件は残す。
+  const keys = Object.keys(cache)
+    .filter((key) => cache[key] && typeof cache[key] === "object" && !cache[key].tombstone)
+    .sort((a, b) => contextEntryRecency(cache[a]) - contextEntryRecency(cache[b]));
+  // 最新の本体1件まで捨てると、保存失敗のたびに生成直後の語を失うため1件は残す。
+  // 追い出す本体は完全削除せず最小限のtombstoneへ置き換え、同じcapでのAI再生成を防ぐ。
   const removable = Math.min(Math.max(0, Number(count) || 0), Math.max(0, keys.length - 1));
+  const evictedAt = Date.now();
+  keys.slice(0, removable).forEach((key) => {
+    cache[key] = { tombstone: true, cap: cache[key].cap, evictedAt };
+  });
+  return removable;
+}
+
+function pruneContextTombstones(cache) {
+  const now = Date.now();
+  let removed = 0;
+  for (const [key, entry] of Object.entries(cache)) {
+    if (!entry?.tombstone) continue;
+    if (!Number(entry.evictedAt) || now - Number(entry.evictedAt) > CONTEXT_TOMBSTONE_TTL_MS) {
+      delete cache[key];
+      removed += 1;
+    }
+  }
+  const tombstones = Object.keys(cache)
+    .filter((key) => cache[key]?.tombstone)
+    .sort((a, b) => contextEntryRecency(cache[a]) - contextEntryRecency(cache[b]));
+  const excess = Math.max(0, tombstones.length - CONTEXT_TOMBSTONE_MAX);
+  tombstones.slice(0, excess).forEach((key) => {
+    delete cache[key];
+    removed += 1;
+  });
+  return removed;
+}
+
+function discardOldestContextTombstones(cache, count) {
+  const keys = Object.keys(cache)
+    .filter((key) => cache[key]?.tombstone)
+    .sort((a, b) => contextEntryRecency(cache[a]) - contextEntryRecency(cache[b]));
+  const removable = Math.min(Math.max(0, Number(count) || 0), keys.length);
   keys.slice(0, removable).forEach((key) => delete cache[key]);
   return removable;
 }
@@ -10814,8 +10930,10 @@ function setContextCacheStorageFailed(failed) {
   if (elements?.contextGenHint) renderContextGenSettings();
 }
 
-function saveContextCache() {
+function saveContextCache(options = {}) {
   const cache = ctxCache();
+  const preferBodyKeys = options.preferBodyKeys instanceof Set ? options.preferBodyKeys : null;
+  contextCacheLastSaveResult = { saved: false, shrunk: false };
   // 別タブが書いた内容を消さないよう、保存直前に最新を読み直してマージする
   // （メモリ上のスナップショットで丸ごと上書きすると相手タブの生成結果が消える）
   const stored = readStoredContextCache();
@@ -10825,6 +10943,16 @@ function saveContextCache() {
       const mine = cache[k];
       if (!mine) {
         cache[k] = v;
+        continue;
+      }
+      // tombstoneと本体が競合した場合は、それぞれの作成・追い出し時刻が新しい方を採る。
+      // tombstoneへlastUsed等を足すと軽量化の意味が薄れるため、この分岐では形を変えない。
+      if (v.tombstone || mine.tombstone) {
+        // 未完了のv10移行だけは旧キーに残る本体を再試行するため、以前の部分移行でできた
+        // v11 tombstoneより今回の本体を優先する。通常保存では常に新しい側を採る。
+        cache[k] = preferBodyKeys?.has(k) && v.tombstone && !mine.tombstone
+          ? mine
+          : contextEntryRecency(v) > contextEntryRecency(mine) ? v : mine;
         continue;
       }
       const sameCapability = v.cap === mine.cap;
@@ -10843,9 +10971,13 @@ function saveContextCache() {
       cache[k] = { ...(useStored ? v : mine), lastUsed };
     }
   }
-  const keys = Object.keys(cache);
-  if (keys.length > CONTEXT_CACHE_MAX) {
-    evictOldestContextEntries(cache, keys.length - CONTEXT_CACHE_MAX);
+  const expiredOrExcessTombstones = pruneContextTombstones(cache);
+  if (expiredOrExcessTombstones) contextCacheLastSaveResult.shrunk = true;
+  const bodyCount = Object.values(cache).filter((entry) => entry && !entry.tombstone).length;
+  if (bodyCount > CONTEXT_CACHE_MAX) {
+    if (evictOldestContextEntries(cache, bodyCount - CONTEXT_CACHE_MAX)) {
+      contextCacheLastSaveResult.shrunk = true;
+    }
   }
   // 件数上限内でも他データや各項目の長さでQuotaExceededになり得る。失敗時はLRUの古い2割を
   // 追加で追い出して最大5回試し、実バイト容量に合わせて保存可能な大きさまで縮める。
@@ -10855,11 +10987,18 @@ function saveContextCache() {
       contextCacheTouchDirty = false;
       contextCacheLastTouchSaveAt = Date.now();
       setContextCacheStorageFailed(false);
+      contextCacheLastSaveResult.saved = true;
       return true;
     } catch {
       if (attempt >= 4) break;
-      const count = Math.max(1, Math.ceil(Object.keys(cache).length * 0.2));
-      if (!evictOldestContextEntries(cache, count)) break;
+      const remainingBodies = Object.values(cache).filter((entry) => entry && !entry.tombstone).length;
+      const count = Math.max(1, Math.ceil(remainingBodies * 0.2));
+      const evicted = evictOldestContextEntries(cache, count);
+      // 本体を全て軽量化しても他のlocalStorageデータとの合計で収まらない場合だけ、
+      // 最古のtombstoneも減らす。通常の容量超過ではtombstoneを残す経路が優先される。
+      const discarded = evicted ? 0 : discardOldestContextTombstones(cache, Math.max(1, Math.ceil(Object.keys(cache).length * 0.2)));
+      if (!evicted && !discarded) break;
+      contextCacheLastSaveResult.shrunk = true;
     }
   }
   // メモリ上では使い続けられるが、再読込・別タブでは再生成し得るためUIで明示する。
@@ -10873,7 +11012,7 @@ function contextCacheEntry(word) {
 }
 
 function touchContextCacheEntry(word, entry) {
-  if (!entry || entry.failed) return entry;
+  if (!entry || entry.failed || entry.tombstone) return entry;
   const now = Date.now();
   if (now - (Number(entry.lastUsed) || Number(entry.at) || 0) < CONTEXT_TOUCH_ENTRY_INTERVAL_MS) {
     return entry;
@@ -10896,6 +11035,15 @@ window.addEventListener("pagehide", () => {
 function contextEntryIsStale(entry) {
   if (!entry) return true;
   const currentCap = contextCapability();
+  // tombstoneには出題本体がないが、同じcapで生成を試みた事実は残っている。保持期間中は
+  // staleにせず通常問題へフォールバックし、キーや生成手段が変わったときだけ再生成を許す。
+  if (entry.tombstone) {
+    return (
+      entry.cap !== currentCap ||
+      !Number(entry.evictedAt) ||
+      Date.now() - Number(entry.evictedAt) > CONTEXT_TOMBSTONE_TTL_MS
+    );
+  }
   const cachedRank = contextCapabilityRank(entry.cap);
   const currentRank = contextCapabilityRank(currentCap);
   if (cachedRank === undefined || currentRank === undefined) return true;
@@ -10939,7 +11087,7 @@ function contextEntryRequiresBlockingRefresh(entry) {
 // 「作らない」設定では、保存済み例文から作ったものだけを使う（AI生成を勝手に出さない）。
 function contextItemFor(word) {
   const entry = contextCacheEntry(word);
-  if (!entry || entry.failed) return null;
+  if (!entry || entry.failed || entry.tombstone) return null;
   if (contextGenMode() === "off" && entry.src !== "stored") return null;
   if (contextEntryRequiresBlockingRefresh(entry)) return null;
   return touchContextCacheEntry(word, entry);
@@ -11853,7 +12001,7 @@ function renderContextGenSettings() {
   const provider = aiProviderForContext();
   const cachePersistenceNote =
     window.__wsStoragePersistent && !contextCacheStorageFailed
-      ? "生成した内容はこの端末に保存され、同じキーでは次回AIを呼びません。"
+      ? "生成した内容と試行記録はこの端末に保存され、同じキーでは記録がある間は次回AIを呼びません。保存容量を超えると古い生成内容は軽量な試行記録だけ残して削除され、その語は通常出題になります。試行記録も上限・保持期間を超えると古いものから消えます。"
       : "現在は生成内容を端末へ保存できていないため、このタブを閉じたり再読込した後は同じ語でもAIを再度呼ぶ可能性があります。ブラウザの保存設定や空き容量を確認してください。";
   if (mode === "off") {
     hint.textContent =
