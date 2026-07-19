@@ -10394,7 +10394,8 @@ function renderReviewResult() {
 // v2: 空所補充形式へ変更し、誤答が「日本語の意味」から「英単語」になったためキーを分ける
 // （旧v1のキャッシュを読むと誤答に日本語が混ざるので、そのまま捨てて作り直す）
 // v4: 活用形・比較級を誤答から除く検証を厳格化したため、旧生成物を破棄して作り直す
-const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v4";
+// v5: 不規則変化を含む比較級・最上級の検証を追加したため、危険な旧生成物を再利用しない
+const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v5";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
 const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent:v2"; // Datamuse追加後の送信先に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
@@ -10427,9 +10428,16 @@ function contextCapability() {
   return "dict";
 }
 
-// 形式変更で使わなくなった旧世代キャッシュを掃除する（放置すると容量を食い続ける）
+// 形式変更で使わなくなった旧世代キャッシュと旧同意キーを掃除する
+// （放置すると容量を食い続けるほか、現在は無効な同意状態が残って紛らわしいため）。
 function purgeLegacyContextCaches() {
-  for (const legacy of ["wordsnap-ctxquiz:v1", "wordsnap-ctxquiz:v2", "wordsnap-ctxquiz:v3"]) {
+  for (const legacy of [
+    "wordsnap-ctxquiz:v1",
+    "wordsnap-ctxquiz:v2",
+    "wordsnap-ctxquiz:v3",
+    "wordsnap-ctxquiz:v4",
+    "wordsnap-ctxquiz-consent",
+  ]) {
     try {
       localStorage.removeItem(legacy);
     } catch {
@@ -10582,9 +10590,9 @@ function parseContextGenJson(text, word) {
       // 出題語を単に活用しただけの語（mitigate→mitigated、study→studies、stop→stopped 等）は、
       // 空所に入れても文が成立してしまい正解が2つになるため除外する（Datamuse経路と同じ判定）。
       if (isInflectionOf(termLower, k)) return false;
-      // 比較級・最上級も同様に除外する。動詞の -er だけは行為者名詞になり得るため許可する。
-      // 品詞不明は比較級の可能性を否定できないので、安全側で除外する。
-      if (isComparativeFormOf(termLower, k) && word.pos?.tag !== "v") return false;
+      // 比較級・最上級も同様に除外する。ただし動詞・名詞の -er は行為者名詞になり得るため許可する。
+      // AI経路とDatamuse経路で判断が食い違わないよう、品詞別ルールは共通関数に集約する。
+      if (isUnsafeComparativeDistractor(termLower, k, word.pos?.tag || null)) return false;
       if (sentenceContainsTerm(enLower, d)) return false; // 例文中に既出の語は使わない
       seen.add(k);
       return true;
@@ -10696,32 +10704,78 @@ function isInflectionOf(term, candidate) {
   return forms.has(c);
 }
 
-// 形容詞・副詞の比較級／最上級か（large→larger/largest、big→bigger、happy→happier、late→later）。
+// 不規則な比較変化。positive同士（many/much等）は互いを比較形とみなさず、
+// 原級→比較級／最上級と比較級→最上級だけを危険な組み合わせとして扱う。
+const IRREGULAR_COMPARISON_GROUPS = [
+  { positive: ["good", "well"], comparative: ["better"], superlative: ["best"] },
+  { positive: ["bad"], comparative: ["worse"], superlative: ["worst"] },
+  {
+    positive: ["far"],
+    comparative: ["farther", "further"],
+    superlative: ["farthest", "furthest"],
+  },
+  { positive: ["little"], comparative: ["less"], superlative: ["least"] },
+  { positive: ["many", "much"], comparative: ["more"], superlative: ["most"] },
+  { positive: ["old"], comparative: ["elder"], superlative: ["eldest"] },
+];
+
+// 形容詞・副詞の比較級／最上級か（large→larger/largest、good→better/best等）。
 // これらは「別品詞の派生形」ではなく活用で、空所にそのまま入って正解が2つになる。
 // 例: "a (  ) animal" に large も larger も成立してしまう。
-function isComparativeFormOf(term, candidate) {
+// 戻り値を段階にしておくことで、動詞・名詞では行為者名詞になり得る比較級だけを許可できる。
+function comparativeFormDegree(term, candidate) {
   const t = String(term || "").trim().toLowerCase();
   const c = String(candidate || "").trim().toLowerCase();
-  if (!t || !c || t === c) return false;
-  const forms = new Set([t + "er", t + "est"]);
-  if (/e$/.test(t)) forms.add(t + "r").add(t + "st"); // late → later / latest
+  if (!t || !c || t === c) return null;
+  for (const group of IRREGULAR_COMPARISON_GROUPS) {
+    if (group.positive.includes(t)) {
+      if (group.comparative.includes(c)) return "comparative";
+      if (group.superlative.includes(c)) return "superlative";
+    }
+    if (group.comparative.includes(t) && group.superlative.includes(c)) return "superlative";
+  }
+  const comparative = new Set([t + "er"]);
+  const superlative = new Set([t + "est"]);
+  if (/e$/.test(t)) {
+    comparative.add(t + "r");
+    superlative.add(t + "st"); // late → later / latest
+  }
   if (/y$/.test(t)) {
     const base = t.slice(0, -1);
-    forms.add(base + "ier").add(base + "iest"); // happy → happier / happiest
+    comparative.add(base + "ier");
+    superlative.add(base + "iest"); // happy → happier / happiest
   }
   if (/[bcdfgklmnprstvz]$/.test(t)) {
     const doubled = t + t.slice(-1);
-    forms.add(doubled + "er").add(doubled + "est"); // big → bigger / biggest
+    comparative.add(doubled + "er");
+    superlative.add(doubled + "est"); // big → bigger / biggest
   }
-  return forms.has(c);
+  if (comparative.has(c)) return "comparative";
+  if (superlative.has(c)) return "superlative";
+  return null;
+}
+
+function isComparativeFormOf(term, candidate) {
+  return comparativeFormDegree(term, candidate) !== null;
+}
+
+// 形容詞・副詞、および品詞不明では比較級・最上級を安全側で除外する。
+// 動詞・名詞では work→worker / paint→painter のような -er 派生語を残す一方、
+// 最上級は別品詞として成立しにくいため、品詞にかかわらず除外する。
+function isUnsafeComparativeDistractor(term, candidate, posTag = null) {
+  const degree = comparativeFormDegree(term, candidate);
+  if (!degree) return false;
+  if (degree === "superlative") return true;
+  return posTag !== "v" && posTag !== "n";
 }
 
 // 出題語から派生した「別の品詞」の語か。
 // 語幹（末尾を最大2文字まで落としたもの）＋既知の派生接尾辞、という形になっている場合だけ真。
 // 単なる前方一致だと novel→november、content→contrive のような無関係語を通してしまうため、
 // 接尾辞まで検査して「本当に派生語か」を確かめる。
-// posTag: 出題語の品詞。-er は動詞なら行為者名詞(work→worker)で誤答に使えるが、
-// 形容詞・副詞だと比較級(large→larger)になり正解が2つになる。品詞不明なら安全側で使わない。
+// posTag: 出題語の品詞。-er は動詞・名詞なら行為者名詞(work→worker、paint→painter)で
+// 誤答に使えるが、形容詞・副詞だと比較級(large→larger)になり正解が2つになる。
+// 品詞不明なら安全側で使わず、-est はどの品詞でも除外する。
 const DERIVATIONAL_SUFFIXES = [
   "ion", "tion", "ation", "sion", "ment", "ness", "ity", "ty", "ance", "ence",
   "ce", "cy", "ive", "ous", "ful", "less", "able", "ible", "al", "ic", "ical",
@@ -10732,8 +10786,9 @@ function isDerivedFormOf(term, candidate, posTag = null) {
   const c = String(candidate || "").trim().toLowerCase();
   if (!t || !c || t === c || c.length <= t.length - 3) return false;
   if (isInflectionOf(t, c)) return false; // 活用形は派生形として扱わない
-  // 比較級・最上級は活用。動詞の -er（行為者名詞）だけは派生形として許可する。
-  if (isComparativeFormOf(t, c) && posTag !== "v") return false;
+  // 比較級・最上級は活用。ただし動詞・名詞の -er は行為者名詞として派生形に使える。
+  // AI経路と同じ共通判定を使い、候補の採否が取得経路によって変わらないようにする。
+  if (isUnsafeComparativeDistractor(t, c, posTag)) return false;
   for (let cut = 0; cut <= 2; cut++) {
     const base = t.slice(0, t.length - cut);
     if (base.length < 3 || !c.startsWith(base)) continue;
@@ -10872,11 +10927,13 @@ async function ensureContextItem(word) {
       }
     }
     if (!item && mode !== "off" && networkAllowed()) {
-      try {
-        item = await fetchContextFromDictionary(word);
-      } catch {
-        item = null;
+      // AI失敗が分かった時点で辞書とDatamuseを同時に開始し、25秒＋8秒の直列待ちを避ける。
+      // 各Promiseに生成直後からcatchを付け、後で例文が得られなくても未処理のrejectを残さない。
+      const dictionaryPromise = fetchContextFromDictionary(word).catch(() => null);
+      if (!derivedPromise) {
+        derivedPromise = fetchDerivedFormDistractors(word, "").catch(() => []);
       }
+      item = await dictionaryPromise;
     }
     // 辞書が「登録品詞と違う定義の例文」しか出せなかった場合は、ユーザー自身が保存した例文を優先する。
     // 保存例文はその語のために取得されたもので、語義が合っている可能性が高いため。
