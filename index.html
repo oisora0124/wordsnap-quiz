@@ -10396,7 +10396,8 @@ function renderReviewResult() {
 // v4: 活用形・比較級を誤答から除く検証を厳格化したため、旧生成物を破棄して作り直す
 // v5: 不規則変化を含む比較級・最上級の検証を追加したため、危険な旧生成物を再利用しない
 // v6: 派生接尾辞を安全なものだけに絞り、不規則活用を含む全候補の最終検証を追加した
-const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v6";
+// v7: 名詞化の品詞条件と不規則語形群を強化し、危険な旧候補を再利用しない
+const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v7";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
 const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent:v2"; // Datamuse追加後の送信先に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
@@ -10438,6 +10439,7 @@ function purgeLegacyContextCaches() {
     "wordsnap-ctxquiz:v3",
     "wordsnap-ctxquiz:v4",
     "wordsnap-ctxquiz:v5",
+    "wordsnap-ctxquiz:v6",
     "wordsnap-ctxquiz-consent",
   ]) {
     try {
@@ -10501,17 +10503,24 @@ function contextCacheEntry(word) {
   return entry && typeof entry === "object" ? entry : null;
 }
 
-// キャッシュを作り直すべきか。設定やAIキーが変われば作り直し、失敗記録は一定時間で失効させる。
-// これが無いと「キーを後から登録しても、前に失敗した語は二度と生成されない」状態になる。
+// キャッシュを作り直すべきか。失敗記録は能力変更または一定時間で失効させる。
+// 成功記録は作成時より良い手段が使えるようになった場合だけ更新し、AI失敗後に辞書で
+// 成功した結果を同じAI能力のまま繰り返し作り直すループを防ぐ。
 function contextEntryIsStale(entry) {
   if (!entry) return true;
   const cachedRank = CONTEXT_SRC_RANK[entry.cap];
   const currentRank = CONTEXT_SRC_RANK[contextCapability()];
-  // 未知の旧値も含め、実際に作れた品質と現在使える手段が違えば作り直す。
-  // AI失敗後の辞書例文を AI 品質として固定しないため、cap は保存時に item.src から入る。
-  if (cachedRank === undefined || cachedRank !== currentRank) return true;
-  if (entry.failed) return Date.now() - (Number(entry.at) || 0) > CONTEXT_FAILURE_TTL_MS;
-  return false;
+  if (cachedRank === undefined || currentRank === undefined) return true;
+  // 失敗は設定・キーの変更で直る可能性があるため、能力が上下どちらへ変わっても再試行する。
+  if (entry.failed) {
+    return (
+      cachedRank !== currentRank ||
+      Date.now() - (Number(entry.at) || 0) > CONTEXT_FAILURE_TTL_MS
+    );
+  }
+  // 成功済みなら能力を下げた変更では作り直さない。後からAIキーを設定した場合など、
+  // 作成時より上位の手段が増えたときだけ品質向上のために更新する。
+  return currentRank > cachedRank;
 }
 
 // キャッシュ済みの生成物（失敗記録なら null 扱い）。
@@ -10733,7 +10742,19 @@ const IRREGULAR_INFLECTION_GROUPS = [
   ["understand", "understands", "understood", "understanding"],
   ["wear", "wears", "wore", "worn", "wearing"],
   ["win", "wins", "won", "winning"],
+  ["fly", "flies", "flew", "flown", "flying"],
+  ["become", "becomes", "became", "becoming"],
+  ["build", "builds", "built", "building"],
+  ["draw", "draws", "drew", "drawn", "drawing"],
+  ["grow", "grows", "grew", "grown", "growing"],
+  ["lead", "leads", "led", "leading"],
+  ["ride", "rides", "rode", "ridden", "riding"],
+  ["rise", "rises", "rose", "risen", "rising"],
+  ["show", "shows", "showed", "shown", "showing"],
+  ["throw", "throws", "threw", "thrown", "throwing"],
   ["lie", "lies", "lay", "lain", "lied", "lying"],
+  // lay は lie の過去形でも別動詞の原形でもある。別群にも置き、lay↔laid を確実に除外する。
+  ["lay", "lays", "laid", "laying"],
   ["put", "puts", "putting"],
   ["read", "reads", "reading"],
   ["cut", "cuts", "cutting"],
@@ -10748,6 +10769,17 @@ const IRREGULAR_INFLECTION_GROUPS = [
   ["person", "people"],
   ["goose", "geese"],
   ["ox", "oxen"],
+  // leaves は leave の三単現とも綴りが衝突するが、leaf の複数形としても同一群に置く。
+  // 群を跨いだ推移判定はせず、直接同じ群に属する組だけを安全側で除外する。
+  ["leaf", "leaves"],
+  ["life", "lives"],
+  ["knife", "knives"],
+  ["wife", "wives"],
+  ["wolf", "wolves"],
+  ["half", "halves"],
+  ["shelf", "shelves"],
+  ["loaf", "loaves"],
+  ["thief", "thieves"],
 ];
 
 function wordsShareGroup(term, candidate, groups) {
@@ -10794,7 +10826,8 @@ const IRREGULAR_COMPARISON_GROUPS = [
   },
   { positive: ["little"], comparative: ["less"], superlative: ["least"] },
   { positive: ["many", "much"], comparative: ["more"], superlative: ["most"] },
-  { positive: ["old"], comparative: ["elder"], superlative: ["eldest"] },
+  // 規則形と不規則形を同じ群に置き、older↔elder の同段階異形も相互に除外する。
+  { positive: ["old"], comparative: ["older", "elder"], superlative: ["oldest", "eldest"] },
 ];
 
 // 形容詞・副詞の比較級／最上級か（large→larger/largest、good→better/best等）。
@@ -10896,13 +10929,19 @@ function isAmbiguousDerivationPair(term, candidate) {
   );
 }
 
-function isDerivedFormOf(term, candidate) {
-  const t = String(term || "").trim().toLowerCase();
+function isDerivedFormOf(answer, candidate) {
+  const t = String(answer?.term || answer || "").trim().toLowerCase();
   const c = String(candidate || "").trim().toLowerCase();
   if (!t || !c || t === c || c.length <= t.length - 3) return false;
   if (isInflectionOf(t, c)) return false; // 活用形は派生形として扱わない
   if (isUnsafeComparativeDistractor(t, c)) return false;
-  return hasDerivationalSuffix(t, c, DERIVATIONAL_SUFFIXES);
+  // move のように名詞用法もある語では movement と同じ位置に入ることがある。
+  // 名詞化を誤答に使うのは、登録品詞から元語が動詞・形容詞だと分かる場合だけに絞る。
+  const posTag = String(answer?.pos?.tag || "").toLowerCase();
+  return (
+    (posTag === "v" || posTag === "adj") &&
+    hasDerivationalSuffix(t, c, DERIVATIONAL_SUFFIXES)
+  );
 }
 
 // AI生成・Datamuse・登録語補充のどの経路から来ても、選択肢へ入れる直前に通す共通安全判定。
@@ -10914,13 +10953,24 @@ function isContextDistractorSafe(answer, item, candidate) {
   if (!answerTerm || !/^[A-Za-z][A-Za-z'’-]*$/.test(candidateTerm) || c === answerTerm) return false;
   if (isInflectionOf(answerTerm, c)) return false;
   if (isUnsafeComparativeDistractor(answerTerm, c)) return false;
+  const nounDerivedFromAnswer = hasDerivationalSuffix(answerTerm, c, DERIVATIONAL_SUFFIXES);
+  const answerDerivedFromCandidate = hasDerivationalSuffix(c, answerTerm, DERIVATIONAL_SUFFIXES);
+  const posTag = String(answer?.pos?.tag || "").toLowerCase();
+  // 名詞化の組を許すのは「v/adj の出題語 → 名詞化した誤答」の正方向だけ。
+  // 出題語が名詞・品詞不明、または名詞化語から元語への逆方向は両方成立し得るため除外する。
+  if (
+    (nounDerivedFromAnswer || answerDerivedFromCandidate) &&
+    !(nounDerivedFromAnswer && (posTag === "v" || posTag === "adj"))
+  ) {
+    return false;
+  }
   if (isAmbiguousDerivationPair(answerTerm, c)) return false;
   if (sentenceContainsTerm(item?.en || "", candidateTerm)) return false;
   return true;
 }
 
 // 空所補充の誤答として「同じ語の別の品詞・派生形」を実在の語から集める（Datamuse、キー不要）。
-// 派生形は文法的に空所へ入らないので、同義語と違って“正解が2つ”にならない安全な誤答になる。
+// 元語が動詞・形容詞と分かる名詞化だけに絞れば空所へ入りにくく、同義語より安全な誤答になる。
 // 逆に ml=（意味が近い語）は空所にそのまま入ってしまう恐れがあるため使わない。
 async function fetchDerivedFormDistractors(word, sentence, signal) {
   const term = String(word?.term || "").trim().toLowerCase();
@@ -10949,7 +10999,7 @@ async function fetchDerivedFormDistractors(word, sentence, signal) {
       // 前方一致だけでは novel→november のような無関係語を拾うため、
       // 「語幹＋既知の派生接尾辞」になっているものだけを採用する。
       // 活用形（learn→learned 等）は空所に入って正解が2つになるので isDerivedFormOf が弾く。
-      if (!isDerivedFormOf(term, k)) continue;
+      if (!isDerivedFormOf(word, k)) continue;
       if (sentenceContainsTerm(sentence, k)) continue; // 例文中に既出の語は誤答にしない
       const freqTag = (entry?.tags || []).find((t) => String(t).startsWith("f:"));
       const freq = freqTag ? Number(String(freqTag).slice(2)) : 0;
@@ -11066,8 +11116,8 @@ async function ensureContextItem(word) {
         item = { ...item, posMismatch: undefined };
       }
     }
-    // AIが誤答を用意できなかった経路（辞書・保存済み例文）では、同じ語の派生形を誤答に足す。
-    // 派生形は品詞が違うので空所に入らず、「正解が2つある」事故を起こさない良質な誤答になる。
+    // AIが誤答を用意できなかった経路（辞書・保存済み例文）では、安全判定を通った派生形を足す。
+    // 元語の品詞が動詞・形容詞と分かる名詞化だけなので、名詞用法同士で正解が増えるのを防げる。
     if (item && (item.distractors || []).length < 3) {
       try {
         // AI経路はここまで補強を遅らせ、AIだけで3件揃った場合は単語をDatamuseへ送らない。
@@ -11096,11 +11146,10 @@ async function ensureContextItem(word) {
       }
     }
     const cache = ctxCache();
-    // 開始時に AI が使えても、失敗して辞書・保存例文へ落ちたなら、その実品質を cap に保存する。
-    // AI 品質と偽って fresh 扱いにすると再生成されないため、成功時は item.src を正とする。
-    const actualCap = item && CONTEXT_SRC_RANK[item.src] !== undefined ? item.src : cap;
+    // src は実際に得られた取得元、cap は開始時に使えた最良の手段として別々に残す。
+    // AI失敗後の辞書成功も「その能力で得た最良結果」なので、能力が上がるまでは再生成しない。
     cache[key] = item
-      ? { ...item, cap: actualCap, at: Date.now() }
+      ? { ...item, cap, at: Date.now() }
       : { failed: true, cap, at: Date.now() };
     saveContextCache();
     return item;
@@ -11379,15 +11428,19 @@ function buildReviewQuiz() {
         // 設定やキーが変わって、より良い手段で作り直せる場合は裏で更新しておく（表示はいまのままで進む）
         if (contextEntryIsStale(contextCacheEntry(answer))) ensureContextItem(answer).catch(() => {});
         const contextChoices = buildContextChoices(answer, item);
-        elements.quizFeedback.textContent = choiceCountNote(contextChoices);
-        return {
-          answer,
-          choices: contextChoices,
-          answered: false,
-          shownAt: Date.now(),
-          context: { en: item.en, ja: item.ja || null, src: item.src || "" },
-          srsDueAtStart,
-        };
+        // 誤答が0件なら唯一の正解を押すだけで学習状態が進んでしまうため、空所補充にはしない。
+        // 同じ answer の通常出題へそのまま落とし、既存の採点・SRS・回答速度判定を使う。
+        if (contextChoices.length >= 2) {
+          elements.quizFeedback.textContent = choiceCountNote(contextChoices);
+          return {
+            answer,
+            choices: contextChoices,
+            answered: false,
+            shownAt: Date.now(),
+            context: { en: item.en, ja: item.ja || null, src: item.src || "" },
+            srsDueAtStart,
+          };
+        }
       }
       // 例文を用意できなかった語は、通常の単語出題にフォールバックして続行する。
     }
@@ -11602,12 +11655,12 @@ function normalizeMeaning(meaning) {
     .toLowerCase();
 }
 
-// 4択に必要な「意味の異なる単語」が足りないとき、選択肢数の注記を返す（足りていれば空文字）。
-// 意味の重複や単語数不足で選択肢が4未満になっても出題自体は継続できるため、
+// 4択に安全に使える誤答が足りないとき、選択肢数の注記を返す（足りていれば空文字）。
+// 意味の重複・語形の安全判定・単語数不足で選択肢が4未満になっても出題自体は継続できるため、
 // 注記だけ出して正誤判定・キーボード操作（1〜N）は従来どおり動かす。
 function choiceCountNote(choices) {
   return choices.length < 4
-    ? `意味の異なる単語が足りないため、この問題は${choices.length}択です。`
+    ? `安全に使える誤答が足りないため、この問題は${choices.length}択です。`
     : "";
 }
 
