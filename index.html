@@ -5947,6 +5947,8 @@ let reviewSession = null;
 // 範囲クイズ・総復習を完走した直後の結果表示用データ（次のクイズを始めると消える）
 let reviewResult = null;
 let quizStarted = false;
+// 誤答を1件も用意できなかったときだけ、通常の「復習待ち」と区別した空状態を表示する。
+let quizEmptyReason = "";
 // 通常クイズ（エンドレス）の「◯問目」表示用。「クイズを始める」を押すたびに1から数え直す。
 let normalQuizQuestionNumber = 0;
 const selectedIds = new Set();
@@ -9908,8 +9910,10 @@ function renderQuizIntro() {
 
 function renderQuizEmpty() {
   elements.choices.innerHTML = "";
-  elements.quizWord.textContent = "今出せる問題はありません";
-  elements.quizFeedback.textContent =
+  elements.quizWord.textContent = quizEmptyReason
+    ? "出題できる単語が足りません"
+    : "今出せる問題はありません";
+  elements.quizFeedback.textContent = quizEmptyReason ||
     "2回連続で正解した単語は習得済みとして保存され、通常クイズからは外れています。復習対象ができるまで待つか、一覧から選んで復習できます。";
 }
 
@@ -10071,6 +10075,7 @@ function resumeSavedReview() {
     missedIds: Array.isArray(saved.missedIds) ? saved.missedIds : [],
   };
   reviewResult = null; // 再開したら前回の結果表示は消す
+  quizEmptyReason = "";
   const remaining = saved.queue.length;
   currentQuiz = null;
   persistReviewProgress();
@@ -10102,6 +10107,7 @@ function startReview(ids, options = {}) {
     missedIds: [], // このセッション中に一度でも間違えた単語ID（完走時のサマリ用）
   };
   reviewResult = null; // 新しいセッションを始めたら前回の結果表示は消す
+  quizEmptyReason = "";
   currentQuiz = null;
   persistReviewProgress(); // 新しいセッションで上書き（古い再開データは破棄される）
   // ライブラリの「選んだ単語を解く」等、クイズタブ以外から開始してもセッションが
@@ -10397,12 +10403,16 @@ function renderReviewResult() {
 // v5: 不規則変化を含む比較級・最上級の検証を追加したため、危険な旧生成物を再利用しない
 // v6: 派生接尾辞を安全なものだけに絞り、不規則活用を含む全候補の最終検証を追加した
 // v7: 名詞化の品詞条件と不規則語形群を強化し、危険な旧候補を再利用しない
-const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v7";
+// v8: AIの文脈検証結果とキー指紋を保存するため、旧形式を混ぜずに作り直す
+const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v8";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
-const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent:v2"; // Datamuse追加後の送信先に同意済みか
+const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent:v3"; // 例文・選択肢のAI検証を含む送信先に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
 // 誤答補強(Datamuse)は例文取得と並行して走らせる補助処理なので、待たせすぎないよう短くする
 const CONTEXT_DISTRACTOR_TIMEOUT_MS = 8000;
+// 最終検証は生成済みの短い文と選択肢だけを送るため、例文生成より短く打ち切る。
+// 失敗時は従来の安全判定だけで続行し、通信不調で出題そのものを止めない。
+const CONTEXT_VALIDATION_TIMEOUT_MS = CONTEXT_DISTRACTOR_TIMEOUT_MS;
 const CONTEXT_CACHE_MAX = 400; // 古いものから捨てる上限
 // 生成に失敗した語もキャッシュして無限リトライを防ぐが、通信断やレート制限のような
 // 一時的な失敗が永久に焼き付かないよう、一定時間で再挑戦できるようにする。
@@ -10426,8 +10436,31 @@ function contextNetworkConsented() {
 function contextCapability() {
   const mode = contextGenMode();
   if (mode === "off") return "stored";
-  if (mode === "auto" && aiProviderForContext()) return "ai";
+  const provider = mode === "auto" ? aiProviderForContext() : null;
+  if (provider) return contextAiCapability(provider);
   return "dict";
+}
+
+// APIキー本体をキャッシュへ書かず、同じキーかどうかだけを判別できる短い指紋にする。
+// 暗号用途ではなく stale 判定用なので、同期的で軽いFNV-1aを使う。
+function shortKeyFingerprint(value) {
+  const text = String(value || "");
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(7, "0").slice(-7);
+}
+
+function contextAiCapability(provider) {
+  if (!provider) return "dict";
+  return `ai:${provider.id}:${shortKeyFingerprint(getAiKey(provider.id))}`;
+}
+
+function contextCapabilityRank(cap) {
+  const base = String(cap || "").split(":", 1)[0];
+  return CONTEXT_SRC_RANK[base];
 }
 
 // 形式変更で使わなくなった旧世代キャッシュと旧同意キーを掃除する
@@ -10440,7 +10473,9 @@ function purgeLegacyContextCaches() {
     "wordsnap-ctxquiz:v4",
     "wordsnap-ctxquiz:v5",
     "wordsnap-ctxquiz:v6",
+    "wordsnap-ctxquiz:v7",
     "wordsnap-ctxquiz-consent",
+    "wordsnap-ctxquiz-consent:v2",
   ]) {
     try {
       localStorage.removeItem(legacy);
@@ -10508,19 +10543,26 @@ function contextCacheEntry(word) {
 // 成功した結果を同じAI能力のまま繰り返し作り直すループを防ぐ。
 function contextEntryIsStale(entry) {
   if (!entry) return true;
-  const cachedRank = CONTEXT_SRC_RANK[entry.cap];
-  const currentRank = CONTEXT_SRC_RANK[contextCapability()];
+  const currentCap = contextCapability();
+  const cachedRank = contextCapabilityRank(entry.cap);
+  const currentRank = contextCapabilityRank(currentCap);
   if (cachedRank === undefined || currentRank === undefined) return true;
+  // AI能力が同じ段階でも、プロバイダまたはキーが変われば失敗原因や品質が変わり得る。
+  // 指紋だけを比較し、キー文字列そのものは生成物キャッシュへ保存しない。
+  const aiIdentityChanged =
+    cachedRank === CONTEXT_SRC_RANK.ai &&
+    currentRank === CONTEXT_SRC_RANK.ai &&
+    entry.cap !== currentCap;
   // 失敗は設定・キーの変更で直る可能性があるため、能力が上下どちらへ変わっても再試行する。
   if (entry.failed) {
     return (
-      cachedRank !== currentRank ||
+      cachedRank !== currentRank || aiIdentityChanged ||
       Date.now() - (Number(entry.at) || 0) > CONTEXT_FAILURE_TTL_MS
     );
   }
   // 成功済みなら能力を下げた変更では作り直さない。後からAIキーを設定した場合など、
   // 作成時より上位の手段が増えたときだけ品質向上のために更新する。
-  return currentRank > cachedRank;
+  return currentRank > cachedRank || aiIdentityChanged;
 }
 
 // キャッシュ済みの生成物（失敗記録なら null 扱い）。
@@ -10612,9 +10654,9 @@ function parseContextGenJson(text, word) {
   return { en, distractors };
 }
 
-async function generateContextWithGemini(word, key, signal) {
+async function generateContextWithGemini(word, key, signal, prompt = contextGenPrompt(word)) {
   const body = JSON.stringify({
-    contents: [{ parts: [{ text: contextGenPrompt(word) }] }],
+    contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0.7 },
   });
   let lastError = "不明なエラー";
@@ -10640,7 +10682,7 @@ async function generateContextWithGemini(word, key, signal) {
   throw new Error(lastError);
 }
 
-async function generateContextWithGroq(word, key, signal) {
+async function generateContextWithGroq(word, key, signal, prompt = contextGenPrompt(word)) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
@@ -10650,7 +10692,7 @@ async function generateContextWithGroq(word, key, signal) {
       temperature: 0.7,
       reasoning_effort: "none",
       max_completion_tokens: 512,
-      messages: [{ role: "user", content: contextGenPrompt(word) }],
+      messages: [{ role: "user", content: prompt }],
     }),
   });
   if (!res.ok) {
@@ -10667,21 +10709,100 @@ async function generateContextWithGroq(word, key, signal) {
   return String(data?.choices?.[0]?.message?.content || "").trim();
 }
 
-async function generateContextWithAI(word) {
-  const provider = aiProviderForContext();
+async function generateContextWithAI(word, provider = aiProviderForContext(), key = null) {
   // 生成関数は各プロバイダが持つ（extract と同じ設計）。分岐で「gemini以外はGroq」と
   // 決め打ちすると、将来プロバイダを足したときにそのキーをGroqへ送ってしまう。
   if (!provider || typeof provider.generate !== "function") return null;
-  const key = getAiKey(provider.id);
+  const apiKey = key ?? getAiKey(provider.id);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CONTEXT_GEN_TIMEOUT_MS);
   try {
-    const text = await provider.generate(word, key, controller.signal);
+    const text = await provider.generate(word, apiKey, controller.signal);
     const parsed = parseContextGenJson(text, word);
     return parsed ? { ...parsed, src: "ai" } : null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+// 例文の対象語をAIへ送る検証用のプレーンな空所へ置き換える。
+// HTML用の blankOutTermInSentence はタグを含むため、外部送信には使わない。
+function blankOutTermForValidation(sentence, term) {
+  const re = termWordRegex(term, "ig");
+  return re ? String(sentence || "").replace(re, () => "( )") : String(sentence || "");
+}
+
+function contextValidationPrompt(word, item, choiceTerms) {
+  const blanked = blankOutTermForValidation(item?.en || "", word?.term || "");
+  return [
+    "次の英語の空所補充問題を検証してください。JSONだけを出力してください。",
+    `例文: ${blanked}`,
+    `選択肢: ${JSON.stringify(choiceTerms)}`,
+    "各選択肢を空所へそのまま入れ、文法・意味・自然さのすべてを満たす英語になる語をすべて列挙してください。",
+    "同義語、文脈依存の別品詞用法、英米の綴り・活用異形も、自然に成立するなら必ず含めてください。",
+    'JSON以外は何も出力しないこと: {"fit":["word1","word2"]}',
+  ].join("\n");
+}
+
+function parseContextValidationJson(text, choiceTerms) {
+  const raw = String(text || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        data = JSON.parse(m[0]);
+      } catch {
+        data = null;
+      }
+    }
+  }
+  if (!data || !Array.isArray(data.fit)) return null;
+  const allowed = new Map(choiceTerms.map((term) => [String(term).toLowerCase(), String(term)]));
+  const fit = [];
+  const seen = new Set();
+  for (const rawTerm of data.fit) {
+    if (typeof rawTerm !== "string") continue;
+    const key = rawTerm.trim().toLowerCase();
+    // 選択肢に無い語が混ざっていても、その語だけ無視して残りは採用する。
+    // fit は「誤答を除外する」方向にしか使わないため、部分的に信用しても誤った問題は生まれない。
+    // 逆に応答全体を捨てると、同義語(large/big)を除外できず安全網が働かなくなる。
+    if (!allowed.has(key)) continue;
+    if (!seen.has(key)) {
+      seen.add(key);
+      fit.push(allowed.get(key));
+    }
+  }
+  return fit;
+}
+
+async function validateContextChoicesWithAI(word, item, choiceTerms, provider, key) {
+  if (!provider || typeof provider.generate !== "function" || choiceTerms.length < 2) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CONTEXT_VALIDATION_TIMEOUT_MS);
+  try {
+    const prompt = contextValidationPrompt(word, item, choiceTerms);
+    const text = await provider.generate(word, key, controller.signal, prompt);
+    return parseContextValidationJson(text, choiceTerms);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 検証が成功したときだけ fit の誤答を除き、失敗時は候補をそのまま残す。
+// この小さな境界にまとめることで、タイムアウトや壊れたJSONを「誤答なし」と誤解しない。
+function applyContextValidation(item, candidateTerms, fit) {
+  if (!Array.isArray(fit)) {
+    return { ...item, distractors: candidateTerms.slice(), validation: { status: "failed" } };
+  }
+  const fitSet = new Set(fit.map((term) => String(term).toLowerCase()));
+  return {
+    ...item,
+    distractors: candidateTerms.filter((term) => !fitSet.has(term.toLowerCase())),
+    validation: { status: "ok", fit: fit.slice() },
+  };
 }
 
 // Datamuse へ投げる検索用プレフィックス。ここは「広めに拾う」ためだけの値で、
@@ -10752,6 +10873,15 @@ const IRREGULAR_INFLECTION_GROUPS = [
   ["rise", "rises", "rose", "risen", "rising"],
   ["show", "shows", "showed", "shown", "showing"],
   ["throw", "throws", "threw", "thrown", "throwing"],
+  // -ed / -t の英米差は規則変化だけでは相互に逆算できないため、両綴りを同じ群に置く。
+  ["learn", "learns", "learned", "learnt", "learning"],
+  ["burn", "burns", "burned", "burnt", "burning"],
+  ["dream", "dreams", "dreamed", "dreamt", "dreaming"],
+  ["spell", "spells", "spelled", "spelt", "spelling"],
+  ["spoil", "spoils", "spoiled", "spoilt", "spoiling"],
+  ["smell", "smells", "smelled", "smelt", "smelling"],
+  ["leap", "leaps", "leaped", "leapt", "leaping"],
+  ["kneel", "kneels", "kneeled", "knelt", "kneeling"],
   ["lie", "lies", "lay", "lain", "lied", "lying"],
   // lay は lie の過去形でも別動詞の原形でもある。別群にも置き、lay↔laid を確実に除外する。
   ["lay", "lays", "laid", "laying"],
@@ -11078,8 +11208,10 @@ async function ensureContextItem(word) {
   const task = (async () => {
     const mode = contextGenMode();
     // 開始後にAIキーが変更されても、開始時に使えた最良の手段とキャッシュの cap が食い違わないよう固定する。
-    const willUseAI = mode === "auto" && Boolean(aiProviderForContext());
-    const cap = mode === "off" ? "stored" : willUseAI ? "ai" : "dict";
+    const aiProvider = mode === "auto" ? aiProviderForContext() : null;
+    const aiKey = aiProvider ? getAiKey(aiProvider.id) : "";
+    const willUseAI = Boolean(aiProvider && aiKey);
+    const cap = mode === "off" ? "stored" : willUseAI ? contextAiCapability(aiProvider) : "dict";
     // 処理中に「作らない」へ切り替えられたら、それ以降の外部送信は行わない
     const networkAllowed = () => contextGenMode() !== "off";
     let item = null;
@@ -11091,7 +11223,7 @@ async function ensureContextItem(word) {
         : null;
     if (willUseAI && networkAllowed()) {
       try {
-        item = await generateContextWithAI(word);
+        item = await generateContextWithAI(word, aiProvider, aiKey);
       } catch {
         item = null;
       }
@@ -11145,6 +11277,38 @@ async function ensureContextItem(word) {
         // 誤答の補強は任意。失敗しても例文だけで出題する
       }
     }
+    if (item) {
+      // AI検証には、AI/辞書由来だけでなく登録語から補った分も含む「実際に表示する候補」を渡す。
+      // 先に候補を確定してキャッシュへ固定し、次回表示時に未検証の別候補が補充されるのを防ぐ。
+      const answerTerm = String(word.term || "").trim().toLowerCase();
+      const candidateTerms = buildContextChoices(word, item)
+        .map((choice) => String(choice.label || "").trim())
+        .filter((term) => term && term.toLowerCase() !== answerTerm);
+      item = { ...item, distractors: candidateTerms, choicesFinal: true };
+
+      if (willUseAI && networkAllowed() && candidateTerms.length > 0) {
+        try {
+          const choiceTerms = [String(word.term || "").trim(), ...candidateTerms];
+          const fit = await validateContextChoicesWithAI(
+            word,
+            item,
+            choiceTerms,
+            aiProvider,
+            aiKey,
+          );
+          if (fit) {
+            // 正解以外に自然に入るとAIが判定した語だけを除外する。正解自体の判定漏れで
+            // 問題を失わないよう、正解語は常に残して採点の基準にする。
+            item = applyContextValidation(item, candidateTerms, fit);
+          } else {
+            item = applyContextValidation(item, candidateTerms, null);
+          }
+        } catch {
+          // AI検証は最後の補助線。失敗・タイムアウト時も、既存の語形安全判定を通った候補で続行する。
+          item = applyContextValidation(item, candidateTerms, null);
+        }
+      }
+    }
     const cache = ctxCache();
     // src は実際に得られた取得元、cap は開始時に使えた最良の手段として別々に残す。
     // AI失敗後の辞書成功も「その能力で得た最良結果」なので、能力が上がるまでは再生成しない。
@@ -11179,7 +11343,7 @@ function buildContextChoices(answer, item) {
     if (generated.length >= 3) break;
   }
   const choices = [{ id: answer.id, label: answerTerm }, ...generated];
-  if (generated.length < 3) {
+  if (generated.length < 3 && !item?.choicesFinal) {
     // 足りない分は登録済みの他の単語から補う（同じ品詞・紛らわしい綴りが優先される）
     const scoped = quizSelectedDeckWords().filter((w) => w.id !== answer.id);
     const basePool = (scoped.length >= 3 ? scoped : appState.words.filter((w) => w.id !== answer.id))
@@ -11260,10 +11424,10 @@ function renderContextGenSettings() {
     hint.textContent =
       "辞書API（dictionaryapi.dev）から実在の例文を取得し、その語を空所にします。誤答は同じ語の派生形（別の品詞）を datamuse.com から取得して優先採用し、足りない分は登録済みの他の単語から選びます。いずれもAPIキーは不要です。例文が見つからない単語は通常の単語出題になります。";
   } else if (provider) {
-    hint.textContent = `AI（${provider.name}）で例文と、空所に入れると誤りになる英単語3つをその場で作ります。作った内容はこの端末に保存され、次回は再生成しません。AIが使えないときは辞書API（dictionaryapi.dev）に切り替わり、誤答は datamuse.com の派生形と登録済みの単語から作ります。`;
+    hint.textContent = `AI（${provider.name}）で例文と誤答を作り、完成した空所付き例文と選択肢を同じAIへもう一度送って、正解以外にも自然に入る語がないか最終検証します。検証済みの内容はこの端末に保存され、同じキーでは次回再検証しません。AIが使えないときは辞書API（dictionaryapi.dev）に切り替わり、誤答は datamuse.com の派生形と登録済みの単語から作ります。`;
   } else {
     hint.textContent =
-      "AIキーが未設定のため、いまは辞書API（キー不要）から例文を取得します。上の「AIで読み取る」欄にGeminiまたはGroqのキーを入れると、例文と誤答をAIが作るようになります。";
+      "AIキーが未設定のため、いまは辞書API（キー不要）から例文を取得します。上の「AIで読み取る」欄にGeminiまたはGroqのキーを入れると、例文と誤答をAIが作り、完成した空所付き例文と選択肢もAIで最終検証するようになります。";
   }
 }
 
@@ -11288,12 +11452,12 @@ function startContextQuiz() {
     );
     return;
   }
-  // 生成には出題語と日本語訳の外部送信（辞書API / AI）が伴うため、初回だけ確認を挟む。
+  // 生成とAI最終検証には出題語・日本語訳・空所付き例文・選択肢の外部送信が伴うため、初回だけ確認を挟む。
   // window.confirm は iOS のホーム画面起動で固まるため、既存の2段階タップ方式に合わせる。
   if (contextGenMode() !== "off" && !contextNetworkConsented()) {
     if (!armDangerButton(elements.contextQuizButton, "もう一度押すと開始")) {
       setStatus(
-        "例文モード（空所補充）は、出題する単語とその意味を外部サービス（辞書API dictionaryapi.dev / 語彙API datamuse.com、AIキー設定時はGeminiまたはGroq）へ送って例文と選択肢を作ります。よければもう一度押してください。設定の「例文モード（空所補充）の例文・誤答の作り方」で「作らない」にすれば送信しません。",
+        "例文モード（空所補充）は、出題する単語とその意味を外部サービス（辞書API dictionaryapi.dev / 語彙API datamuse.com、AIキー設定時はGeminiまたはGroq）へ送って例文と選択肢を作ります。AI利用時は、完成した空所付き例文と選択肢も同じAIへ送り、自然に入る語を最終検証します。よければもう一度押してください。設定の「例文モード（空所補充）の例文・誤答の作り方」で「作らない」にすれば送信しません。",
       );
       return;
     }
@@ -11382,6 +11546,7 @@ function renderQuizPromptWord(quiz) {
 }
 
 function buildReviewQuiz() {
+  quizEmptyReason = "";
   while (reviewSession.queue.length) {
     const answer = appState.words.find((word) => word.id === reviewSession.queue[0]);
     if (!answer) {
@@ -11445,7 +11610,15 @@ function buildReviewQuiz() {
       // 例文を用意できなかった語は、通常の単語出題にフォールバックして続行する。
     }
 
-    const choices = shuffle([answer, ...pickDistractors(pool, answer, 3)]);
+    const distractors = pickDistractors(pool, answer, 3);
+    if (distractors.length === 0) {
+      // 正解だけの1択で採点するとSRSが不当に進む。通常・総復習・苦手復習・resumeの
+      // どの入口でも、誤答を1件も作れない場合は問題を返さず共通の空状態へ合流させる。
+      quizEmptyReason =
+        "意味の異なる単語をもう1語以上登録するか、同じ日本語訳だけの単語が続かないよう訳を見直してください。1択の問題は採点されません。";
+      return null;
+    }
+    const choices = shuffle([answer, ...distractors]);
     // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
     elements.quizFeedback.textContent = choiceCountNote(choices);
     return {
@@ -11474,7 +11647,17 @@ function renderReviewQuiz() {
 
   if (!currentQuiz) currentQuiz = buildReviewQuiz();
   if (!currentQuiz) {
-    endReview("復習できる単語がありませんでした。");
+    if (quizEmptyReason) {
+      // セッションを残すと再描画のたびに同じ出題不能問題へ戻るため、安全に終了して
+      // renderQuizEmpty と同じ案内を表示する。学習状態・回答履歴は一切更新しない。
+      clearSavedReviewProgress();
+      reviewSession = null;
+      reviewResult = null;
+      quizStarted = false;
+      renderQuizEmpty();
+    } else {
+      endReview("復習できる単語がありませんでした。");
+    }
     return;
   }
 
@@ -11494,6 +11677,7 @@ function highlightChoices(choiceId) {
 }
 
 function buildQuiz() {
+  quizEmptyReason = "";
   const words = availableQuizWords();
   // 直前に出題した単語は候補から外し、同じ問題の2連続を避ける。
   // ただし候補がその1語しかない場合は除外しない（出題が止まるのを防ぐ）。
@@ -11505,6 +11689,12 @@ function buildQuiz() {
   const pool = quizSelectedDeckWords().filter((word) => word.id !== answer.id);
   const basePool = pool.length >= 3 ? pool : appState.words.filter((word) => word.id !== answer.id);
   const distractors = pickDistractors(basePool, answer, 3);
+  if (distractors.length === 0) {
+    // 1択のまま正解扱いにできないよう、通常クイズも問題生成の時点で止める。
+    quizEmptyReason =
+      "意味の異なる単語をもう1語以上登録するか、同じ日本語訳だけの単語が続かないよう訳を見直してください。1択の問題は採点されません。";
+    return null;
+  }
   const choices = shuffle([answer, ...distractors]);
   // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
   elements.quizFeedback.textContent = choiceCountNote(choices);
@@ -11758,6 +11948,24 @@ function updateStreakOnAnswer() {
 
 function gradeQuiz(choiceId, dontKnow = false) {
   if (!currentQuiz || currentQuiz.answered) return;
+  // 生成側の全経路で防いでいるが、古い画面状態や将来の呼び出し追加があっても
+  // 1択で採点・SRS更新へ進まないよう、更新直前にも最後のガードを置く。
+  if (!Array.isArray(currentQuiz.choices) || currentQuiz.choices.length < 2) {
+    currentQuiz = null;
+    quizEmptyReason =
+      "意味の異なる単語をもう1語以上登録してください。1択の問題は採点されません。";
+    if (reviewSession) {
+      clearSavedReviewProgress();
+      reviewSession = null;
+      reviewResult = null;
+      quizStarted = false;
+      renderQuizEmpty();
+      updateQuizControls();
+      return;
+    }
+    renderQuiz();
+    return;
+  }
 
   const isCorrect = !dontKnow && choiceId === currentQuiz.answer.id;
   playSound(isCorrect ? "correct" : "wrong");
@@ -12967,6 +13175,7 @@ elements.startQuizButton.addEventListener("click", () => {
   clearAutoNextTimer();
   clearSavedReviewProgress(); // 再開せず別のクイズを始めたら、前回の続きは破棄する
   reviewResult = null; // 完走サマリが残っていたら消して通常クイズへ
+  quizEmptyReason = "";
   quizStarted = true;
   normalQuizQuestionNumber = 0; // 「◯問目」を1から数え直す（buildQuiz内で+1される）
   currentQuiz = availableQuizWords().length > 0 ? buildQuiz() : null;
@@ -12981,6 +13190,7 @@ elements.exitQuizButton?.addEventListener("click", () => {
   clearAutoNextTimer();
   quizStarted = false;
   currentQuiz = null;
+  quizEmptyReason = "";
   normalQuizQuestionNumber = 0;
   renderQuiz();
   setStatus("クイズをやめました。設定を変えて再開できます。");
