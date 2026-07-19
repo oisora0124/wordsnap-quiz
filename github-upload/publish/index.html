@@ -8879,34 +8879,115 @@ function applyPerspective(src, v, h, mesh = 18) {
 const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"];
 const GEMINI_MODEL_PREF_KEY = "wordsnap-gemini-model:v1";
 const GROQ_MODEL = "qwen/qwen3.6-27b";
+const geminiModelMemory = new Map();
+const geminiModelDiscoveryInflight = new Map();
+const geminiUnavailableModels = new Map();
 
-// 最初のモデルが使えない環境で毎回404を踏むと、全単語でAI呼び出しが2回になる。
-// 成功モデルはキー指紋と組で保存し、キーが変わった場合は再探索して誤った設定を引き継がない。
-function preferredGeminiModels(key) {
-  let preferred = "";
+// モデル探索を単語生成のPOSTから切り離し、キーごとに一覧GETを1回だけ行う。
+// 生成POSTを候補モデルへ順番に投げると1語で2回課金され得るため、生成は決定済みの1モデルへ
+// 1回だけ送る。localStorageへ保存できない環境でも、少なくとも同じセッション中はメモリに保持する。
+function rememberedGeminiModel(key) {
+  const fingerprint = shortKeyFingerprint(key);
+  const memory = geminiModelMemory.get(fingerprint);
+  if (GEMINI_MODELS.includes(memory)) return memory;
   try {
     const saved = JSON.parse(localStorage.getItem(GEMINI_MODEL_PREF_KEY));
     if (saved?.keyFingerprint === shortKeyFingerprint(key) && GEMINI_MODELS.includes(saved.model)) {
-      preferred = saved.model;
-    } else if (saved) {
-      localStorage.removeItem(GEMINI_MODEL_PREF_KEY);
+      geminiModelMemory.set(fingerprint, saved.model);
+      return saved.model;
     }
   } catch {
-    // 壊れた保存値は無視し、既定順で安全に再探索する
+    // 壊れた保存値は無視し、一覧GETで安全に探索する
   }
-  return preferred
-    ? [preferred, ...GEMINI_MODELS.filter((model) => model !== preferred)]
-    : GEMINI_MODELS.slice();
+  return "";
 }
 
 function rememberGeminiModel(key, model) {
+  const keyFingerprint = shortKeyFingerprint(key);
+  geminiModelMemory.set(keyFingerprint, model);
   try {
     localStorage.setItem(
       GEMINI_MODEL_PREF_KEY,
-      JSON.stringify({ keyFingerprint: shortKeyFingerprint(key), model }),
+      JSON.stringify({ keyFingerprint, model }),
     );
   } catch {
-    // 保存できない環境では今回の成功だけを利用する
+    // 永続保存できなくても、上のメモリ記憶でこのセッション中の再探索は防げる
+  }
+}
+
+function forgetGeminiModel(key, model) {
+  const fingerprint = shortKeyFingerprint(key);
+  if (geminiModelMemory.get(fingerprint) === model) geminiModelMemory.delete(fingerprint);
+  try {
+    const saved = JSON.parse(localStorage.getItem(GEMINI_MODEL_PREF_KEY));
+    if (saved?.keyFingerprint === fingerprint && saved.model === model) {
+      localStorage.removeItem(GEMINI_MODEL_PREF_KEY);
+    }
+  } catch {
+    // 壊れた保存値は次の探索で上書きする
+  }
+}
+
+async function discoverGeminiModel(key, signal) {
+  const fingerprint = shortKeyFingerprint(key);
+  if (geminiModelDiscoveryInflight.has(fingerprint)) {
+    return geminiModelDiscoveryInflight.get(fingerprint);
+  }
+  const task = (async () => {
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+      method: "GET",
+      headers: { "x-goog-api-key": key },
+      signal,
+    });
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        message = err.error?.message || message;
+      } catch {
+        // keep status
+      }
+      throw new Error(message);
+    }
+    const data = await res.json();
+    const available = new Set(
+      (Array.isArray(data?.models) ? data.models : [])
+        .filter((model) =>
+          !Array.isArray(model?.supportedGenerationMethods) ||
+          model.supportedGenerationMethods.includes("generateContent"),
+        )
+        .map((model) => String(model?.name || "").replace(/^models\//, "")),
+    );
+    const unavailable = geminiUnavailableModels.get(fingerprint) || new Set();
+    const model = GEMINI_MODELS.find((candidate) => available.has(candidate) && !unavailable.has(candidate));
+    if (!model) throw new Error("利用できるGeminiモデルが見つかりませんでした。");
+    rememberGeminiModel(key, model);
+    return model;
+  })();
+  geminiModelDiscoveryInflight.set(fingerprint, task);
+  try {
+    return await task;
+  } finally {
+    geminiModelDiscoveryInflight.delete(fingerprint);
+  }
+}
+
+async function geminiModelForKey(key, signal) {
+  return rememberedGeminiModel(key) || discoverGeminiModel(key, signal);
+}
+
+async function noteUnavailableGeminiModel(key, model, signal) {
+  const fingerprint = shortKeyFingerprint(key);
+  const unavailable = geminiUnavailableModels.get(fingerprint) || new Set();
+  unavailable.add(model);
+  geminiUnavailableModels.set(fingerprint, unavailable);
+  forgetGeminiModel(key, model);
+  // 失敗した単語を別モデルへ再POSTはしない。次の単語に備える一覧GETだけを行うため、
+  // 「1ユーザー・1単語あたり生成POST 1回」を保ったままモデル変更へ追従できる。
+  try {
+    await discoverGeminiModel(key, signal);
+  } catch {
+    // 探索にも失敗した場合は呼び出し側へ元のPOSTエラーを返す
   }
 }
 
@@ -8982,7 +9063,13 @@ function setAiKey(id, value) {
   if (aiKeysPersisted()) localStorage.setItem(k, v);
   else localStorage.removeItem(k);
   // Geminiのキー変更後は、以前のキーで選ばれたモデルが使えるとは限らないため忘れる。
-  if (id === "gemini" && previous !== v) localStorage.removeItem(GEMINI_MODEL_PREF_KEY);
+  if (id === "gemini" && previous !== v) {
+    geminiModelMemory.delete(shortKeyFingerprint(previous));
+    geminiModelMemory.delete(shortKeyFingerprint(v));
+    geminiUnavailableModels.delete(shortKeyFingerprint(previous));
+    geminiUnavailableModels.delete(shortKeyFingerprint(v));
+    localStorage.removeItem(GEMINI_MODEL_PREF_KEY);
+  }
 }
 
 function setAiKeysPersisted(on) {
@@ -9038,39 +9125,34 @@ async function extractWithGemini(canvas, key, signal) {
     generationConfig: { temperature: 0 },
   });
 
-  let lastError = "不明なエラー";
-  for (const model of preferredGeminiModels(key)) {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body,
-        signal,
-      },
-    );
-    if (res.ok) {
-      rememberGeminiModel(key, model);
-      const data = await res.json();
-      return (data?.candidates?.[0]?.content?.parts || [])
-        .map((part) => part.text || "")
-        .join("")
-        .trim();
-    }
-    let message = `HTTP ${res.status}`;
-    try {
-      const err = await res.json();
-      message = err.error?.message || message;
-    } catch {
-      // keep status
-    }
-    lastError = message;
-    // Only try the next Gemini model when this one is simply unavailable.
-    if (!(res.status === 404 || /not found|not supported/i.test(message))) {
-      throw new Error(message);
-    }
+  const model = await geminiModelForKey(key, signal);
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body,
+      signal,
+    },
+  );
+  if (res.ok) {
+    const data = await res.json();
+    return (data?.candidates?.[0]?.content?.parts || [])
+      .map((part) => part.text || "")
+      .join("")
+      .trim();
   }
-  throw new Error(lastError);
+  let message = `HTTP ${res.status}`;
+  try {
+    const err = await res.json();
+    message = err.error?.message || message;
+  } catch {
+    // keep status
+  }
+  if (res.status === 404 || /not found|not supported/i.test(message)) {
+    await noteUnavailableGeminiModel(key, model, signal);
+  }
+  throw new Error(message);
 }
 
 // OpenAI-compatible vision request to Groq.
@@ -10441,15 +10523,18 @@ function renderReviewResult() {
 // v8: AIの文脈検証結果とキー指紋を保存するため、旧形式を混ぜずに作り直す
 // v9: AI検証の成否時刻を保存し、生成物を残したまま失敗した検証だけ再試行できるようにする
 // v10: 生成と自己検証のfitを1応答に統合したため、2回呼び出し前提の旧生成物を混ぜない
-// v11: 最終利用時刻によるLRUへ変更したため、利用時刻を持たない旧生成物を混ぜない
+// v11: 最終利用時刻によるLRUへ変更。内容形式はv10と後方互換なので lastUsed=at として移行する。
+// 今後も形式差分が後方互換なら既存生成物を移行し、選択肢の意味などが非互換な場合だけ破棄する。
+// バージョン更新そのものが大量のAI再生成を招かないことを優先する。
 const CONTEXT_QUIZ_CACHE_KEY = "wordsnap-ctxquiz:v11";
+const CONTEXT_QUIZ_V10_CACHE_KEY = "wordsnap-ctxquiz:v10";
 const CONTEXT_GEN_MODE_KEY = "wordsnap-ctxquiz-mode"; // "auto" | "dict" | "off"
 const CONTEXT_GEN_CONSENT_KEY = "wordsnap-ctxquiz-consent:v3"; // 例文・選択肢のAI検証を含む送信先に同意済みか
 const CONTEXT_GEN_TIMEOUT_MS = 25000;
 // 誤答補強(Datamuse)は例文取得と並行して走らせる補助処理なので、待たせすぎないよう短くする
 const CONTEXT_DISTRACTOR_TIMEOUT_MS = 8000;
-// 最終検証は生成済みの短い文と選択肢だけを送るため、例文生成より短く打ち切る。
-// 失敗時は従来の安全判定だけで続行し、通信不調で出題そのものを止めない。
+// 将来、ユーザーの明示操作で再検証を設ける場合の上限。通常表示からはこの検証を呼ばない。
+// その場合も失敗時は従来の安全判定だけで続行し、通信不調で出題そのものを止めない。
 const CONTEXT_VALIDATION_TIMEOUT_MS = CONTEXT_DISTRACTOR_TIMEOUT_MS;
 // 一般的なlocalStorage上限に余裕を残しつつ、大きめの単語帳を一周しても再生成しにくい1000件とする。
 // 上限超過時は生成時刻ではなく最終利用時刻で追い出し、復習で使っている問題を優先して残す。
@@ -10457,11 +10542,21 @@ const CONTEXT_CACHE_MAX = 1000;
 // 生成に失敗した語もキャッシュして無限リトライを防ぐが、通信断やレート制限のような
 // 一時的な失敗が永久に焼き付かないよう、一定時間で再挑戦できるようにする。
 const CONTEXT_FAILURE_TTL_MS = 6 * 60 * 60 * 1000;
+// 参照のたびに全件JSONを書き直すと容量・書込み回数を浪費するため、LRU時刻は間引いて保存する。
+const CONTEXT_TOUCH_ENTRY_INTERVAL_MS = 30 * 60 * 1000;
+const CONTEXT_TOUCH_SAVE_INTERVAL_MS = 5 * 60 * 1000;
 // 用意できる手段の優劣。キャッシュが今より弱い手段で作られていたら作り直す。
 const CONTEXT_SRC_RANK = { stored: 0, dict: 1, ai: 2 };
 let contextQuizCache = null; // 遅延初期化（起動時の初期化順に依存しないため）
+let contextCacheTouchDirty = false;
+let contextCacheLastTouchSaveAt = 0;
+let contextCacheStorageFailed = false;
 // 同じ語・同じAI能力の二重生成だけを防ぐ。キーやプロバイダが変わった処理まで待たせない。
 const contextInflight = new Map();
+const CONTEXT_GEN_MARKER_PREFIX = "wordsnap-ctxquiz-generating:v1:";
+// AI25秒の後に辞書へフォールバックする時間も含める。タブが落ちても90秒後には奪取でき、
+// 永久ロックでその語を出題できなくならない。
+const CONTEXT_GEN_MARKER_TTL_MS = 90 * 1000;
 
 function contextGenMode() {
   const v = localStorage.getItem(CONTEXT_GEN_MODE_KEY);
@@ -10504,7 +10599,7 @@ function contextCapabilityRank(cap) {
   return CONTEXT_SRC_RANK[base];
 }
 
-// 形式変更で使わなくなった旧世代キャッシュと旧同意キーを掃除する
+// 非互換な形式変更で使わなくなった旧世代キャッシュと旧同意キーを掃除する
 // （放置すると容量を食い続けるほか、現在は無効な同意状態が残って紛らわしいため）。
 function purgeLegacyContextCaches() {
   for (const legacy of [
@@ -10517,7 +10612,6 @@ function purgeLegacyContextCaches() {
     "wordsnap-ctxquiz:v7",
     "wordsnap-ctxquiz:v8",
     "wordsnap-ctxquiz:v9",
-    "wordsnap-ctxquiz:v10",
     "wordsnap-ctxquiz-consent",
     "wordsnap-ctxquiz-consent:v2",
   ]) {
@@ -10546,9 +10640,178 @@ function readStoredContextCache() {
   }
 }
 
+function migrateV10ContextCache() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(CONTEXT_QUIZ_V10_CACHE_KEY);
+  } catch {
+    return;
+  }
+  if (raw == null) return;
+  let legacy = null;
+  try {
+    legacy = JSON.parse(raw);
+  } catch {
+    legacy = null;
+  }
+  if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) {
+    // JSONとして壊れている値は移行不能。後方互換な正しいv10だけを移し、非互換・破損値は破棄する。
+    try {
+      localStorage.removeItem(CONTEXT_QUIZ_V10_CACHE_KEY);
+    } catch {
+      // 消せなくても現在のv11処理には影響しない
+    }
+    return;
+  }
+  const current = readStoredContextCache() || {};
+  const migrated = {};
+  for (const [key, entry] of Object.entries(legacy)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    migrated[key] = { ...entry, lastUsed: Number(entry.lastUsed) || Number(entry.at) || 0 };
+  }
+  // v11側に同じ語があれば新形式を優先し、未移行の語だけv10から補う。
+  contextQuizCache = { ...migrated, ...current };
+  for (const entry of Object.values(contextQuizCache)) {
+    if (entry && typeof entry === "object" && !Number(entry.lastUsed)) {
+      entry.lastUsed = Number(entry.at) || 0;
+    }
+  }
+  // v11へ永続化できたことを確認してから旧キーを消す。容量不足時に元データまで失わないため。
+  if (saveContextCache()) {
+    try {
+      localStorage.removeItem(CONTEXT_QUIZ_V10_CACHE_KEY);
+    } catch {
+      // 旧キーが残っても次回また同じ内容を安全にマージできる
+    }
+  }
+}
+
 // 単語と意味の組でキャッシュする（意味を直したら作り直す）
 function contextCacheKey(word) {
   return `${String(word?.term || "").trim().toLowerCase()}::${String(word?.meaning || "").trim()}`;
+}
+
+function contextGenerationMarkerKey(key, cap) {
+  return `${CONTEXT_GEN_MARKER_PREFIX}${shortKeyFingerprint(`${key}::${cap}`)}`;
+}
+
+function readContextGenerationMarker(storageKey) {
+  try {
+    const marker = JSON.parse(localStorage.getItem(storageKey));
+    return marker && typeof marker === "object" ? marker : null;
+  } catch {
+    return null;
+  }
+}
+
+function storedContextResultForGeneration(key, cap) {
+  const stored = readStoredContextCache()?.[key];
+  if (!stored || typeof stored !== "object" || stored.cap !== cap || contextEntryIsStale(stored)) {
+    return { found: false, value: null };
+  }
+  ctxCache()[key] = stored;
+  return { found: true, value: stored.failed ? null : touchContextCacheEntry(null, stored) };
+}
+
+function contextGenerationOwner() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+async function acquireContextGenerationMarker(key, cap) {
+  const storageKey = contextGenerationMarkerKey(key, cap);
+  const owner = contextGenerationOwner();
+  while (true) {
+    const now = Date.now();
+    const marker = readContextGenerationMarker(storageKey);
+    const markerIsFresh =
+      marker?.owner && marker.cap === cap && now - (Number(marker.at) || 0) < CONTEXT_GEN_MARKER_TTL_MS;
+    if (markerIsFresh && marker.owner !== owner) {
+      const completed = storedContextResultForGeneration(key, cap);
+      if (completed.found) return { completed: true, value: completed.value, release() {} };
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      continue;
+    }
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ key, cap, owner, at: now }));
+      // localStorageにはcompare-and-setがないため、同時書込みを落ち着かせてから所有者を再確認する。
+      // 最後に書いた1タブだけが進み、他タブは上の待機へ戻る。
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      if (readContextGenerationMarker(storageKey)?.owner !== owner) continue;
+    } catch {
+      // 保存機能自体が無い環境ではタブ間共有できない。navigator.locks対応環境なら外側の
+      // 排他が守り、非対応環境では既存のタブ内Mapを最低限のガードとして使う。
+    }
+    return {
+      completed: false,
+      value: null,
+      release() {
+        try {
+          if (readContextGenerationMarker(storageKey)?.owner === owner) {
+            localStorage.removeItem(storageKey);
+          }
+        } catch {
+          // TTLで回復できるため、解放失敗で処理自体は止めない
+        }
+      },
+    };
+  }
+}
+
+async function runContextGenerationOnce(key, cap, generate) {
+  const critical = async () => {
+    const marker = await acquireContextGenerationMarker(key, cap);
+    if (marker.completed) return marker.value;
+    try {
+      // 待機中に先行タブが保存を終えた場合は、その結果を使って外部POSTを省く。
+      const completed = storedContextResultForGeneration(key, cap);
+      if (completed.found) return completed.value;
+      return await generate();
+    } finally {
+      marker.release();
+    }
+  };
+  const lockName = `wordsnap-ctxquiz:${shortKeyFingerprint(`${key}::${cap}`)}`;
+  if (navigator?.locks?.request) {
+    let entered = false;
+    try {
+      return await navigator.locks.request(lockName, { mode: "exclusive" }, async () => {
+        entered = true;
+        return critical();
+      });
+    } catch (error) {
+      // 排他区間内の生成エラーを再実行するとPOSTが重複する。Locks API自体が開始前に
+      // 使えなかった場合だけlocalStorageマーカーへフォールバックする。
+      if (entered) throw error;
+    }
+  }
+  return critical();
+}
+
+function contextEntriesOldestFirst(cache) {
+  return Object.keys(cache).sort(
+    (a, b) =>
+      (Number(cache[a]?.lastUsed) || Number(cache[a]?.at) || 0) -
+      (Number(cache[b]?.lastUsed) || Number(cache[b]?.at) || 0),
+  );
+}
+
+function evictOldestContextEntries(cache, count) {
+  const keys = contextEntriesOldestFirst(cache);
+  // 最新の1件まで消すと、保存失敗のたびに生成直後の語を失って確実に再生成するため1件は残す。
+  const removable = Math.min(Math.max(0, Number(count) || 0), Math.max(0, keys.length - 1));
+  keys.slice(0, removable).forEach((key) => delete cache[key]);
+  return removable;
+}
+
+function setContextCacheStorageFailed(failed) {
+  if (contextCacheStorageFailed === failed) return;
+  contextCacheStorageFailed = failed;
+  // 設定案内を即時に直し、「次回呼ばない」と言い切ったまま保存失敗を隠さない。
+  if (elements?.contextGenHint) renderContextGenSettings();
 }
 
 function saveContextCache() {
@@ -10582,20 +10845,26 @@ function saveContextCache() {
   }
   const keys = Object.keys(cache);
   if (keys.length > CONTEXT_CACHE_MAX) {
-    keys
-      .sort(
-        (a, b) =>
-          (Number(cache[a]?.lastUsed) || Number(cache[a]?.at) || 0) -
-          (Number(cache[b]?.lastUsed) || Number(cache[b]?.at) || 0),
-      )
-      .slice(0, keys.length - CONTEXT_CACHE_MAX)
-      .forEach((k) => delete cache[k]);
+    evictOldestContextEntries(cache, keys.length - CONTEXT_CACHE_MAX);
   }
-  try {
-    localStorage.setItem(CONTEXT_QUIZ_CACHE_KEY, JSON.stringify(cache));
-  } catch {
-    // 保存できなくてもメモリ上のキャッシュで動く
+  // 件数上限内でも他データや各項目の長さでQuotaExceededになり得る。失敗時はLRUの古い2割を
+  // 追加で追い出して最大5回試し、実バイト容量に合わせて保存可能な大きさまで縮める。
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      localStorage.setItem(CONTEXT_QUIZ_CACHE_KEY, JSON.stringify(cache));
+      contextCacheTouchDirty = false;
+      contextCacheLastTouchSaveAt = Date.now();
+      setContextCacheStorageFailed(false);
+      return true;
+    } catch {
+      if (attempt >= 4) break;
+      const count = Math.max(1, Math.ceil(Object.keys(cache).length * 0.2));
+      if (!evictOldestContextEntries(cache, count)) break;
+    }
   }
+  // メモリ上では使い続けられるが、再読込・別タブでは再生成し得るためUIで明示する。
+  setContextCacheStorageFailed(true);
+  return false;
 }
 
 function contextCacheEntry(word) {
@@ -10605,13 +10874,23 @@ function contextCacheEntry(word) {
 
 function touchContextCacheEntry(word, entry) {
   if (!entry || entry.failed) return entry;
-  entry.lastUsed = Date.now();
-  // 利用時刻を永続化して、再読込後や別タブからの保存でもLRU順が戻らないようにする。
-  saveContextCache();
+  const now = Date.now();
+  if (now - (Number(entry.lastUsed) || Number(entry.at) || 0) < CONTEXT_TOUCH_ENTRY_INTERVAL_MS) {
+    return entry;
+  }
+  entry.lastUsed = now;
+  contextCacheTouchDirty = true;
+  // LRU時刻の多少の遅れは許容し、全件再シリアライズは全体で5分に1回までにする。
+  if (now - contextCacheLastTouchSaveAt >= CONTEXT_TOUCH_SAVE_INTERVAL_MS) saveContextCache();
   return entry;
 }
 
-// キャッシュを作り直すべきか。失敗記録は能力変更または一定時間で失効させる。
+window.addEventListener("pagehide", () => {
+  // 間引いた利用時刻は離脱時にまとめて保存し、通常参照の書込み負荷とLRU精度を両立する。
+  if (contextCacheTouchDirty) saveContextCache();
+});
+
+// キャッシュを作り直すべきか。生成自体の失敗記録は能力変更または一定時間で失効させる。
 // 成功記録は作成時より良い手段が使えるようになった場合だけ更新し、AI失敗後に辞書で
 // 成功した結果を同じAI能力のまま繰り返し作り直すループを防ぐ。
 function contextEntryIsStale(entry) {
@@ -10633,20 +10912,16 @@ function contextEntryIsStale(entry) {
       Date.now() - (Number(entry.at) || 0) > CONTEXT_FAILURE_TTL_MS
     );
   }
-  // 例文生成に成功していても、検証だけ失敗した記録を永久に成功キャッシュ扱いしない。
-  // 検証時刻を基準にすれば、生成物を捨てずに一時的な通信断・レート制限から回復できる。
-  if (entry.validation?.status === "failed" && currentRank === CONTEXT_SRC_RANK.ai) {
-    const validationAt = Number(entry.validation.at) || Number(entry.at) || 0;
-    if (Date.now() - validationAt > CONTEXT_FAILURE_TTL_MS) return true;
-  }
+  // 検証失敗は自動再検証しない。候補はローカル安全判定のまま使い続け、同じキーで表示する
+  // だけではAIを再度呼ばない。キー変更（aiIdentityChanged）という明示操作時だけ作り直す方式を
+  // 選び、UIの「同じキーでは次回AIを呼びません」と実挙動を一致させる。
   // 成功済みなら能力を下げた変更では作り直さない。後からAIキーを設定した場合など、
   // 作成時より上位の手段が増えたときだけ品質向上のために更新する。
   return currentRank > cachedRank || aiIdentityChanged;
 }
 
 // stale のうち、表示を止めて更新完了を待つべき能力変更だけを判定する。
-// キー・プロバイダ変更や辞書からAIへの昇格は内容の品質が変わるため旧問題を使わないが、
-// 検証失敗TTLは既存の形態論判定済み問題を表示しながら裏で検証だけやり直してよい。
+// キー・プロバイダ変更や辞書からAIへの昇格は内容の品質が変わるため旧問題を使わない。
 function contextEntryRequiresBlockingRefresh(entry) {
   if (!entry || entry.failed) return true;
   const currentCap = contextCapability();
@@ -10776,28 +11051,26 @@ async function generateContextWithGemini(word, key, signal, prompt = contextGenP
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0.7 },
   });
-  let lastError = "不明なエラー";
-  for (const model of preferredGeminiModels(key)) {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body, signal },
-    );
-    if (res.ok) {
-      rememberGeminiModel(key, model);
-      const data = await res.json();
-      return (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("").trim();
-    }
-    let message = `HTTP ${res.status}`;
-    try {
-      const err = await res.json();
-      message = err.error?.message || message;
-    } catch {
-      // keep status
-    }
-    lastError = message;
-    if (!(res.status === 404 || /not found|not supported/i.test(message))) throw new Error(message);
+  const model = await geminiModelForKey(key, signal);
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body, signal },
+  );
+  if (res.ok) {
+    const data = await res.json();
+    return (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("").trim();
   }
-  throw new Error(lastError);
+  let message = `HTTP ${res.status}`;
+  try {
+    const err = await res.json();
+    message = err.error?.message || message;
+  } catch {
+    // keep status
+  }
+  if (res.status === 404 || /not found|not supported/i.test(message)) {
+    await noteUnavailableGeminiModel(key, model, signal);
+  }
+  throw new Error(message);
 }
 
 async function generateContextWithGroq(word, key, signal, prompt = contextGenPrompt(word)) {
@@ -10921,7 +11194,8 @@ async function validateContextChoicesWithAI(word, item, choiceTerms, provider, k
 }
 
 // JSONとして読めた fit は、正解の列挙漏れがあっても候補の除外にだけ利用する。
-// 一方、正解を含まない応答は完全な検証成功にはせず、TTL後の再検証対象に残す。
+// 一方、正解を含まない応答は完全な検証成功にはしない。この関数は将来、ユーザーが明示的に
+// 「作り直す」操作を設けた場合にだけ使い、表示を契機とする自動再検証には使わない。
 function applyContextValidation(item, candidateTerms, fit, answerTerm) {
   if (!Array.isArray(fit)) {
     return {
@@ -11338,8 +11612,8 @@ async function fetchContextFromDictionary(word) {
 async function ensureContextItem(word) {
   const key = contextCacheKey(word);
   let cached = contextCacheEntry(word);
-  // 鮮度が保たれているキャッシュはそのまま使う。設定・キーが変わった、または失敗記録が
-  // 古くなった場合だけ作り直す。
+  // 鮮度が保たれているキャッシュはそのまま使う。設定・キーが変わった、または生成自体の
+  // 失敗記録が古くなった場合だけ作り直す。検証失敗だけでは作り直さない。
   if (cached && !contextEntryIsStale(cached)) return cached.failed ? null : contextItemFor(word);
   // inflightの識別にも開始時点のcapを含め、設定変更後の生成・検証を旧タスクに直列化しない。
   const mode = contextGenMode();
@@ -11349,9 +11623,8 @@ async function ensureContextItem(word) {
   const cap = mode === "off" ? "stored" : willUseAI ? contextAiCapability(aiProvider) : "dict";
   const inflightKey = `${key}::${cap}`;
   if (contextInflight.has(inflightKey)) return contextInflight.get(inflightKey);
-  const task = (async () => {
-    // BroadcastChannelによる疑似ロックは、タブ終了時の解放漏れで生成不能になり得るため採用しない。
-    // 代わりに外部生成の直前にlocalStorageを読み直し、他タブが完了済みならその結果を再利用する。
+  const task = runContextGenerationOnce(key, cap, async () => {
+    // タブ間ロックを取得した後にも最新キャッシュを読み、待機直前に完了した結果を再利用する。
     const latestStored = readStoredContextCache()?.[key];
     if (latestStored && typeof latestStored === "object") {
       ctxCache()[key] = latestStored;
@@ -11363,37 +11636,27 @@ async function ensureContextItem(word) {
     // 開始後にAIキーが変更されても、開始時に使えた最良の手段とキャッシュの cap が食い違わないよう固定する。
     // 処理中に「作らない」へ切り替えられたら、それ以降の外部送信は行わない
     const networkAllowed = () => contextGenMode() !== "off";
-    // 同じAI能力で検証だけ失敗してTTLを迎えた場合は、例文生成や辞書取得を繰り返さず
-    // 保存済み候補に対する短い検証だけを再試行する。
-    const retryValidationOnly = Boolean(
-      cached &&
-      !cached.failed &&
-      cached.validation?.status === "failed" &&
-      cached.cap === cap &&
-      !contextEntryRequiresBlockingRefresh(cached) &&
-      willUseAI
-    );
-    let item = retryValidationOnly ? { ...cached } : null;
+    let item = null;
     // AIを使わない経路では誤答補強(Datamuse)を例文取得と並行して始める。
     // AIが安全な誤答を3件返した場合は不要なので、AIより先には送信しない。
     let derivedPromise =
-      !retryValidationOnly && mode !== "off" && !willUseAI
+      mode !== "off" && !willUseAI
         ? fetchDerivedFormDistractors(word, "").catch(() => [])
         : null;
     // 配布時の不要な通信と辞書APIのレート消費を抑えるため、AIキーがあるときはAIを先に試す。
     // 辞書はAI生成が失敗した場合だけ開始する。キーなしでは従来どおりDatamuseと並行取得する。
     let dictionaryPromise =
-      !retryValidationOnly && mode !== "off" && !willUseAI && networkAllowed()
+      mode !== "off" && !willUseAI && networkAllowed()
         ? fetchContextFromDictionary(word).catch(() => null)
         : null;
-    if (!retryValidationOnly && willUseAI && networkAllowed()) {
+    if (willUseAI && networkAllowed()) {
       try {
         item = await generateContextWithAI(word, aiProvider, aiKey);
       } catch {
         item = null;
       }
     }
-    if (!retryValidationOnly && !item && mode !== "off" && networkAllowed()) {
+    if (!item && mode !== "off" && networkAllowed()) {
       if (!dictionaryPromise) {
         dictionaryPromise = fetchContextFromDictionary(word).catch(() => null);
       }
@@ -11404,7 +11667,7 @@ async function ensureContextItem(word) {
     }
     // 辞書が「登録品詞と違う定義の例文」しか出せなかった場合は、ユーザー自身が保存した例文を優先する。
     // 保存例文はその語のために取得されたもので、語義が合っている可能性が高いため。
-    if (!retryValidationOnly && (!item || item.posMismatch)) {
+    if (!item || item.posMismatch) {
       const stored = exampleSentencesFor(word);
       if (stored.length) {
         item = { en: String(stored[0].en), ja: stored[0].ja || null, distractors: [], src: "stored" };
@@ -11415,7 +11678,7 @@ async function ensureContextItem(word) {
     }
     // AIが誤答を用意できなかった経路（辞書・保存済み例文）では、安全判定を通った派生形を足す。
     // 元語の品詞が動詞・形容詞と分かる名詞化だけなので、名詞用法同士で正解が増えるのを防げる。
-    if (!retryValidationOnly && item && (item.distractors || []).length < 3) {
+    if (item && (item.distractors || []).length < 3) {
       try {
         // AI経路はここまで補強を遅らせ、AIだけで3件揃った場合は単語をDatamuseへ送らない。
         if (!derivedPromise && mode !== "off" && networkAllowed()) {
@@ -11443,8 +11706,10 @@ async function ensureContextItem(word) {
       }
     }
     if (item) {
-      // AI検証には、AI/辞書由来だけでなく登録語から補った分も含む「実際に表示する候補」を渡す。
-      // 先に候補を確定してキャッシュへ固定し、次回表示時に未検証の別候補が補充されるのを防ぐ。
+      // Datamuseや登録語から補強した候補は語形安全判定しか通らず、large/bigのような同義語が
+      // 残り得る。これは追加AI検証をせず「1語1回」を守るための意図的なトレードオフ。
+      // 先に実際の候補をキャッシュへ固定し、choiceValidationでAI検証済みか内部的に区別して、
+      // 将来ユーザー操作による再検証を追加するときに対象を選べる余地を残す。
       const answerTerm = String(word.term || "").trim().toLowerCase();
       const candidateTerms = buildContextChoices(word, item)
         .map((choice) => String(choice.label || "").trim())
@@ -11452,7 +11717,7 @@ async function ensureContextItem(word) {
       item = { ...item, distractors: candidateTerms, choicesFinal: true };
 
       // 統合応答のfitが実際の全候補を覆う通常経路では、その場で除外を適用してAIを再度呼ばない。
-      // 正解がfitから漏れていても除外情報は活かし、statusはfailedとしてTTL後の再検証対象にする。
+      // 正解がfitから漏れていても除外情報は活かし、statusはfailedのまま自動再検証はしない。
       const integratedChoiceKeys = new Set(
         (Array.isArray(item.integratedChoices) ? item.integratedChoices : [])
           .map((term) => String(term).trim().toLowerCase()),
@@ -11462,28 +11727,15 @@ async function ensureContextItem(word) {
         candidateTerms.every((term) => integratedChoiceKeys.has(term.toLowerCase()));
       const integratedFitCoversCandidates =
         Array.isArray(item.fit) && integratedChoicesCoverCandidates;
+      item = {
+        ...item,
+        choiceValidation: integratedFitCoversCandidates ? "ai" : "local-only",
+      };
       if (integratedFitCoversCandidates) {
         item = applyContextValidation(item, candidateTerms, item.fit, word.term);
-      } else if (retryValidationOnly && networkAllowed() && candidateTerms.length > 0) {
-        // 追加のAI検証は、検証失敗TTLが切れた明示的な再検証時だけに限定する。
-        // 生成直後の補強語はローカル安全判定で担保し、AIが出した選択肢の検証は最初の応答内で完結させる。
-        try {
-          const choiceTerms = [String(word.term || "").trim(), ...candidateTerms];
-          const fit = await validateContextChoicesWithAI(
-            word,
-            item,
-            choiceTerms,
-            aiProvider,
-            aiKey,
-          );
-          item = applyContextValidation(item, candidateTerms, fit, word.term);
-        } catch {
-          // 再検証の失敗時も、既存の語形安全判定を通った候補で出題を続ける。
-          item = applyContextValidation(item, candidateTerms, null, word.term);
-        }
       } else if (willUseAI) {
         // fitだけが欠けた不完全応答では、同じ生成直後に無条件で2回目を呼ばない。
-        // 形態論フィルタ済み候補で続け、failedとしてTTL後の再検証に回す。
+        // 形態論フィルタ済み候補で続け、failedとして保存するが自動再検証はしない。
         item = applyContextValidation(item, candidateTerms, null, word.term);
       }
     }
@@ -11499,7 +11751,7 @@ async function ensureContextItem(word) {
       saveContextCache();
     }
     return item;
-  })();
+  });
   contextInflight.set(inflightKey, task);
   try {
     return await task;
@@ -11599,6 +11851,10 @@ function renderContextGenSettings() {
   if (!hint) return;
   const mode = contextGenMode();
   const provider = aiProviderForContext();
+  const cachePersistenceNote =
+    window.__wsStoragePersistent && !contextCacheStorageFailed
+      ? "生成した内容はこの端末に保存され、同じキーでは次回AIを呼びません。"
+      : "現在は生成内容を端末へ保存できていないため、このタブを閉じたり再読込した後は同じ語でもAIを再度呼ぶ可能性があります。ブラウザの保存設定や空き容量を確認してください。";
   if (mode === "off") {
     hint.textContent =
       "例文は作らず、詳細画面で取得済みの例文がある単語だけを空所補充で出題します。通信は発生しません。";
@@ -11606,7 +11862,7 @@ function renderContextGenSettings() {
     hint.textContent =
       "辞書API（dictionaryapi.dev）から実在の例文を取得し、その語を空所にします。誤答は同じ語の派生形（別の品詞）を datamuse.com から取得して優先採用し、足りない分は登録済みの他の単語から選びます。いずれもAPIキーは不要です。例文が見つからない単語は通常の単語出題になります。";
   } else if (provider) {
-    hint.textContent = `AI（${provider.name}）が1回の応答で例文・誤答を作成し、4択すべてが自然に入るか自己検証します。検証済みの内容はこの端末に保存され、同じキーでは次回AIを呼びません。AIが使えないときだけ辞書API（dictionaryapi.dev）へ切り替わり、誤答は datamuse.com の派生形と登録済みの単語から作ります。`;
+    hint.textContent = `AI（${provider.name}）が1回の応答で例文・誤答を作成し、4択すべてが自然に入るか自己検証します。${cachePersistenceNote} AIが使えないときだけ辞書API（dictionaryapi.dev）へ切り替わり、誤答は datamuse.com の派生形と登録済みの単語から作ります。`;
   } else {
     hint.textContent =
       "AIキーが未設定のため、いまは辞書API（キー不要）から例文を取得します。上の「外部AI設定」で無料APIキーを設定すると、AIが例文・誤答の作成と自己検証を1回で行うため、例文モードの品質が上がります。";
@@ -11614,6 +11870,7 @@ function renderContextGenSettings() {
 }
 
 function initContextGenSettings() {
+  migrateV10ContextCache();
   purgeLegacyContextCaches();
   renderContextGenSettings();
   elements.contextGenModeSelect?.addEventListener("change", (event) => {
@@ -11776,39 +12033,8 @@ function buildReviewQuiz() {
       }
       prefetchNextContextItem();
       if (item) {
-        // ここで残る stale は検証失敗TTLだけ。形態論判定済みの問題は表示しつつ、
-        // 例文生成をやり直さない短い再検証を裏で行う（キー変更などは item 自体を返さず上で待つ）。
-        if (contextEntryIsStale(contextCacheEntry(answer))) {
-          const pendingSession = reviewSession;
-          const pendingId = answer.id;
-          const previousDistractors = (item.distractors || [])
-            .map((term) => String(term).trim().toLowerCase())
-            .sort()
-            .join("\n");
-          ensureContextItem(answer)
-            .catch(() => null)
-            .then((refreshed) => {
-              const refreshedDistractors = (refreshed?.distractors || [])
-                .map((term) => String(term).trim().toLowerCase())
-                .sort()
-                .join("\n");
-              // 完全成功だけでなく、正解漏れ応答による安全な除外も現在の問題へ反映する。
-              // すでに解答済み、別セッション、別の語へ進んだ後は表示を壊さない。
-              if (
-                refreshed &&
-                (refreshed.validation?.status === "ok" ||
-                  refreshedDistractors !== previousDistractors) &&
-                reviewSession === pendingSession &&
-                reviewSession?.context &&
-                currentQuiz?.context &&
-                !currentQuiz.answered &&
-                currentQuiz.answer?.id === pendingId
-              ) {
-                currentQuiz = null;
-                renderQuiz();
-              }
-            });
-        }
+        // 検証失敗でもローカル安全判定済みの同じ問題を使い、自動再検証は仕掛けない。
+        // キー変更などで本当にstaleなら contextItemFor がnullを返し、上の待機経路へ入る。
         const contextChoices = buildContextChoices(answer, item);
         // 誤答が0件なら唯一の正解を押すだけで学習状態が進んでしまうため、空所補充にはしない。
         // 同じ answer の通常出題へそのまま落とし、既存の採点・SRS・回答速度判定を使う。
