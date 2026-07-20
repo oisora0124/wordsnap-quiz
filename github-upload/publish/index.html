@@ -379,6 +379,38 @@ h2 {
   background: var(--muted);
 }
 
+/* 状態表示に見えるだけでは「押せば更新できる」ことが伝わらないため、更新アイコンを添える。
+   通信中は回して、押した結果が起きていることをその場で分かるようにする。 */
+.sync-badge-refresh {
+  flex: none;
+  display: inline-block;
+  margin-left: 0.1rem;
+  font-size: 1.05em;
+  line-height: 1;
+  opacity: 0.65;
+}
+
+.sync-badge:hover .sync-badge-refresh,
+.sync-badge:focus-visible .sync-badge-refresh {
+  opacity: 1;
+}
+
+.sync-badge[data-state="busy"] .sync-badge-refresh {
+  opacity: 1;
+  animation: sync-spin 0.9s linear infinite;
+}
+
+/* サーバー保存が使えない場面（file:// など）では更新できない。タップは設定への誘導なので出さない。 */
+.sync-badge[data-state="off"] .sync-badge-refresh {
+  display: none;
+}
+
+@keyframes sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* 同期済み：緑＋やわらかな脈動 */
 .sync-badge[data-state="live"] {
   color: var(--accent-2);
@@ -3952,6 +3984,7 @@ textarea:focus-visible {
             <button id="syncBadge" class="sync-badge" type="button" data-state="idle" title="タップで今すぐ同期">
               <span class="sync-badge-dot" aria-hidden="true"></span>
               <span class="sync-badge-text">同期の確認中…</span>
+              <span class="sync-badge-refresh" aria-hidden="true">↻</span>
             </button>
             <button id="themeToggle" class="theme-toggle" type="button" aria-label="ダークテーマに切り替える">
               <span class="theme-toggle-icon" aria-hidden="true"></span>
@@ -6900,7 +6933,14 @@ function updateSyncBadge() {
   badge.dataset.state = state;
   if (elements.syncBadgeText) elements.syncBadgeText.textContent = text;
   badge.title = title;
-  badge.setAttribute("aria-label", `同期状態: ${text}`);
+  // ボタンなので、状態だけでなく押すと何が起きるかも読み上げる。
+  // サーバー保存が使えない場面では押しても更新できず、設定へ移動する。
+  const action = !syncServerAvailable()
+    ? "押すと設定を開きます"
+    : syncState.busy
+      ? "同期中です"
+      : "押すと今すぐ更新します";
+  badge.setAttribute("aria-label", `同期状態: ${text}。${action}`);
 }
 
 function stateSignature(state) {
