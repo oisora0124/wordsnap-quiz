@@ -14,6 +14,7 @@ const publicHtmlPath = join(publishDir, "index.html");
 const rootHtmlPath = join(repoDir, "index.html");
 const manifestPath = join(publishDir, "wordsnap.webmanifest");
 const workerPath = join(publishDir, "wordsnap-sw.js");
+const headersPath = join(publishDir, "_headers");
 const apiPath = join(projectDir, "functions", "api", "wordsnap-state.js");
 const schemaPath = join(projectDir, "schema.sql");
 const distributionPath = join(repoDir, "DISTRIBUTION.md");
@@ -21,7 +22,7 @@ const reviewEventSchemaPath = join(projectDir, "schemas", "review-event.schema.j
 const lexicalShadowSchemaPath = join(projectDir, "schemas", "lexical-shadow.schema.json");
 
 for (const path of [
-  publicHtmlPath, rootHtmlPath, manifestPath, workerPath, apiPath, schemaPath, distributionPath,
+  publicHtmlPath, rootHtmlPath, manifestPath, workerPath, headersPath, apiPath, schemaPath, distributionPath,
   reviewEventSchemaPath, lexicalShadowSchemaPath,
 ]) {
   assert.ok(existsSync(path), `required file is missing: ${path}`);
@@ -30,6 +31,7 @@ for (const path of [
 const publicHtml = read(publicHtmlPath);
 const rootHtml = read(rootHtmlPath);
 const worker = read(workerPath);
+const headers = read(headersPath);
 const api = read(apiPath);
 const schema = read(schemaPath);
 const distribution = read(distributionPath);
@@ -62,6 +64,8 @@ for (const model of ["gemini-3.5-flash", "qwen/qwen3.6-27b"]) {
 }
 
 assert.equal(rootHtml, publicHtml, "root index.html and publish/index.html must be identical");
+assert.match(headers, /^\/\*[\s\S]*?Referrer-Policy:\s*no-referrer\s*$/m,
+  "Cloudflare static responses must suppress referrers before the HTML meta policy is parsed");
 assert.match(publicHtml, /<title>\s*WordBank\s*<\/title>/i, "WordBank title is missing");
 const staticMarkup = publicHtml.slice(0, publicHtml.indexOf("<script>"));
 const staticIds = [...staticMarkup.matchAll(/\sid=(["'])([^"']+)\1/g)].map((match) => match[2]);
