@@ -6871,7 +6871,7 @@ const BUILTIN_POS_NOUN_AND_VERB = new Set(
   ("impact influence contrast conflict compromise reform decline blame collapse attribute " +
     "advocate regard reward range issue factor structure transition estimate associate " +
     "increase promise approach respect result challenge demand support process record " +
-    "present object project contract progress").split(" "),
+    "present object project contract progress attempt urge recall resolve burden labor").split(" "),
 );
 
 function builtinPosTag(term) {
@@ -7904,6 +7904,10 @@ function showSyncSwitchConfirm(foreignId, ownId) {
 // 古いキーのサーバー保存分は消せない（消す権限＝そのキーを知っていること自体なので、
 // 消しても意味がない）。この点は設定の説明文で明示している。
 async function issueNewSyncId() {
+  // 新しい保管場所への保存に失敗したときも他端末と同じ場所へ戻れるよう、
+  // 切り替え前のキーとリビジョンを退避してから発行処理を始める。
+  const oldId = syncState.id;
+  const oldRev = syncState.rev;
   let newId;
   try {
     newId = generateSyncId();
@@ -7947,10 +7951,24 @@ async function issueNewSyncId() {
         "live",
       );
     } else {
-      // 失敗理由は push 側が表示済み。単語が残っていることだけ補足する。
+      // 新キー向けに予約された再送を破棄してから旧キーへ戻す。失敗した新キーを
+      // localStorageやURLに残すと、再起動後に他端末とは別の保管場所へ分岐してしまう。
+      bumpSyncRequestGen();
+      syncState.id = oldId;
+      syncState.rev = oldRev;
+      syncState.connected = false;
+      try {
+        localStorage.setItem(SYNC_ID_KEY, oldId);
+      } catch {
+        // 保存領域が使えなくても、入力欄とURLを戻してこのタブの接続先は復旧する
+      }
+      if (elements.syncIdInput) elements.syncIdInput.value = oldId;
+      rememberSyncIdInUrl(oldId);
+      await connectWordsnapSync({ silent: true });
       setSyncStatus(
-        "新しいキーは発行しましたが、サーバーへ保存できませんでした。" +
-          "単語はこの端末に残っています。通信が戻れば自動で保存し直します。",
+        syncState.connected
+          ? "新しい個人キーの発行を中止して元のキーに戻しました。元のキーで同期を再開しました。"
+          : "新しい個人キーの発行を中止して元のキーに戻しました。通信が戻ったら再接続してください。",
         "error",
       );
     }
@@ -12824,18 +12842,23 @@ let contextBasisFallbackNote = "";
 //   (1) 出題語の派生形（名詞化など）＝品詞が違うので文法的に入らない
 //   (2) 品詞が分かっている登録語で、その品詞が出題語と違う
 // どちらでもない語は「意味は違うが空所には入り得る」可能性が残り、消去の根拠にならない。
-// その語が取り得る品詞をすべて集める（同梱表 → 登録済みの解決結果の順）。
+// その語が取り得る品詞をすべて集める。同梱表と解決済みデータの「和集合」を返す。
+// どちらかを優先すると片方しか知らない品詞を取りこぼす（例: 同梱表で動詞のattemptは
+// 名詞でも使えるが、表を優先するとDatamuseが返した ["v","n"] を捨ててしまい、
+// 「品詞が違うから空所に入らない」と誤判定する）。
 function posTagsFor(term, word = null) {
   const builtin = builtinPosTags(term);
-  if (builtin.length) return builtin;
   const source =
     word ||
     (appState.words || []).find(
       (w) => String(w.term || "").trim().toLowerCase() === String(term || "").trim().toLowerCase(),
     );
-  const tags = Array.isArray(source?.pos?.tags) ? source.pos.tags : [];
-  if (tags.length) return tags;
-  return source?.pos?.tag ? [source.pos.tag] : [];
+  const saved = Array.isArray(source?.pos?.tags)
+    ? source.pos.tags
+    : source?.pos?.tag
+      ? [source.pos.tag]
+      : [];
+  return [...new Set([...builtin, ...saved])];
 }
 
 function contextDistractorHasBasis(answer, term) {
@@ -14019,6 +14042,9 @@ function scheduleIdleTask(callback) {
 // 並んだ行だけが対象なので、クイズしか使わない利用者の単語はいつまでも埋まらなかった。
 // 例文モードを使う（＝外部送信に同意済みの）ときだけ、画面に関係なく背景で埋めていく。
 let posBackfillAllRunning = false;
+// 通信失敗は「品詞なし」として保存せず、同じ起動中だけ再問い合わせを止める。
+// 次回起動ではSetが空に戻るため、通信が復旧したあとに改めて補完できる。
+const posBackfillAllFailedTerms = new Set();
 async function backfillAllWordsPos() {
   if (posBackfillAllRunning) return;
   if (contextGenMode() === "off" || !contextNetworkConsented()) return;
@@ -14036,16 +14062,27 @@ async function backfillAllWordsPos() {
     }
     // 残りは少しずつ問い合わせる。外部APIを一気に叩かないよう間隔を空ける。
     for (let guard = 0; guard < 500; guard += 1) {
-      const batch = appState.words.filter((word) => !word.pos).slice(0, METADATA_IDLE_BATCH_SIZE);
+      const batch = appState.words
+        .filter(
+          (word) =>
+            !word.pos &&
+            !posBackfillAllFailedTerms.has(String(word.term || "").trim().toLowerCase()),
+        )
+        .slice(0, METADATA_IDLE_BATCH_SIZE);
       if (!batch.length) break;
       const resolved = await Promise.all(
         batch.map(async (word) => ({ word, result: await resolvePosOnce(word.term).catch(() => null) })),
       );
       for (const { word, result } of resolved) {
+        if (!result) {
+          // 通信失敗を永続的な「品詞なし」にせず、このセッション内の無限再試行だけ防ぐ。
+          posBackfillAllFailedTerms.add(String(word.term || "").trim().toLowerCase());
+          continue;
+        }
         const live = appState.words.find((item) => item.id === word.id);
         if (!live || normalizeTerm(live.term) !== normalizeTerm(word.term)) continue;
-        // 応答が無い語も「判定済み」として置き、同じ語を何度も問い合わせない
-        live.pos = { tag: result?.tag || null, tags: result?.tags || [] };
+        // APIが応答したうえで品詞不明なら、判定済みの「品詞なし」として保存してよい。
+        live.pos = { tag: result.tag || null, tags: result.tags || [] };
         changed = true;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 400));
