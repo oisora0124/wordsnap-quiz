@@ -280,6 +280,22 @@ test("simultaneous first writes create one revision and return the winner to the
   assert.equal(latest.data.stateRev, 1, "the race must advance the revision only once");
   assert.deepEqual(conflict.data.state, latest.data.state,
     "the losing writer must receive the complete winning state for safe merge");
+
+  const updates = await Promise.all([
+    requestApi(db, { method: "PUT", body: { baseRev: 1, state: sampleState("update-left") } }),
+    requestApi(db, { method: "PUT", body: { baseRev: 1, state: sampleState("update-right") } }),
+  ]);
+  const updateSuccess = updates.find((result) => result.response.status === 200);
+  const updateConflict = updates.find((result) => result.response.status === 409);
+  assert.ok(updateSuccess && updateConflict,
+    "concurrent updates from the same revision must produce one success and one conflict");
+  assert.equal(updateSuccess.data.stateRev, 2);
+  assert.equal(updateConflict.data.stateRev, 2);
+  const updatedLatest = await requestApi(db);
+  assert.equal(updatedLatest.data.stateRev, 2,
+    "the concurrent update race must advance the revision only once");
+  assert.deepEqual(updateConflict.data.state, updatedLatest.data.state,
+    "the losing updater must receive the complete winning state for safe merge");
 });
 
 test("unsupported methods and oversized input are rejected before D1 access", async () => {
