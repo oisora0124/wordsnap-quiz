@@ -11552,6 +11552,20 @@ function parseContextGenJson(text, word) {
   return { en, distractors, fit, integratedChoices: choiceTerms };
 }
 
+// 無料枠は「1分あたりの回数」が先に尽きることが多い。これも相手側の一時的な過負荷(5xx)も、
+// 時間をおけば直る障害なので、恒久的な失敗（キーが無効・モデルが無い等）と区別して印を付ける。
+// 恒久的な失敗と同じ扱いにすると、直れば作れたはずの語が低品質のまま固定されてしまう。
+function contextGenerationError(message, status) {
+  const error = new Error(message);
+  error.transient =
+    status === 429 ||
+    (Number(status) >= 500 && Number(status) <= 599) ||
+    /rate limit|resource[ _]?(has been )?exhausted|quota|overloaded|too many requests/i.test(
+      String(message),
+    );
+  return error;
+}
+
 async function generateContextWithGemini(word, key, signal, prompt = contextGenPrompt(word)) {
   const body = JSON.stringify({
     contents: [{ parts: [{ text: prompt }] }],
@@ -11576,7 +11590,7 @@ async function generateContextWithGemini(word, key, signal, prompt = contextGenP
   if (res.status === 404 || /not found|not supported/i.test(message)) {
     await noteUnavailableGeminiModel(key, model, signal);
   }
-  throw new Error(message);
+  throw contextGenerationError(message, res.status);
 }
 
 async function generateContextWithGroq(word, key, signal, prompt = contextGenPrompt(word)) {
@@ -11600,7 +11614,7 @@ async function generateContextWithGroq(word, key, signal, prompt = contextGenPro
     } catch {
       // keep status
     }
-    throw new Error(message);
+    throw contextGenerationError(message, res.status);
   }
   const data = await res.json();
   return String(data?.choices?.[0]?.message?.content || "").trim();
@@ -12155,10 +12169,14 @@ async function ensureContextItem(word) {
       mode !== "off" && !willUseAI && networkAllowed()
         ? fetchContextFromDictionary(word).catch(() => null)
         : null;
+    // 時間をおけば直る障害だったかを覚えておく。その結果を
+    // キャッシュへ焼き付けると、その語は以後ずっと辞書品質のままAIで作り直されない。
+    let aiTransientFailure = false;
     if (willUseAI && networkAllowed()) {
       try {
         item = await generateContextWithAI(word, aiProvider, aiKey);
-      } catch {
+      } catch (error) {
+        aiTransientFailure = Boolean(error?.transient);
         item = null;
       }
     }
@@ -12251,7 +12269,11 @@ async function ensureContextItem(word) {
     const entry = item
       ? { ...item, cap, at: Date.now(), lastUsed: Date.now() }
       : { failed: true, cap, at: Date.now(), lastUsed: Date.now() };
+    // 一時的な障害だった回は結果を残さない。失敗として保存すれば6時間出題されず、辞書結果を
+    // AIのcapで保存すれば「同じ能力で得た最良結果」とみなされ二度とAIで作り直されないため、
+    // どちらも一時的な障害を恒久化してしまう。今回の出題には item をそのまま使う。
     // 開始後にcapが変わった旧タスクは返却だけに留め、新しいcapの結果を後から上書きしない。
+    if (aiTransientFailure) return item;
     if (contextCapability() === cap) {
       cache[key] = entry;
       saveContextCache();
