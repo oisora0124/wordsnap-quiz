@@ -279,6 +279,17 @@ test("unsupported methods and oversized input are rejected before D1 access", as
   assert.equal(preflight.response.headers.get("access-control-allow-origin"), null);
   assert.equal(preflightDb.calls.length, 0);
 
+  for (const baseRev of [-1, 1.5, "not-a-revision"]) {
+    const invalidRevisionDb = new FakeD1();
+    const invalidRevision = await requestApi(invalidRevisionDb, {
+      method: "PUT",
+      body: { baseRev, state: sampleState(`invalid-rev-${baseRev}`) },
+    });
+    assert.equal(invalidRevision.response.status, 400);
+    assert.equal(invalidRevision.data.error, "invalid baseRev");
+    assert.equal(invalidRevisionDb.calls.length, 0);
+  }
+
   const lengthDb = new FakeD1();
   const tooLong = await requestApi(lengthDb, {
     method: "PUT",

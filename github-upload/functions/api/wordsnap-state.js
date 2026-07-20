@@ -215,8 +215,11 @@ export async function onRequest(context) {
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       return json({ error: "invalid body" }, 400);
     }
-    if (body.baseRev !== undefined && body.baseRev !== null && !Number.isFinite(Number(body.baseRev))) {
-      return json({ error: "invalid baseRev" }, 400);
+    if (body.baseRev !== undefined && body.baseRev !== null) {
+      const baseRev = Number(body.baseRev);
+      if (!Number.isInteger(baseRev) || baseRev < 0) {
+        return json({ error: "invalid baseRev" }, 400);
+      }
     }
 
     // --- state の取り出し：圧縮形式（新クライアント）とプレーン（旧クライアント）の両対応 ---
