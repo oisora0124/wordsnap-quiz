@@ -300,6 +300,82 @@ assert.equal(mergedLearning.status, "review",
 assert.equal(mergedLearning.srsUpdatedAt, validRecent.srsUpdatedAt,
   "a far-future learning timestamp must not survive synchronization");
 
+// 削除墓標は複数端末マージのデータ保護境界。実際の mergeAppStates を固定状態で動かし、
+// 削除語の復活防止と、別デッキの同名語を巻き込まないことを同時に確認する。
+const mergeStateStart = publicHtml.indexOf("function mergeAppStates(");
+const mergeStateEnd = publicHtml.indexOf("\nfunction applyMergedRemoteState(", mergeStateStart);
+assert.ok(mergeStateStart >= 0 && mergeStateEnd > mergeStateStart,
+  "application-state merge source is missing");
+const mergeStateSandbox = {};
+new Script(
+  "const LEARNING_SCHEMA_VERSION = 1;\n" +
+    "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];\n" +
+    "const defaultState = () => ({ words: [], decks: [] });\n" +
+    "const createId = () => 'generated-id';\n" +
+    "const sanitizeId = (value) => String(value || '').replace(/[^A-Za-z0-9_-]/g, '') || createId();\n" +
+    "const normalizeTerm = (value) => String(value || '').replace(/[()[\\]{}]/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();\n" +
+    "const deletionKeyForWord = (word) => `${word.deckId || ''} ${normalizeTerm(word.term)}`;\n" +
+    "const wordAddedMs = (word) => { const ms = Date.parse(word.addedAt); return Number.isNaN(ms) ? 0 : ms; };\n" +
+    "const trashKeyForWord = (word) => `${word.deckId || ''}:${normalizeTerm(word.term)}`;\n" +
+    "const sanitizeTrash = () => [];\n" +
+    "const mergeStreaks = (a, b) => a || b || {};\n" +
+    "const emptyEnrich = () => ({ examples: null, etymology: null, synonyms: null, collocations: null });\n" +
+    "const normalizeState = (value) => value;\n" +
+    `${publicHtml.slice(mergeStateStart, mergeStateEnd)}\n` +
+    "globalThis.__mergeAppStates = mergeAppStates;",
+  { filename: "application-state-merge-check.js" },
+).runInNewContext(mergeStateSandbox);
+const mergeDeckA = { id: "deck-a", name: "A", updatedAt: 0 };
+const mergeDeckB = { id: "deck-b", name: "B", updatedAt: 0 };
+const mergeWordFixture = (id, deckId, addedAt) => ({
+  id, deckId, term: "apple", meaning: "りんご", addedAt,
+  stats: { correct: 0, wrong: 0 }, history: [], enrich: {},
+  learning: { status: "new", srsUpdatedAt: 0 },
+});
+const mergeStateFixture = (words, decks, deletions = {}) => ({
+  learningSchemaVersion: 1, words, decks, deletions, trash: [], streak: {},
+  quizCounter: 0, activeDeckId: "all", savedAt: 0,
+});
+const oldAddedAt = "2026-07-20T00:00:00.000Z";
+const newAddedAt = "2026-07-20T02:00:00.000Z";
+const deletedAt = Date.parse("2026-07-20T01:00:00.000Z");
+const mergeStates = (local, remote) =>
+  mergeStateSandbox.__mergeAppStates(local, remote, { normalized: true });
+
+const deletedMerge = mergeStates(
+  mergeStateFixture([mergeWordFixture("old-a", "deck-a", oldAddedAt)], [mergeDeckA]),
+  mergeStateFixture([], [mergeDeckA], { "deck-a apple": deletedAt }),
+);
+assert.equal(deletedMerge.words.length, 0,
+  "a newer composite tombstone must prevent a deleted word from returning during merge");
+
+const crossDeckLegacyMerge = mergeStates(
+  mergeStateFixture([
+    mergeWordFixture("old-a", "deck-a", oldAddedAt),
+    mergeWordFixture("old-b", "deck-b", oldAddedAt),
+  ], [mergeDeckA, mergeDeckB]),
+  mergeStateFixture([], [mergeDeckA, mergeDeckB], { apple: deletedAt }),
+);
+assert.equal(crossDeckLegacyMerge.words.length, 2,
+  "a legacy term-only tombstone must not delete same-term words from multiple decks");
+
+const oneDeckDeletedMerge = mergeStates(
+  mergeStateFixture([
+    mergeWordFixture("old-a", "deck-a", oldAddedAt),
+    mergeWordFixture("old-b", "deck-b", oldAddedAt),
+  ], [mergeDeckA, mergeDeckB]),
+  mergeStateFixture([], [mergeDeckA, mergeDeckB], { "deck-a apple": deletedAt }),
+);
+assert.equal(oneDeckDeletedMerge.words.map((word) => word.deckId).join(","), "deck-b",
+  "a composite tombstone must delete only the matching deck's word");
+
+const readdedMerge = mergeStates(
+  mergeStateFixture([mergeWordFixture("new-a", "deck-a", newAddedAt)], [mergeDeckA]),
+  mergeStateFixture([], [mergeDeckA], { "deck-a apple": deletedAt }),
+);
+assert.equal(readdedMerge.words.length, 1,
+  "a word deliberately re-added after its tombstone must remain available");
+
 for (const column of ["key", "state", "rev", "updatedAt"]) {
   assert.match(schema, new RegExp(`\\b${column}\\b`), `D1 schema is missing ${column}`);
 }
