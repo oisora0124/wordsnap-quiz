@@ -10605,6 +10605,11 @@ const CONTEXT_CACHE_MAX = 1000;
 // tombstoneを本体より多く保持する。無限増加は件数と30日の保持期間の両方で防ぐ。
 const CONTEXT_TOMBSTONE_MAX = 5000;
 const CONTEXT_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// 保存失敗のたびに本体を追い出す割合。回を追うごとに強め、5回の試行内で本体を使い切れるようにする。
+const CONTEXT_EVICTION_FRACTIONS = [0.2, 0.4, 0.6, 0.8, 1];
+// v10移行が進まなかったときに次へ回す間隔。毎起動で全件のparse/merge/保存を繰り返さないため。
+const CONTEXT_MIGRATION_RETRY_MS = 24 * 60 * 60 * 1000;
+const CONTEXT_MIGRATION_RETRY_KEY = "wordsnap-ctxquiz:v10-retry-at";
 // 生成に失敗した語もキャッシュして無限リトライを防ぐが、通信断やレート制限のような
 // 一時的な失敗が永久に焼き付かないよう、一定時間で再挑戦できるようにする。
 const CONTEXT_FAILURE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -10715,6 +10720,22 @@ function migrateV10ContextCache() {
     return;
   }
   if (raw == null) return;
+  // 容量が足りず前回移行できなかった端末で、毎起動のたびに全件のparse/merge/保存を
+  // やり直さない。空きが増えるのを待って一定間隔で再挑戦する。
+  try {
+    const retryAt = Number(localStorage.getItem(CONTEXT_MIGRATION_RETRY_KEY));
+    if (retryAt && Date.now() < retryAt) return;
+  } catch {
+    // 読めない環境では従来どおり毎回試す
+  }
+  // クールダウンは移行を試す「前」に置く。容量が尽きた端末では移行の保存だけでなく、
+  // 失敗後にこの短い印を書くことすら失敗し、毎起動で全件処理を繰り返してしまうため。
+  // 移行できたら下で消す。
+  try {
+    localStorage.setItem(CONTEXT_MIGRATION_RETRY_KEY, String(Date.now() + CONTEXT_MIGRATION_RETRY_MS));
+  } catch {
+    // 書けなければ従来どおり次回も試すだけで、データは失わない
+  }
   let legacy = null;
   try {
     legacy = JSON.parse(raw);
@@ -10739,9 +10760,12 @@ function migrateV10ContextCache() {
   // v11側に同じ語の本体があれば新形式を優先する。ただし旧キーが残っている間のtombstoneは、
   // 前回の容量不足による部分移行で作られた可能性があるため、v10の本体を再び移行対象に戻す。
   // これにより「一度縮小したv11」が以後ずっと完全なv10データを覆い隠すことを防ぐ。
+  // v11側の失敗記録も同じ理由でv10の成功本体を上書きさせない。上書きを許すと、成功済みの
+  // 例文を失ったうえで「非tombstoneだから移行済み」と数えられ、旧キーごと消えてしまう。
   contextQuizCache = { ...migrated };
   for (const [key, entry] of Object.entries(current)) {
-    if (entry?.tombstone && migrated[key]) continue;
+    const legacyBody = migrated[key] && !migrated[key].tombstone && !migrated[key].failed;
+    if (legacyBody && (entry?.tombstone || entry?.failed)) continue;
     contextQuizCache[key] = entry;
   }
   for (const entry of Object.values(contextQuizCache)) {
@@ -10765,6 +10789,22 @@ function migrateV10ContextCache() {
   let saved = saveContextCache({ preferBodyKeys: migratedBodyKeys });
   let completed = saved && allBodiesPersisted();
 
+  // 旧キーを消してからv11を書くあいだは、どちらも揃っていない瞬間ができる。別タブの書込み等で
+  // 復元に失敗すると本体がメモリ上だけになるため、復元は数回やり直し、それでも戻せなければ
+  // 保存できていないことをUIへ出す（黙ってデータを失ったように見せない）。
+  const restoreLegacy = () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        localStorage.setItem(CONTEXT_QUIZ_V10_CACHE_KEY, raw);
+        return true;
+      } catch {
+        // 別タブの一時的な書込みなどで空きが戻ることがあるため、同じ試行内でやり直す
+      }
+    }
+    setContextCacheStorageFailed(true);
+    return false;
+  };
+
   // v10とv11の二重保持だけが容量超過の原因なら、旧文字列をメモリに退避して一度だけ場所を空ける。
   // v11の全本体を確認できなければ元のv10を戻すため、容量逼迫端末でも最後の完全なコピーを失わない。
   if (!saved && [...migratedBodyKeys].every((key) => !contextQuizCache[key]?.tombstone)) {
@@ -10772,21 +10812,22 @@ function migrateV10ContextCache() {
       localStorage.removeItem(CONTEXT_QUIZ_V10_CACHE_KEY);
       saved = saveContextCache({ preferBodyKeys: migratedBodyKeys });
       completed = saved && allBodiesPersisted();
-      if (!completed) localStorage.setItem(CONTEXT_QUIZ_V10_CACHE_KEY, raw);
+      if (!completed) restoreLegacy();
     } catch {
-      try {
-        localStorage.setItem(CONTEXT_QUIZ_V10_CACHE_KEY, raw);
-      } catch {
-        // v11も保存できていないため通常は元へ戻せる。戻せない保存環境ではメモリ上の全本体を使い続ける
-      }
+      restoreLegacy();
     }
   }
   if (completed) {
     try {
       localStorage.removeItem(CONTEXT_QUIZ_V10_CACHE_KEY);
+      localStorage.removeItem(CONTEXT_MIGRATION_RETRY_KEY);
     } catch {
       // 旧キーが残っても次回また同じ内容を安全にマージできる
     }
+    // 移行中は全本体をLRU保護したため件数上限を超えたままになり得る。保護を外して一度
+    // 保存し直し、上限まで詰める。ここで超過分は本体からtombstoneへ縮小されるだけで、
+    // AIの再呼び出しは起きない。
+    saveContextCache();
   }
 }
 
@@ -10974,6 +11015,12 @@ function saveContextCache(options = {}) {
         cache[k] = v;
         continue;
       }
+      // v10移行中の本体は、より新しいだけの tombstone・失敗記録に負けさせない。時刻だけで
+      // 決めると、旧キーの成功例文を失ったまま「非tombstoneだから移行済み」と数えられ、
+      // v10ごと消えてその語が未試行に戻る（＝同じ語へ再課金される）。
+      if (preferBodyKeys?.has(k) && !mine.tombstone && !mine.failed && (v.tombstone || v.failed)) {
+        continue;
+      }
       // tombstoneと本体が競合した場合は、それぞれの作成・追い出し時刻が新しい方を採る。
       // tombstoneへlastUsed等を足すと軽量化の意味が薄れるため、この分岐では形を変えない。
       if (v.tombstone || mine.tombstone) {
@@ -11021,12 +11068,17 @@ function saveContextCache(options = {}) {
     } catch {
       if (attempt >= 4) break;
       const remainingBodies = Object.values(cache).filter((entry) => entry && !entry.tombstone).length;
-      const count = Math.max(1, Math.ceil(remainingBodies * 0.2));
+      // 本体を追い出してもtombstoneが残るためAIは再度呼ばれない（安い縮小）。一方tombstoneを
+      // 消すとその語は未試行に戻り、同じ語へもう一度APIキーの枠を使う（高い縮小）。
+      // そこで本体から先に使い切る。毎回20%だけでは本体が多い端末で試行を使い切っても
+      // 本体が尽きず、tombstoneの整理へ永久に到達しないため、試行ごとに割合を強める。
+      const count = Math.max(1, Math.ceil(remainingBodies * (CONTEXT_EVICTION_FRACTIONS[attempt] || 1)));
       const evicted = evictOldestContextEntries(cache, count, preferBodyKeys);
-      // まず本体を軽量化し、それでも次の保存に失敗したらtombstoneも同じ試行枠内で減らす。
-      // 本体が多いだけで全再試行を使い切り、tombstoneを一度も整理できない状態を防ぐ。
+      // 本体をもう削れないときだけtombstoneへ手を付ける。ただしv10移行中（preferBodyKeys指定）は
+      // 保護のせいで本体を削れず必ずここへ落ちるため、移行では一切消さない。試行記録を失って
+      // 移行完了にしてしまうと、その語は未試行に戻り再課金されるので、移行未完了のまま旧キーを残す。
       const tombstoneCount = Object.values(cache).filter((entry) => entry?.tombstone).length;
-      const discarded = attempt > 0 || !evicted
+      const discarded = !evicted && !preferBodyKeys
         ? discardOldestContextTombstones(cache, Math.max(1, Math.ceil(tombstoneCount * 0.2)))
         : 0;
       if (!evicted && !discarded) break;
@@ -12034,7 +12086,7 @@ function renderContextGenSettings() {
   const provider = aiProviderForContext();
   const cachePersistenceNote =
     window.__wsStoragePersistent && !contextCacheStorageFailed
-      ? "生成した内容と試行記録はこの端末に保存され、正常に生成できた語は同じキーで次回AIを呼びません。AI・辞書・保存例文のすべてで生成に失敗した語だけは、一時的な障害を残し続けないため6時間後に再試行します。保存容量を超えると古い生成内容は軽量な試行記録だけ残して削除され、その語は通常出題になります。試行記録も上限・保持期間を超えると古いものから消えます。"
+      ? "生成した内容と試行記録はこの端末に保存され、正常に生成できた語は同じ設定・同じキーのあいだ次回AIを呼びません。AI・辞書・保存例文のすべてで生成に失敗した語は、一時的な障害を残し続けないため6時間後に再試行します。APIキーを変えたときや、辞書のみからAIを有効にしたときは、品質が変わるため作り直します。保存容量を超えると古い生成内容は軽量な試行記録だけ残して削除され、その語は通常出題になります。試行記録も上限・保持期間を超えると古いものから消えます。"
       : "現在は生成内容を端末へ保存できていないため、このタブを閉じたり再読込した後は同じ語でもAIを再度呼ぶ可能性があります。ブラウザの保存設定や空き容量を確認してください。";
   if (mode === "off") {
     hint.textContent =
