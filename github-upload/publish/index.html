@@ -295,6 +295,39 @@ h2 {
   padding: 40px 0 72px;
 }
 
+/* ---------- 起動時の導入アニメーション ----------
+   起動直後に主要ブロックを少しだけ持ち上げて出す。演出は一度きりで、
+   本文の読み込みや操作を遅らせないよう短く（0.5秒以内に終わる）。
+   JS が動かない環境で中身が見えなくならないよう、既定は「見えている状態」にし、
+   .is-booting が付いている間だけ隠す（付けるのは JS）。 */
+.is-booting .boot-in {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.boot-in {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 0.42s ease-out,
+    transform 0.42s ease-out;
+}
+
+/* 上から順に少しずつ遅らせて、視線が自然に下りていくようにする。
+   要素の種類がまちまち（section/nav/div）で :nth-of-type は当てにならないため、
+   遅延はクラスで明示する。 */
+.boot-in.boot-2 { transition-delay: 0.07s; }
+.boot-in.boot-3 { transition-delay: 0.14s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .is-booting .boot-in,
+  .boot-in {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
 /* データが保存できない環境（file:// の iPhone / プライベートブラウズ等）で出す警告 */
 .storage-warning {
   display: flex;
@@ -519,6 +552,167 @@ h2 {
 @keyframes sync-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+
+/* ---------- 学習カレンダー（連続記録バッジから開く）---------- */
+.streak-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.streak-panel-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.streak-panel-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.streak-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.streak-stat {
+  flex: 1 1 auto;
+  min-width: 96px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.streak-stat-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.streak-stat-value {
+  display: block;
+  font-size: 1.1rem;
+  font-weight: 750;
+}
+
+.streak-cal-nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
+.streak-month-label {
+  min-width: 8.5rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* 画面幅いっぱいに伸ばすとセルが巨大になるので、カレンダーだけ幅を抑えて中央に置く */
+.streak-cal-weekdays,
+.streak-cal {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  width: 100%;
+  max-width: 380px;
+  margin: 0 auto;
+}
+
+.streak-cal-weekdays span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* 日セル。学習量に応じて4段階で濃くする（色だけに頼らず件数も出す） */
+.streak-day {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 0.72rem;
+  line-height: 1.1;
+}
+
+.streak-day.is-empty {
+  border-color: transparent;
+  background: transparent;
+  cursor: default;
+}
+
+.streak-day-num {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.streak-day[data-level="4"] .streak-day-num {
+  color: #fff;
+}
+
+.streak-day-count {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.streak-day[data-level="1"] { background: color-mix(in srgb, var(--success) 16%, var(--surface-2)); }
+.streak-day[data-level="2"] { background: color-mix(in srgb, var(--success) 32%, var(--surface-2)); }
+.streak-day[data-level="3"] { background: color-mix(in srgb, var(--success) 50%, var(--surface-2)); }
+.streak-day[data-level="4"] {
+  color: #fff;
+  background: color-mix(in srgb, var(--success) 72%, var(--surface-2));
+}
+.streak-day[data-level="4"] .streak-day-count { color: rgba(255, 255, 255, 0.85); }
+
+.streak-day.is-today {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.streak-day.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.streak-day-detail {
+  min-height: 1.2rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.streak-day-detail strong {
+  color: var(--ink);
+}
+
+.streak-day-terms {
+  margin-top: 4px;
+  word-break: break-word;
+}
+
+.streak-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
 }
 
 .hero-card {
@@ -3965,7 +4159,7 @@ textarea:focus-visible {
           <span id="storageWarningDetail"></span>
         </div>
       </div>
-      <section class="hero">
+      <section class="hero boot-in">
         <div>
           <div class="hero-title">
             <span class="brand-mark" aria-hidden="true"><span class="brand-lines"></span></span>
@@ -3998,6 +4192,30 @@ textarea:focus-visible {
         </div>
       </section>
 
+      <!-- 連続記録バッジから開く学習カレンダー。日次ログは別に持たず、単語ごとの history
+           （{at, correct}）からその場で集計する。専用ログを新設すると過去の学習が空欄に
+           なってしまうため、既存データを遡って使えるこの形にした。 -->
+      <section id="streakPanel" class="streak-panel" aria-labelledby="streakPanelTitle" hidden>
+        <div class="streak-panel-head">
+          <h2 id="streakPanelTitle">学習カレンダー</h2>
+          <button id="streakPanelClose" class="ghost mini" type="button">閉じる</button>
+        </div>
+        <div id="streakSummary" class="streak-summary"></div>
+        <div class="streak-cal-nav">
+          <button id="streakPrevMonth" class="ghost mini" type="button" aria-label="前の月へ">‹</button>
+          <span id="streakMonthLabel" class="streak-month-label" aria-live="polite"></span>
+          <button id="streakNextMonth" class="ghost mini" type="button" aria-label="次の月へ">›</button>
+        </div>
+        <div class="streak-cal-weekdays" aria-hidden="true">
+          <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
+        </div>
+        <div id="streakCalendar" class="streak-cal"></div>
+        <div id="streakDayDetail" class="streak-day-detail" role="status"></div>
+        <p class="streak-note">
+          学習の記録は単語ごとに直近50回まで保存されます。それより前の古い履歴は表示されないことがあります。
+        </p>
+      </section>
+
       <!-- 【他人の共有リンク対策】URLの ?w= がこの端末の保存済みキーと異なるときだけ表示。
            確認するまでリンク先へは何も送信しない（詳細は showSyncSwitchConfirm）。 -->
       <div id="syncSwitchBanner" class="sync-switch-banner" role="alertdialog" aria-live="polite" hidden>
@@ -4026,7 +4244,7 @@ textarea:focus-visible {
         </div>
       </div>
 
-      <nav class="step-tabs" aria-label="学習ステップ" role="tablist">
+      <nav class="step-tabs boot-in boot-2" aria-label="学習ステップ" role="tablist">
         <button
           id="tab-import"
           class="step-tab active"
@@ -4309,7 +4527,7 @@ accurate 正確な"
               </select>
             </label>
             <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false">範囲</button>
-            <label class="quiz-setup-check">
+            <label class="quiz-setup-check" title="順番をランダムにします。例文モードを一度使って同意済みなら、出題形式（意味の4択／例文の空所補充）もランダムに混ざります。">
               <input id="quizShuffle" type="checkbox" checked />
               シャッフル
             </label>
@@ -4532,10 +4750,18 @@ accurate 正確な"
                 </label>
                 <button id="syncCopyLinkButton" type="button" title="このページのリンクをクリップボードにコピーします。別の端末で開くと同じデータになります。">個人リンクをコピー</button>
                 <button id="syncPullButton" class="secondary" type="button" title="サーバーから最新のデータを取得して、この端末に反映します。">今すぐ読み込む</button>
+                <button id="syncNewKeyButton" class="ghost" type="button" title="新しい個人キーを発行し、今のデータをそのまま引き継ぎます。">新しい個人キーを発行</button>
               </div>
               <p class="settings-desc">
                 <strong>個人リンクをコピー</strong>＝このページのリンクをコピー（別端末で開くと同じデータに）。
                 <strong>今すぐ読み込む</strong>＝サーバーの最新をこの端末に取り込み。どちらも現在の単語は消えません。
+              </p>
+              <p class="settings-desc">
+                <strong>新しい個人キーを発行</strong>＝キーが他人に知られたときに使います。
+                今の単語と成績はそのまま新しいキーへ引き継がれ、消えません。ただし
+                <strong>古いリンクを知っている人は、切り替え時点までのデータを引き続き見られます</strong>
+                （サーバー上の古い保存分は残るため）。<strong>他の端末は古いキーのまま</strong>なので、
+                新しい個人リンクを開き直してください。
               </p>
               <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
               <div class="share-tool">
@@ -5655,6 +5881,7 @@ const elements = {
   syncGenerateButton: document.querySelector("#syncGenerateButton"),
   syncCopyLinkButton: document.querySelector("#syncCopyLinkButton"),
   syncPullButton: document.querySelector("#syncPullButton"),
+  syncNewKeyButton: document.querySelector("#syncNewKeyButton"),
   syncForcePushButton: document.querySelector("#syncForcePushButton"),
   syncForcePullButton: document.querySelector("#syncForcePullButton"),
   syncBadge: document.querySelector("#syncBadge"),
@@ -5674,6 +5901,14 @@ const elements = {
   vibrateToggle: document.querySelector("#vibrateToggle"),
   streakBadge: document.querySelector("#streakBadge"),
   streakBadgeCount: document.querySelector("#streakBadgeCount"),
+  streakPanel: document.querySelector("#streakPanel"),
+  streakPanelClose: document.querySelector("#streakPanelClose"),
+  streakSummary: document.querySelector("#streakSummary"),
+  streakMonthLabel: document.querySelector("#streakMonthLabel"),
+  streakPrevMonth: document.querySelector("#streakPrevMonth"),
+  streakNextMonth: document.querySelector("#streakNextMonth"),
+  streakCalendar: document.querySelector("#streakCalendar"),
+  streakDayDetail: document.querySelector("#streakDayDetail"),
   resumeQuizButton: document.querySelector("#resumeQuizButton"),
   downloadToolButton: document.querySelector("#downloadToolButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
@@ -6339,10 +6574,13 @@ function localDateString(date = new Date()) {
 }
 
 // 連続学習日数の形を正規化する。count と last（YYYY-MM-DD）が揃っていなければ未学習扱い。
+// best は「過去最高の連続日数」。単語ごとの history は直近50件までしか残らないため、
+// 履歴からの再計算だけでは古い記録が失われる。達成した時点で保存し、減らさない。
 function normalizeStreak(raw) {
   const count = Math.max(0, Math.floor(Number(raw?.count) || 0));
   const last = /^\d{4}-\d{2}-\d{2}$/.test(String(raw?.last || "")) ? String(raw.last) : "";
-  return count > 0 && last ? { count, last } : { count: 0, last: "" };
+  const best = Math.max(0, Math.floor(Number(raw?.best) || 0), count);
+  return count > 0 && last ? { count, last, best } : { count: 0, last: "", best };
 }
 
 // YYYY-MM-DD 同士が暦日で1日違い（b が a の翌日）かを判定する
@@ -6360,13 +6598,17 @@ function isNextDayString(a, b) {
 function mergeStreaks(a, b) {
   const x = normalizeStreak(a);
   const y = normalizeStreak(b);
-  if (x.last === y.last) return x.count >= y.count ? x : y;
+  // 過去最高は「どちらかの端末で達成した記録」なので、常に大きい方を残す
+  const best = Math.max(x.best, y.best);
+  const withBest = (streak) => ({ ...streak, best: Math.max(best, streak.count) });
+  if (x.last === y.last) return withBest(x.count >= y.count ? x : y);
   const newer = x.last > y.last ? x : y;
   const older = x.last > y.last ? y : x;
   if (older.last && isNextDayString(older.last, newer.last)) {
-    return { count: Math.max(newer.count, older.count + 1), last: newer.last };
+    const count = Math.max(newer.count, older.count + 1);
+    return { count, last: newer.last, best: Math.max(best, count) };
   }
-  return newer;
+  return withBest(newer);
 }
 
 // 削除した単語の墓標（term→削除時刻）。これを同期で共有することで、
@@ -7602,6 +7844,69 @@ function showSyncSwitchConfirm(foreignId, ownId) {
   });
 }
 
+// 【個人キーの再発行】キーが他人に知られたときの引っ越しを、アプリ内で完結させる。
+// adoptForeignSyncId が「相手のデータを取りに行く」のに対し、こちらは
+// 「今のデータを持ったまま新しい保管場所へ移る」。ローカルは一切書き換えず、
+// 新しいキーで保存し直すだけなので、途中で失敗しても単語は失われない。
+// 古いキーのサーバー保存分は消せない（消す権限＝そのキーを知っていること自体なので、
+// 消しても意味がない）。この点は設定の説明文で明示している。
+async function issueNewSyncId() {
+  let newId;
+  try {
+    newId = generateSyncId();
+  } catch {
+    setSyncStatus(
+      "安全な乱数が使えないため、新しいキーを発行できません。ブラウザを最新版に更新してください。",
+      "error",
+    );
+    return;
+  }
+  // 旧キーへの自動同期を止め、遅れて届く応答が新キーへ混ざらないようにする
+  window.clearInterval(syncState.pollTimer);
+  window.clearTimeout(syncState.pushTimer);
+  syncState.pushQueued = false;
+  bumpSyncRequestGen();
+  syncState.id = newId;
+  syncState.rev = 0; // 新しい保管場所なので最初のリビジョンから始める
+  syncState.connected = false;
+  try {
+    localStorage.setItem(SYNC_ID_KEY, newId);
+  } catch {
+    // 保存できなくてもこのタブでは動く。URLにも入るので開き直しで復元できる
+  }
+  if (elements.syncIdInput) elements.syncIdInput.value = newId;
+  rememberSyncIdInUrl(newId);
+  if (!syncServerAvailable()) {
+    setSyncStatus("新しい個人キーを発行しました（このページではサーバー保存は使えません）。");
+    return;
+  }
+  setSyncBusy(true);
+  setSyncStatus("新しい個人キーで保存し直しています…");
+  try {
+    // pushWordsnapState は例外を投げず、内部で状態表示まで行う。
+    // 成否は connected で判断する（成功時にだけ true が立つ）。
+    await pushWordsnapState({ force: true });
+    if (syncState.connected) {
+      startSyncPolling();
+      setSyncStatus(
+        `✓ 新しい個人キーを発行しました（${appState.words.length}語を引き継ぎ）。` +
+          "「個人リンクをコピー」で、別の端末も新しいキーに切り替えてください。",
+        "live",
+      );
+    } else {
+      // 失敗理由は push 側が表示済み。単語が残っていることだけ補足する。
+      setSyncStatus(
+        "新しいキーは発行しましたが、サーバーへ保存できませんでした。" +
+          "単語はこの端末に残っています。通信が戻れば自動で保存し直します。",
+        "error",
+      );
+    }
+  } finally {
+    setSyncBusy(false);
+    updateSyncBadge();
+  }
+}
+
 // ユーザーが「切り替える」を選んだ後の処理：切り替え先のデータを取得し、
 // forcePullReplace と同じ「置き換え」で表示する。マージ・pushはしない＝
 // この端末の単語が切り替え先のサーバー領域へ勝手に送られることはない。
@@ -7805,6 +8110,11 @@ function initWordsnapSync() {
     }
   });
   elements.syncPullButton?.addEventListener("click", () => pullWordsnapState());
+  // キーの引っ越しは取り返しがつかない（古いリンクは他端末で使えなくなる）ため2段階タップ
+  elements.syncNewKeyButton?.addEventListener("click", () => {
+    if (!armDangerButton(elements.syncNewKeyButton, "もう一度押すと発行")) return;
+    issueNewSyncId();
+  });
   elements.syncForcePushButton?.addEventListener("click", () => forcePushOverwrite());
   elements.syncForcePullButton?.addEventListener("click", () => forcePullReplace());
   // 【別の端末と同じキーで同期】貼り付けたキー/リンクへ、URLバナーと同じ安全経路
@@ -10474,6 +10784,9 @@ function persistReviewProgress() {
         label: reviewSession.label,
         total: reviewSession.total,
         context: reviewSession.context, // 再開時に例文モードを維持する
+        // 形式の混在と、その割り当てを決める種。再開しても同じ出題になるよう一緒に保存する
+        mixFormat: reviewSession.mixFormat,
+        formatSeed: reviewSession.formatSeed,
         missedIds: reviewSession.missedIds,
         savedAt: Date.now(),
       }),
@@ -10538,6 +10851,8 @@ function resumeSavedReview() {
     total: Number(saved.total) || saved.allIds.length,
     label: String(saved.label || "復習"),
     context: Boolean(saved.context), // 例文モードかどうかも復元する
+    mixFormat: Boolean(saved.mixFormat),
+    formatSeed: String(saved.formatSeed || ""),
     missedIds: Array.isArray(saved.missedIds) ? saved.missedIds : [],
   };
   reviewResult = null; // 再開したら前回の結果表示は消す
@@ -10564,12 +10879,19 @@ function startReview(ids, options = {}) {
     queue = shuffle(valid.slice());
   }
   const label = options.label || "復習";
+  // 「シャッフル」を選んだ通常セッションでは、単語の順番だけでなく出題形式も混ぜる
+  // （意味の4択／例文の空所補充）。例文モードは形式を選んで入っているので混ぜない。
+  const shuffled = options.order !== "priority" && options.shuffle !== false;
   reviewSession = {
     allIds: valid,
     queue,
     total: valid.length,
     label,
     context: Boolean(options.context), // 例文モードか（true なら文中で意味を問う）
+    mixFormat: shuffled && !options.context,
+    // 形式は「セッションの種＋単語ID」から決める。同じ問題を組み立て直しても
+    // 形式が変わらず、再開しても同じ出題になる（乱数を都度引くと再描画で入れ替わる）。
+    formatSeed: Math.random().toString(36).slice(2, 10),
     missedIds: [], // このセッション中に一度でも間違えた単語ID（完走時のサマリ用）
   };
   reviewResult = null; // 新しいセッションを始めたら前回の結果表示は消す
@@ -10900,6 +11222,9 @@ const CONTEXT_MIGRATION_RETRY_KEY = "wordsnap-ctxquiz:v10-retry-at";
 // 生成に失敗した語もキャッシュして無限リトライを防ぐが、通信断やレート制限のような
 // 一時的な失敗が永久に焼き付かないよう、一定時間で再挑戦できるようにする。
 const CONTEXT_FAILURE_TTL_MS = 6 * 60 * 60 * 1000;
+// レート制限や相手側の過負荷（429・5xx）で作った結果を作り直すまでの間隔。
+// 短すぎると制限中にリクエストを増やしてしまい、長すぎると復旧後も低品質のまま残る。
+const CONTEXT_TRANSIENT_RETRY_MS = 15 * 60 * 1000;
 // 参照のたびに全件JSONを書き直すと容量・書込み回数を浪費するため、LRU時刻は間引いて保存する。
 const CONTEXT_TOUCH_ENTRY_INTERVAL_MS = 30 * 60 * 1000;
 const CONTEXT_TOUCH_SAVE_INTERVAL_MS = 5 * 60 * 1000;
@@ -11448,6 +11773,12 @@ function contextEntryIsStale(entry) {
     cachedRank === CONTEXT_SRC_RANK.ai &&
     currentRank === CONTEXT_SRC_RANK.ai &&
     entry.cap !== currentCap;
+  // 一時的な障害の最中に作った結果。その時間までは使い回して再生成を仕掛けず
+  // （制限中にリクエストを増やさない）、過ぎたらAIで作り直す。
+  if (Number(entry.retryAt) > 0) {
+    if (Date.now() >= Number(entry.retryAt)) return true;
+    if (!entry.tombstone) return false;
+  }
   // tombstoneも通常の成功記録と同じ能力ランクで扱う。AIから辞書へ下げた変更では上書きせず、
   // 元のAI設定へ戻したときに同じ語へ再POSTしない。上位手段への変更とAI識別子変更だけ更新する。
   if (entry.tombstone) {
@@ -11678,6 +12009,22 @@ async function generateContextWithAI(word, provider = aiProviderForContext(), ke
     const text = await provider.generate(word, apiKey, controller.signal);
     const parsed = parseContextGenJson(text, word);
     return parsed ? { ...parsed, src: "ai" } : null;
+  } catch (error) {
+    // 通信断・タイムアウト（Abort）・モデル一覧取得の失敗は、HTTP応答を伴わないため
+    // contextGenerationError を通らず transient が付かない。これらも時間をおけば直る
+    // 障害なので、ここで印を付けてから投げ直す。付いていないと辞書結果がAIの能力で
+    // 保存され、復旧後もその語がAIで作り直されなくなる。
+    if (error && !error.transient) {
+      const message = String(error.message || "");
+      const isNetworkOrTimeout =
+        error.name === "AbortError" ||
+        error.name === "TypeError" ||
+        /network|failed to fetch|timeout|load failed/i.test(message);
+      // モデル一覧の取得失敗（Geminiの生成前GET）も一時的に落ちているだけのことがある
+      const isModelDiscovery = /model/i.test(message) && !/not found|not supported/i.test(message);
+      if (isNetworkOrTimeout || isModelDiscovery) error.transient = true;
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -12332,14 +12679,15 @@ async function ensureContextItem(word) {
     const cache = ctxCache();
     // src は実際に得られた取得元、cap は開始時に使えた最良の手段として別々に残す。
     // AI失敗後の辞書成功も「その能力で得た最良結果」なので、能力が上がるまでは再生成しない。
-    const entry = item
-      ? { ...item, cap, at: Date.now(), lastUsed: Date.now() }
-      : { failed: true, cap, at: Date.now(), lastUsed: Date.now() };
-    // 一時的な障害だった回は結果を残さない。失敗として保存すれば6時間出題されず、辞書結果を
-    // AIのcapで保存すれば「同じ能力で得た最良結果」とみなされ二度とAIで作り直されないため、
-    // どちらも一時的な障害を恒久化してしまう。今回の出題には item をそのまま使う。
+    //
+    // 一時的な障害（429・5xx等）だった回は retryAt を添える。結果を一切保存しないと、
+    // 呼び出し側が再描画したときに「未試行」と見なされて同じ語のAI生成が即座に走り直し、
+    // レート制限中にリクエストを増やし続けてしまう（画面も生成待ちのまま止まる）。
+    // 保存はするが retryAt を過ぎたら stale になるので、恒久的に焼き付くこともない。
+    const retryAt = aiTransientFailure ? Date.now() + CONTEXT_TRANSIENT_RETRY_MS : 0;
+    const base = { cap, at: Date.now(), lastUsed: Date.now(), ...(retryAt ? { retryAt } : {}) };
+    const entry = item ? { ...item, ...base } : { failed: true, ...base };
     // 開始後にcapが変わった旧タスクは返却だけに留め、新しいcapの結果を後から上書きしない。
-    if (aiTransientFailure) return item;
     if (contextCapability() === cap) {
       cache[key] = entry;
       saveContextCache();
@@ -12394,9 +12742,12 @@ function buildContextChoices(answer, item) {
 
 // 解いている間に次の問題を裏で用意しておく（待ち時間を体感させないため）。
 function prefetchNextContextItem() {
-  if (!reviewSession || !reviewSession.context) return;
+  if (!reviewSession) return;
   const nextId = reviewSession.queue[1];
   if (!nextId) return;
+  // 例文モードでは常に、シャッフルの混在では次が例文に当たる語のときだけ先読みする。
+  // 通常出題に当たる語まで先読みすると、使わない例文のためにAPIを消費してしまう。
+  if (!reviewSession.context && !mixedFormatUsesContext(reviewSession, nextId)) return;
   const next = appState.words.find((w) => w.id === nextId);
   if (next && !contextAttempted(next)) ensureContextItem(next).catch(() => {});
 }
@@ -12585,6 +12936,28 @@ function renderQuizPromptWord(quiz) {
   }
 }
 
+// シャッフル時に、この単語を例文の空所補充で出すかを決める。
+// セッションの種と単語IDから決めるので、同じ単語なら何度呼んでも同じ答えになる。
+function mixedFormatUsesContext(session, wordId) {
+  if (!session?.mixFormat) return false;
+  // 例文づくりは単語と訳を外部サービスへ送る。「例文で解く」では開始前に同意を取るが、
+  // 通常のシャッフルにはその確認が無いので、同意済みでない限り形式を混ぜない
+  // （同意なしに送信が始まってしまうため）。設定で「作らない」にしている場合も混ぜない。
+  if (contextGenMode() === "off" || !contextNetworkConsented()) return false;
+  const source = `${session.formatSeed || ""}:${wordId}`;
+  // FNV-1a + 最後に撹拌。単純な hash*31+c だと最下位ビットが「文字コードの偶奇の合計」に
+  // なってしまい、種を変えても割り当てがほとんど変わらなかった。
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i += 1) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 2246822507);
+  hash ^= hash >>> 13;
+  return (hash >>> 0) % 2 === 0;
+}
+
 function buildReviewQuiz() {
   quizEmptyReason = "";
   while (reviewSession.queue.length) {
@@ -12601,7 +12974,10 @@ function buildReviewQuiz() {
       Number(answer.learning?.nextReviewAt || 0) > 0 &&
       Number(answer.learning.nextReviewAt) <= Date.now();
 
-    if (reviewSession.context) {
+    // 例文モードのセッション、またはシャッフルで例文に当たった単語は空所補充で出す
+    const useContextFormat =
+      reviewSession.context || mixedFormatUsesContext(reviewSession, answer.id);
+    if (useContextFormat) {
       const item = contextItemFor(answer);
       if (!item && !contextAttempted(answer)) {
         // 例文がまだ用意できていない：生成中プレースホルダを返し、用意でき次第この問題を作り直す。
@@ -12659,6 +13035,9 @@ function buildReviewQuiz() {
       return null;
     }
     const choices = shuffle([answer, ...distractors]);
+    // 形式が混在するセッションでは、通常出題の回でも次が例文なら先に用意しておく
+    // （そうしないと例文に当たるたびに生成待ちが挟まる）。
+    if (reviewSession.mixFormat) prefetchNextContextItem();
     // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
     elements.quizFeedback.textContent = choiceCountNote(choices);
     return {
@@ -12967,6 +13346,182 @@ function renderStreakBadge() {
     : "今日クイズに答えると連続記録が続きます";
 }
 
+// ---------- 学習カレンダー ----------
+// 表示中の月と、選択中の日。パネルを開いたときに今月へ戻す。
+let streakCalMonth = null;
+let streakCalSelected = "";
+
+// 単語ごとの history から日別の学習量を集計する。専用の日次ログを持たない代わりに、
+// 既にある履歴を遡って使えるので、この機能を入れた時点より前の学習も表示できる。
+function buildDailyActivity() {
+  const byDay = new Map();
+  for (const word of appState.words || []) {
+    for (const entry of word.history || []) {
+      const time = Date.parse(entry?.at);
+      if (!Number.isFinite(time)) continue;
+      const key = localDateString(new Date(time));
+      let day = byDay.get(key);
+      if (!day) {
+        day = { answers: 0, correct: 0, terms: new Set() };
+        byDay.set(key, day);
+      }
+      day.answers += 1;
+      if (entry.correct) day.correct += 1;
+      if (word.term) day.terms.add(word.term);
+    }
+  }
+  return byDay;
+}
+
+// 学習した日の並びから最長連続日数を出す。現在の連続記録(streak.count)とは別に、
+// 過去最高を見せると「途切れてもまた伸ばせる」ことが伝わる。
+function longestStreakFromDays(dayKeys) {
+  const days = [...dayKeys].sort();
+  let best = 0;
+  let run = 0;
+  let prev = "";
+  for (const day of days) {
+    run = prev && isNextDayString(prev, day) ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = day;
+  }
+  return best;
+}
+
+// 学習量を4段階に割り当てる。件数そのものもセルに出すので、色が見分けにくくても読める。
+function streakLevelFor(answers, busiest) {
+  if (!answers) return 0;
+  if (busiest <= 1) return 4;
+  const ratio = answers / busiest;
+  if (ratio > 0.75) return 4;
+  if (ratio > 0.5) return 3;
+  if (ratio > 0.25) return 2;
+  return 1;
+}
+
+function renderStreakDayDetail(byDay) {
+  const box = elements.streakDayDetail;
+  if (!box) return;
+  const day = streakCalSelected ? byDay.get(streakCalSelected) : null;
+  if (!streakCalSelected) {
+    box.textContent = "日付を選ぶと、その日に解いた単語が表示されます。";
+    return;
+  }
+  const [y, m, d] = streakCalSelected.split("-");
+  const label = `${Number(m)}月${Number(d)}日`;
+  if (!day) {
+    box.textContent = `${label}：学習の記録はありません。`;
+    return;
+  }
+  const rate = day.answers ? Math.round((day.correct / day.answers) * 100) : 0;
+  const terms = [...day.terms];
+  const shown = terms.slice(0, 40);
+  const rest = terms.length - shown.length;
+  box.innerHTML =
+    `<strong>${escapeHtml(label)}</strong>：${day.answers}回（${day.terms.size}語）・正解 ${day.correct}回・正答率 ${rate}%` +
+    `<div class="streak-day-terms">${escapeHtml(shown.join("、"))}${rest > 0 ? ` ほか${rest}語` : ""}</div>`;
+}
+
+function renderStreakCalendar() {
+  const grid = elements.streakCalendar;
+  if (!grid) return;
+  const byDay = buildDailyActivity();
+  const now = new Date();
+  if (!streakCalMonth) streakCalMonth = { year: now.getFullYear(), month: now.getMonth() };
+  const { year, month } = streakCalMonth;
+
+  // サマリー：現在の連続・過去最高・今月の学習日数と回答数
+  const streak = normalizeStreak(appState.streak);
+  const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
+  let monthDays = 0;
+  let monthAnswers = 0;
+  let monthCorrect = 0;
+  let busiest = 0;
+  for (const [key, day] of byDay) {
+    if (day.answers > busiest) busiest = day.answers;
+    if (!key.startsWith(monthPrefix)) continue;
+    monthDays += 1;
+    monthAnswers += day.answers;
+    monthCorrect += day.correct;
+  }
+  const monthRate = monthAnswers ? Math.round((monthCorrect / monthAnswers) * 100) : 0;
+  if (elements.streakSummary) {
+    const stats = [
+      ["現在の連続", `${streak.count}日`],
+      // 保存済みの記録と履歴からの再計算の大きい方。移行前のデータでも履歴があれば拾える。
+      ["連続の最高記録", `${Math.max(streak.best, longestStreakFromDays(byDay.keys()))}日`],
+      ["この月の学習日", `${monthDays}日`],
+      ["この月の回答", `${monthAnswers}回`],
+      ["この月の正答率", monthAnswers ? `${monthRate}%` : "—"],
+    ];
+    elements.streakSummary.innerHTML = stats
+      .map(
+        ([label, value]) =>
+          `<span class="streak-stat"><span class="streak-stat-label">${escapeHtml(label)}</span>` +
+          `<span class="streak-stat-value">${escapeHtml(value)}</span></span>`,
+      )
+      .join("");
+  }
+  if (elements.streakMonthLabel) {
+    elements.streakMonthLabel.textContent = `${year}年${month + 1}月`;
+  }
+  // 未来の月へは進めない（記録が存在しないため）
+  if (elements.streakNextMonth) {
+    const isCurrent = year === now.getFullYear() && month === now.getMonth();
+    elements.streakNextMonth.disabled = isCurrent;
+  }
+
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = localDateString();
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i += 1) {
+    cells.push('<span class="streak-day is-empty" aria-hidden="true"></span>');
+  }
+  for (let d = 1; d <= daysInMonth; d += 1) {
+    const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const day = byDay.get(key);
+    const answers = day?.answers || 0;
+    const level = streakLevelFor(answers, busiest);
+    const classes = ["streak-day"];
+    if (key === today) classes.push("is-today");
+    if (key === streakCalSelected) classes.push("is-selected");
+    const label = answers
+      ? `${month + 1}月${d}日 ${answers}回 ${day.terms.size}語`
+      : `${month + 1}月${d}日 学習なし`;
+    cells.push(
+      `<button type="button" class="${classes.join(" ")}" data-level="${level}" data-day="${key}" aria-label="${escapeHtml(label)}">` +
+        `<span class="streak-day-num">${d}</span>` +
+        `<span class="streak-day-count">${answers || ""}</span>` +
+        "</button>",
+    );
+  }
+  grid.innerHTML = cells.join("");
+  renderStreakDayDetail(byDay);
+}
+
+function openStreakPanel() {
+  const panel = elements.streakPanel;
+  if (!panel) return;
+  const now = new Date();
+  streakCalMonth = { year: now.getFullYear(), month: now.getMonth() };
+  streakCalSelected = localDateString();
+  panel.hidden = false;
+  renderStreakCalendar();
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeStreakPanel() {
+  if (elements.streakPanel) elements.streakPanel.hidden = true;
+}
+
+function toggleStreakPanel() {
+  const panel = elements.streakPanel;
+  if (!panel) return;
+  if (panel.hidden) openStreakPanel();
+  else closeStreakPanel();
+}
+
 // 解答のたびに連続学習日数を更新する。
 // last=今日→何もしない / last=昨日→count+1 / それ以外→count=1（日付は端末ローカルタイム）
 function updateStreakOnAnswer() {
@@ -12978,6 +13533,8 @@ function updateStreakOnAnswer() {
       yesterday.setDate(yesterday.getDate() - 1);
       streak.count = streak.last === localDateString(yesterday) ? streak.count + 1 : 1;
       streak.last = today;
+      // 記録を更新したその場で保存する。履歴の保持上限に関係なく最高記録が残る。
+      streak.best = Math.max(Number(streak.best) || 0, streak.count);
       appState.streak = streak;
     }
   } catch {
@@ -14277,13 +14834,41 @@ elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
 elements.resumeQuizButton?.addEventListener("click", resumeSavedReview);
 
 // 🔥ピル：タップで連続学習日数の説明を表示する
+// 連続記録バッジ：状況をひとことで伝えつつ、学習カレンダーを開閉する
 elements.streakBadge?.addEventListener("click", () => {
   const streak = normalizeStreak(appState.streak);
-  if (streak.last === localDateString()) {
-    setStatus(`🔥 ${streak.count}日連続で学習中！この調子で続けましょう。`);
-  } else {
-    setStatus(`今日はまだ解いていません。1問解くと連続記録が続きます（現在${streak.count}日）。`);
+  if (elements.streakPanel?.hidden !== false) {
+    if (streak.last === localDateString()) {
+      setStatus(`🔥 ${streak.count}日連続で学習中！この調子で続けましょう。`);
+    } else {
+      setStatus(`今日はまだ解いていません。1問解くと連続記録が続きます（現在${streak.count}日）。`);
+    }
   }
+  toggleStreakPanel();
+});
+elements.streakPanelClose?.addEventListener("click", closeStreakPanel);
+elements.streakPrevMonth?.addEventListener("click", () => {
+  if (!streakCalMonth) return;
+  const d = new Date(streakCalMonth.year, streakCalMonth.month - 1, 1);
+  streakCalMonth = { year: d.getFullYear(), month: d.getMonth() };
+  renderStreakCalendar();
+});
+elements.streakNextMonth?.addEventListener("click", () => {
+  if (!streakCalMonth) return;
+  const d = new Date(streakCalMonth.year, streakCalMonth.month + 1, 1);
+  const now = new Date();
+  // 未来には進めない（記録が存在しないため）
+  if (d.getFullYear() > now.getFullYear() ||
+      (d.getFullYear() === now.getFullYear() && d.getMonth() > now.getMonth())) return;
+  streakCalMonth = { year: d.getFullYear(), month: d.getMonth() };
+  renderStreakCalendar();
+});
+elements.streakCalendar?.addEventListener("click", (event) => {
+  const cell = event.target.closest("[data-day]");
+  if (!cell) return;
+  // 同じ日をもう一度押したら選択を解除する
+  streakCalSelected = streakCalSelected === cell.dataset.day ? "" : cell.dataset.day;
+  renderStreakCalendar();
 });
 elements.quizDeckSelect?.addEventListener("change", () => {
   updateQuizDeckCount();
@@ -14975,6 +15560,20 @@ const startWordsnapSync = () => {
 };
 recoverPersisted().then(startWordsnapSync).catch(startWordsnapSync);
 window.setTimeout(startWordsnapSync, 4000);
+
+// 起動時の導入アニメーション。CSSの既定は「見えている状態」なので、
+// ここで一時的に .is-booting を付けて隠し、次の描画フレームで外して動かす。
+// JSが動かない環境ではクラスが付かず、中身は最初から見えたままになる。
+try {
+  const root = document.documentElement;
+  root.classList.add("is-booting");
+  const revealApp = () => root.classList.remove("is-booting");
+  requestAnimationFrame(() => requestAnimationFrame(revealApp));
+  // 何かの理由でフレームが来なくても、必ず表示状態へ戻す
+  window.setTimeout(revealApp, 600);
+} catch {
+  document.documentElement.classList.remove("is-booting");
+}
 
 </script>
   </body>
