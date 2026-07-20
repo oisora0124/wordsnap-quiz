@@ -487,8 +487,8 @@ assert.match(publicHtml, /clearTimeout\(timeout\)[\s\S]*?syncState\.abortControl
   "client sync timeout must be cleared after every request");
 assert.match(publicHtml, /error\?\.name\s*===\s*["']AbortError["'][\s\S]*?timeoutError\.syncTimeout\s*=\s*true/,
   "a sync timeout must be distinguished from a stale key-switch cancellation");
-assert.match(publicHtml, /if\s*\(!error\.data\.state\)\s*{[\s\S]*?error\.noRetry\s*=\s*true/,
-  "a 409 response without remote state must stop instead of overwriting unseen changes");
+assert.match(publicHtml, /const\s+validConflictState\s*=\s*error\.data\.state\s*&&\s*validSyncGetResponse\([\s\S]*?if\s*\(!validConflictState\)\s*{[\s\S]*?error\.noRetry\s*=\s*true/,
+  "a malformed 409 state or revision must stop instead of overwriting unseen changes");
 assert.doesNotMatch(publicHtml, /壊れた409応答（stateなし）でも[^\n]*再送/,
   "the client still documents unsafe retry behavior for a state-less conflict");
 assert.match(api, /latest\.corrupt[\s\S]*?code:\s*["']corrupt_state["']/,

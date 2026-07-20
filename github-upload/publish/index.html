@@ -7855,10 +7855,14 @@ async function pushWordsnapState(options = {}) {
       return;
     }
     if (error.status === 409 && error.data && !options.retried) {
-      if (!error.data.state) {
+      const validConflictState = error.data.state && validSyncGetResponse({
+        state: error.data.state,
+        stateRev: error.data.stateRev,
+      });
+      if (!validConflictState) {
         // 最新stateを見ずにrevisionだけ合わせて再送すると、相手端末の差分を丸ごと
-        // 上書きし得る。現行APIは409にstateを必ず含めるため、欠落は異常応答として
-        // fail closedにし、次のGET/手動同期で安全に取り直す。
+        // 上書きし得る。現行APIは409に完全なstateとrevisionを必ず含めるため、
+        // 欠落・構造不正は異常応答としてfail closedにし、次のGETで安全に取り直す。
         error.noRetry = true;
         error.message = "同期の競合データを確認できないため、自動再送を中止しました。もう一度同期してください。";
       } else {
