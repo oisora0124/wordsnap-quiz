@@ -15682,7 +15682,7 @@ async function shareActiveDeck() {
       if (navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: `WordSnap 単語帳「${payload.deck.name}」`,
+          title: `WordBank 単語帳「${payload.deck.name}」`,
           text: `${payload.words.length}語の共有単語帳です。`,
         });
         setStatus(`単語帳「${payload.deck.name}」を共有しました。学習成績や履歴は含まれません。`);

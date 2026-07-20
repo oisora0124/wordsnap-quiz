@@ -67,6 +67,8 @@ assert.equal(rootHtml, publicHtml, "root index.html and publish/index.html must 
 assert.match(headers, /^\/\*[\s\S]*?Referrer-Policy:\s*no-referrer\s*$/m,
   "Cloudflare static responses must suppress referrers before the HTML meta policy is parsed");
 assert.match(publicHtml, /<title>\s*WordBank\s*<\/title>/i, "WordBank title is missing");
+assert.doesNotMatch(publicHtml, /WordSnap\s+単語帳/,
+  "the OS share title still exposes the retired WordSnap product name");
 const staticMarkup = publicHtml.slice(0, publicHtml.indexOf("<script>"));
 const staticIds = [...staticMarkup.matchAll(/\sid=(["'])([^"']+)\1/g)].map((match) => match[2]);
 assert.equal(new Set(staticIds).size, staticIds.length,
