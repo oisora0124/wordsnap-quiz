@@ -4103,7 +4103,7 @@ accurate 正確な"
 
         <div class="actions">
           <button id="parseButton" type="button">単語リストに変換</button>
-          <button id="sampleButton" class="ghost" type="button">大学受験上位60語</button>
+          <button id="sampleButton" class="ghost" type="button">大学受験標準レベル単語300</button>
           <label class="deck-pick">
             保存先
             <select id="saveDeckSelect" aria-label="保存先の単語帳"></select>
@@ -5201,66 +5201,306 @@ const TRASH_TTL_MS = 30 * DAY_MS; // 30日で削除済みから掃除
 // 誤答した単語が通常クイズに戻れる時間ベースの保険（既存の「◯問後」SRSとOR＝早い方が優先）
 const WRONG_COOLDOWN_MS = 5 * 60 * 1000;
 // 特定の教材を転載せず、大学受験で役立つ語を本アプリ向けに独自選定したリスト。
-const SAMPLE_TEXT = `acknowledge 認める
+const SAMPLE_TEXT = `abandon 見捨てる
+absolute 絶対的な
+accomplish 成し遂げる
+accurate 正確な
+acknowledge 認める
 acquire 習得する
 adapt 適応する
+adequate 必要を満たす
+adjust 調整する
+admire 賞賛する
+adopt 採用する
+advantage 利点
 advocate 支持する
-allocate 割り当てる
+affect 影響を与える
+allocate 配分する
+alter 部分的に変える
+alternative 代わりの
+ambition 野心
+analysis 分析
+announce 発表する
+annual 毎年の
 anticipate 予期する
+anxiety 不安
 apparent 明らかな
+appreciate 感謝する
+appropriate 適切な
+approve 承認する
 arbitrary 恣意的な
-assess 評価する
+arise 生じる
+aspect 側面
+assess 査定する
+assign 割り当てる
+associate 関連づける
 assume 想定する
+attempt 試みる
+attitude 態度
 attribute ～に原因があると考える
-coherent 一貫した
+authority 権威
+beneficial 有益な
+blame 責める
+burden 負担
+capacity 収容力
+category 範疇
+circumstance 状況
+coherent 筋の通った
+collapse 崩壊する
+combine 結合する
 compel 強いる
+compete 競争する
+complain 不平を言う
+component 構成要素
 comprehensive 包括的な
+compromise 妥協
 conceive 思い描く
+concept 概念
+conclude 結論づける
+confirm 確認する
+conflict 対立
+confront 直面する
+conscious 意識している
 consecutive 連続した
+consequence 帰結
+consistent 一貫した
 constitute 構成する
+consume 消費する
 contemplate 熟考する
+context 文脈
 contradict 矛盾する
+contrast 対照
+contribute 貢献する
 conventional 従来の
+convince 納得させる
 correspond 対応する
+crisis 危機
+critical 批判的な
+criticize 批判する
 crucial 極めて重要な
+decade 10年間
 decline 減少する
+defend 守る
+define 定義する
+deny 否定する
 derive 引き出す
+deserve 値する
+detect 見つける
+determine 決定する
+devote 捧げる
 diminish 減少させる
+distinct 明確に異なる
 distinguish 区別する
+distribute 分配する
 diverse 多様な
+domestic 国内の
+efficient 効率的な
 elaborate 詳しく述べる
+element 要素
 eliminate 排除する
 emerge 現れる
+emphasize 強調する
 empirical 実証的な
+enable 可能にする
+encounter 出くわす
 enhance 高める
+enormous 巨大な
+ensure 確実にする
+entire 全体の
 equivalent 同等の
+essential 不可欠な
+establish 設立する
+estimate 見積もる
 evaluate 評価する
+evidence 証拠
+evident 明白な
+exceed 超える
+exception 例外
+exclude 除外する
+exist 存在する
+expand 拡大する
+expectation 期待
+expense 費用
 explicit 明示的な
-facilitate 促進する
+expose さらす
+extend 延ばす
+extensive 広範囲の
+extent 程度
+external 外部の
+facilitate 容易にする
+factor 要因
+familiar よく知られた
 feasible 実行可能な
+flexible 柔軟な
+forbid 禁じる
+former 前の
+framework 枠組み
+frequent 頻繁な
 fundamental 根本的な
 generate 生み出す
+generation 世代
+genuine 本物の
+grateful 感謝している
+hesitate ためらう
 hypothesis 仮説
+identify 特定する
+identity 独自性
+ignore 無視する
+immediate 即座の
+impact 衝撃
+implication 含意
 imply 暗に示す
+impose 課す
+incentive 誘因
+income 収入
+indicate 示す
+individual 個人
 inevitable 避けられない
-inhibit 妨げる
+infer 推論する
+influence 影響
+inhibit 抑制する
+initial 最初の
+insight 洞察
+insist 主張する
+inspire 鼓舞する
+instance 事例
+institution 機関
 integrate 統合する
+intense 激しい
+intention 意図
 interpret 解釈する
 intervene 介入する
+investigate 調査する
+involve 含む
+issue 問題
 justify 正当化する
+labor 労働
 maintain 維持する
+majority 大多数
+mature 成熟した
+mechanism 仕組み
+modify 修正する
+motive 動機
+multiple 複数の
+negotiate 交渉する
 notion 考え
-obscure 曖昧な
-perceive 認識する
+numerous 多数の
+objective 客観的な
+obligation 義務
+obscure 分かりにくい
+observe 観察する
+obstacle 障害
+obtain 得る
+obvious 分かりきった
+occupy 占める
+occur 起こる
+opportunity 機会
+oppose 反対する
+option 選択肢
+outcome 結果
+overcome 克服する
+overlook 見落とす
+participate 参加する
+particular 特定の
+perceive 知覚する
+permanent 永続的な
 persistent 根強い
+perspective 視点
+persuade 説得する
+phenomenon 現象
+philosophy 哲学
 plausible もっともらしい
+policy 方針
+pollution 汚染
+possess 所有する
+postpone 延期する
+potential 潜在的な
+poverty 貧困
+practical 実用的な
 precede 先行する
+precise 精密な
+predict 予測する
+prejudice 偏見
+preserve 保存する
+prevent 妨げる
+previous 以前の
+primary 主要な
+principle 原則
+priority 優先事項
+procedure 手順
+prohibit 禁止する
 prominent 著名な
+promote 促進する
+proportion 割合
+pursue 追求する
+range 範囲
+rational 合理的な
+recall 思い出す
+recognize 認識する
+recommend 推薦する
+recover 回復する
+reduce 減らす
+refer 言及する
+reflect 反映する
+reform 改革
+refuse 拒む
+regard みなす
+regulate 規制する
+reject 拒絶する
+relevant 関連のある
+reliable 信頼できる
 reluctant 気が進まない
+rely 頼る
+remarkable 注目すべき
+remote 遠く離れた
+represent 代表する
+reputation 評判
+resist 抵抗する
+resolve 解決する
+resource 資源
+respond 応答する
+restore 回復させる
+restrict 制限する
+retain 保持する
+reveal 明らかにする
+reward 報いる
+seek 探し求める
+sequence 連続
+severe 厳しい
+shortage 不足
+significant 重要な
+species 種
+stable 安定した
+statistics 統計
+status 地位
+stimulate 刺激する
+strategy 戦略
+structure 構造
+submit 提出する
+substance 物質
+sufficient 十分な
+survive 生き残る
+suspect 疑う
 sustain 持続させる
+temporary 一時的な
+tendency 傾向
+theory 理論
+threat 脅威
+tolerate 我慢する
 transform 変える
+transition 移行
+typical 典型的な
 undergo 経験する
-undermine 徐々に弱める`;
+undermine 徐々に弱める
+urban 都会の
+urge 促す
+vague 曖昧な
+valid 妥当な
+various さまざまな
+vast 広大な
+victim 犠牲者
+vital 生命に不可欠な
+withdraw 引き揚げる`;
 
 const elements = {
   imageInput: document.querySelector("#imageInput"),
@@ -10607,7 +10847,7 @@ const CONTEXT_TOMBSTONE_MAX = 5000;
 const CONTEXT_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // 保存失敗のたびに本体を追い出す割合。回を追うごとに強め、5回の試行内で本体を使い切れるようにする。
 const CONTEXT_EVICTION_FRACTIONS = [0.2, 0.4, 0.6, 0.8, 1];
-// v10移行が進まなかったときに次へ回す間隔。毎起動で全件のparse/merge/保存を繰り返さないため。
+// v10移行が進まなかったときに次へ回す間隔。毎起動で重い全件保存を繰り返さないため。
 const CONTEXT_MIGRATION_RETRY_MS = 24 * 60 * 60 * 1000;
 const CONTEXT_MIGRATION_RETRY_KEY = "wordsnap-ctxquiz:v10-retry-at";
 // 生成に失敗した語もキャッシュして無限リトライを防ぐが、通信断やレート制限のような
@@ -10720,22 +10960,6 @@ function migrateV10ContextCache() {
     return;
   }
   if (raw == null) return;
-  // 容量が足りず前回移行できなかった端末で、毎起動のたびに全件のparse/merge/保存を
-  // やり直さない。空きが増えるのを待って一定間隔で再挑戦する。
-  try {
-    const retryAt = Number(localStorage.getItem(CONTEXT_MIGRATION_RETRY_KEY));
-    if (retryAt && Date.now() < retryAt) return;
-  } catch {
-    // 読めない環境では従来どおり毎回試す
-  }
-  // クールダウンは移行を試す「前」に置く。容量が尽きた端末では移行の保存だけでなく、
-  // 失敗後にこの短い印を書くことすら失敗し、毎起動で全件処理を繰り返してしまうため。
-  // 移行できたら下で消す。
-  try {
-    localStorage.setItem(CONTEXT_MIGRATION_RETRY_KEY, String(Date.now() + CONTEXT_MIGRATION_RETRY_MS));
-  } catch {
-    // 書けなければ従来どおり次回も試すだけで、データは失わない
-  }
   let legacy = null;
   try {
     legacy = JSON.parse(raw);
@@ -10764,8 +10988,13 @@ function migrateV10ContextCache() {
   // 例文を失ったうえで「非tombstoneだから移行済み」と数えられ、旧キーごと消えてしまう。
   contextQuizCache = { ...migrated };
   for (const [key, entry] of Object.entries(current)) {
-    const legacyBody = migrated[key] && !migrated[key].tombstone && !migrated[key].failed;
-    if (legacyBody && (entry?.tombstone || entry?.failed)) continue;
+    const legacyEntry = migrated[key];
+    const legacySuccess = legacyEntry && !legacyEntry.tombstone && !legacyEntry.failed;
+    // 成功本体は失敗・追い出し記録より強く、tombstoneは失敗記録より長く再試行を防げる。
+    if (
+      (legacySuccess && (entry?.tombstone || entry?.failed)) ||
+      (legacyEntry?.tombstone && entry?.failed)
+    ) continue;
     contextQuizCache[key] = entry;
   }
   for (const entry of Object.values(contextQuizCache)) {
@@ -10773,21 +11002,38 @@ function migrateV10ContextCache() {
       entry.lastUsed = Number(entry.at) || 0;
     }
   }
+  // クールダウン中もv10をメモリへマージして出題には使う。保存の再試行だけを止めることで、
+  // 待機中に旧成功内容や試行記録が見えなくなってAIを再度呼ぶ事態を防ぐ。
+  try {
+    const retryAt = Number(localStorage.getItem(CONTEXT_MIGRATION_RETRY_KEY));
+    if (retryAt && Date.now() < retryAt) return;
+  } catch {
+    // 読めない環境では従来どおり毎回試す
+  }
   // 移行対象の本体は一括保存が確認できるまでLRU縮小から保護する。1000件を超えていても、まず
-  // v11へ全本体を渡してから通常保存時のLRUへ任せることで、旧キーだけを消して内容を失わない。
-  // tombstoneの期限切れなど別の縮小が起きても、全本体を確認できれば移行自体は完了としてよい。
+  // v11へ全件を渡してから通常保存時のLRUへ任せることで、旧キーだけを消して内容を失わない。
+  // tombstoneも全件の保存確認対象に含め、試行記録が欠けた移行を完了扱いしない。
   const migratedBodyKeys = new Set(
     Object.keys(migrated).filter((key) => !migrated[key]?.tombstone),
   );
-  const allBodiesPersisted = () => {
+  const persistedMigrationEntryCount = () => {
     const persisted = readStoredContextCache();
-    return persisted && [...migratedBodyKeys].every((key) => {
+    if (!persisted) return 0;
+    return Object.entries(migrated).filter(([key, legacyEntry]) => {
       const entry = persisted[key];
-      return entry && typeof entry === "object" && !entry.tombstone;
-    });
+      if (!entry || typeof entry !== "object") return false;
+      // 成功本体は成功本体、tombstoneはtombstoneまたは成功本体で置き換わった場合だけ完了。
+      // failedはそれ自体が試行記録なので、v11側に何らかの記録が残っていればよい。
+      if (legacyEntry.tombstone) return entry.tombstone || (!entry.failed && !entry.tombstone);
+      if (legacyEntry.failed) return true;
+      return !entry.tombstone && !entry.failed;
+    }).length;
   };
+  const initialPersistedCount = persistedMigrationEntryCount();
+  const allMigrationEntriesPersisted = () =>
+    persistedMigrationEntryCount() === Object.keys(migrated).length;
   let saved = saveContextCache({ preferBodyKeys: migratedBodyKeys });
-  let completed = saved && allBodiesPersisted();
+  let completed = saved && allMigrationEntriesPersisted();
 
   // 旧キーを消してからv11を書くあいだは、どちらも揃っていない瞬間ができる。別タブの書込み等で
   // 復元に失敗すると本体がメモリ上だけになるため、復元は数回やり直し、それでも戻せなければ
@@ -10796,7 +11042,7 @@ function migrateV10ContextCache() {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         localStorage.setItem(CONTEXT_QUIZ_V10_CACHE_KEY, raw);
-        return true;
+        if (localStorage.getItem(CONTEXT_QUIZ_V10_CACHE_KEY) === raw) return true;
       } catch {
         // 別タブの一時的な書込みなどで空きが戻ることがあるため、同じ試行内でやり直す
       }
@@ -10811,7 +11057,7 @@ function migrateV10ContextCache() {
     try {
       localStorage.removeItem(CONTEXT_QUIZ_V10_CACHE_KEY);
       saved = saveContextCache({ preferBodyKeys: migratedBodyKeys });
-      completed = saved && allBodiesPersisted();
+      completed = saved && allMigrationEntriesPersisted();
       if (!completed) restoreLegacy();
     } catch {
       restoreLegacy();
@@ -10828,6 +11074,13 @@ function migrateV10ContextCache() {
     // 保存し直し、上限まで詰める。ここで超過分は本体からtombstoneへ縮小されるだけで、
     // AIの再呼び出しは起きない。
     saveContextCache();
+  } else if (persistedMigrationEntryCount() <= initialPersistedCount) {
+    // 1件も進まなかった場合だけ翌日まで待つ。部分的に進んだ場合は次回起動で続きを試す。
+    try {
+      localStorage.setItem(CONTEXT_MIGRATION_RETRY_KEY, String(Date.now() + CONTEXT_MIGRATION_RETRY_MS));
+    } catch {
+      // 記録できなければ従来どおり次回も試すだけで、データは失わない
+    }
   }
 }
 
@@ -11003,6 +11256,7 @@ function setContextCacheStorageFailed(failed) {
 function saveContextCache(options = {}) {
   const cache = ctxCache();
   const preferBodyKeys = options.preferBodyKeys instanceof Set ? options.preferBodyKeys : null;
+  const migrationInProgress = Boolean(preferBodyKeys);
   contextCacheLastSaveResult = { saved: false, shrunk: false };
   // 別タブが書いた内容を消さないよう、保存直前に最新を読み直してマージする
   // （メモリ上のスナップショットで丸ごと上書きすると相手タブの生成結果が消える）
@@ -11021,6 +11275,9 @@ function saveContextCache(options = {}) {
       if (preferBodyKeys?.has(k) && !mine.tombstone && !mine.failed && (v.tombstone || v.failed)) {
         continue;
       }
+      // v10のtombstoneも失敗記録より強い。移行中に短い失敗TTLへ置き換えると、6時間後に
+      // 同じ語へ再POSTされ得るため、旧試行記録をそのまま残す。
+      if (migrationInProgress && mine.tombstone && v.failed) continue;
       // tombstoneと本体が競合した場合は、それぞれの作成・追い出し時刻が新しい方を採る。
       // tombstoneへlastUsed等を足すと軽量化の意味が薄れるため、この分岐では形を変えない。
       if (v.tombstone || mine.tombstone) {
@@ -11047,7 +11304,8 @@ function saveContextCache(options = {}) {
       cache[k] = { ...(useStored ? v : mine), lastUsed };
     }
   }
-  const expiredOrExcessTombstones = pruneContextTombstones(cache);
+  // 移行中はv10が最後の完全なコピーになり得るため、失効・件数超過を含めtombstoneへ触れない。
+  const expiredOrExcessTombstones = migrationInProgress ? 0 : pruneContextTombstones(cache);
   if (expiredOrExcessTombstones) contextCacheLastSaveResult.shrunk = true;
   const bodyCount = Object.values(cache).filter((entry) => entry && !entry.tombstone).length;
   if (bodyCount > CONTEXT_CACHE_MAX) {
@@ -11055,9 +11313,13 @@ function saveContextCache(options = {}) {
       contextCacheLastSaveResult.shrunk = true;
     }
   }
-  // 件数上限内でも他データや各項目の長さでQuotaExceededになり得る。失敗時はLRUの古い2割を
-  // 追加で追い出して最大5回試し、実バイト容量に合わせて保存可能な大きさまで縮める。
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  // 件数上限内でも他データや各項目の長さでQuotaExceededになり得る。本体の削減率を失敗ごとに
+  // 強めて最低1件まで先に使い切り、それでも入らない場合だけtombstoneを古い順に削る。
+  // 本体・tombstoneを各5段階で縮めた後にも保存を試せる回数を確保する。
+  const maxSaveAttempts = CONTEXT_EVICTION_FRACTIONS.length * 2 + 2;
+  let bodyShrinkStep = 0;
+  let tombstoneShrinkStep = 0;
+  for (let attempt = 0; attempt < maxSaveAttempts; attempt += 1) {
     try {
       localStorage.setItem(CONTEXT_QUIZ_CACHE_KEY, JSON.stringify(cache));
       contextCacheTouchDirty = false;
@@ -11066,21 +11328,32 @@ function saveContextCache(options = {}) {
       contextCacheLastSaveResult.saved = true;
       return true;
     } catch {
-      if (attempt >= 4) break;
+      if (attempt >= maxSaveAttempts - 1) break;
       const remainingBodies = Object.values(cache).filter((entry) => entry && !entry.tombstone).length;
       // 本体を追い出してもtombstoneが残るためAIは再度呼ばれない（安い縮小）。一方tombstoneを
       // 消すとその語は未試行に戻り、同じ語へもう一度APIキーの枠を使う（高い縮小）。
       // そこで本体から先に使い切る。毎回20%だけでは本体が多い端末で試行を使い切っても
       // 本体が尽きず、tombstoneの整理へ永久に到達しないため、試行ごとに割合を強める。
-      const count = Math.max(1, Math.ceil(remainingBodies * (CONTEXT_EVICTION_FRACTIONS[attempt] || 1)));
+      const bodyRatio = CONTEXT_EVICTION_FRACTIONS[
+        Math.min(bodyShrinkStep, CONTEXT_EVICTION_FRACTIONS.length - 1)
+      ];
+      const count = Math.max(1, Math.ceil(remainingBodies * bodyRatio));
       const evicted = evictOldestContextEntries(cache, count, preferBodyKeys);
+      if (evicted) bodyShrinkStep += 1;
       // 本体をもう削れないときだけtombstoneへ手を付ける。ただしv10移行中（preferBodyKeys指定）は
       // 保護のせいで本体を削れず必ずここへ落ちるため、移行では一切消さない。試行記録を失って
       // 移行完了にしてしまうと、その語は未試行に戻り再課金されるので、移行未完了のまま旧キーを残す。
       const tombstoneCount = Object.values(cache).filter((entry) => entry?.tombstone).length;
-      const discarded = !evicted && !preferBodyKeys
-        ? discardOldestContextTombstones(cache, Math.max(1, Math.ceil(tombstoneCount * 0.2)))
+      const tombstoneRatio = CONTEXT_EVICTION_FRACTIONS[
+        Math.min(tombstoneShrinkStep, CONTEXT_EVICTION_FRACTIONS.length - 1)
+      ];
+      const discarded = !evicted && !migrationInProgress
+        ? discardOldestContextTombstones(
+            cache,
+            Math.max(1, Math.ceil(tombstoneCount * tombstoneRatio)),
+          )
         : 0;
+      if (discarded) tombstoneShrinkStep += 1;
       if (!evicted && !discarded) break;
       contextCacheLastSaveResult.shrunk = true;
     }
@@ -13589,7 +13862,7 @@ elements.sampleButton.addEventListener("click", () => {
   const existing = elements.ocrText.value.trimEnd();
   elements.ocrText.value = existing ? `${existing}\n${SAMPLE_TEXT}` : SAMPLE_TEXT;
   if (elements.importAllSavedActions) elements.importAllSavedActions.hidden = true;
-  setStatus("独自選定の大学受験上位60語を末尾に追加しました。既存の入力は保持されています。");
+  setStatus("大学受験標準レベル単語300を末尾に追加しました。既存の入力は保持されています。");
 });
 
 elements.parseButton.addEventListener("click", () => {
