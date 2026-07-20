@@ -482,6 +482,42 @@ for (const invalid of [
     "a PUT without a confirmed positive integer revision must fail closed");
 }
 
+// キー切替時にabortを無視する通信実装でも、遅れて届いた旧キーの応答を世代番号で破棄する。
+const staleSyncStart = publicHtml.indexOf("function staleSyncError(");
+const staleSyncEnd = publicHtml.indexOf("\n// 【同期用ビュー】", staleSyncStart);
+assert.ok(staleSyncStart >= 0 && staleSyncEnd > staleSyncStart,
+  "sync request-generation guard source is missing");
+let resolveLateSyncFetch;
+class IgnoredAbortController {
+  constructor() { this.signal = {}; }
+  abort() { /* intentionally ignored to simulate a response that still arrives */ }
+}
+const staleSyncSandbox = {
+  AbortController: IgnoredAbortController,
+  fetch: () => new Promise((resolve) => { resolveLateSyncFetch = resolve; }),
+  window: { setTimeout, clearTimeout },
+};
+new Script(
+  "const SYNC_REQUEST_TIMEOUT_MS = 60 * 1000;\n" +
+    "const syncState = { id: 'room-a', accessKey: '', requestGen: 0, pushTimer: 0, retryTimer: 0, pushQueued: false, abortControllers: new Set() };\n" +
+    "const cleanSyncId = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 64);\n" +
+    "const syncEndpoint = () => '/api/wordsnap-state?sync=room-a';\n" +
+    "const syncHeaders = () => ({ 'Content-Type': 'application/json' });\n" +
+    `${publicHtml.slice(staleSyncStart, staleSyncEnd)}\n` +
+    "globalThis.__syncRace = { syncRequest, bumpSyncRequestGen, syncState };",
+  { filename: "sync-key-switch-race-check.js" },
+).runInNewContext(staleSyncSandbox);
+const lateRequest = staleSyncSandbox.__syncRace.syncRequest("GET");
+staleSyncSandbox.__syncRace.bumpSyncRequestGen();
+resolveLateSyncFetch({
+  ok: true,
+  json: async () => ({ syncId: "room-a", state: { words: [], decks: [] }, stateRev: 1 }),
+});
+await assert.rejects(lateRequest, (error) => error?.staleSync === true,
+  "a late response for the previous sync key must be discarded");
+assert.equal(staleSyncSandbox.__syncRace.syncState.abortControllers.size, 0,
+  "a discarded request must not remain registered as in flight");
+
 for (const column of ["key", "state", "rev", "updatedAt"]) {
   assert.match(schema, new RegExp(`\\b${column}\\b`), `D1 schema is missing ${column}`);
 }
