@@ -145,6 +145,16 @@ test("a corrupt stored row fails closed instead of looking like an empty room", 
     assert.equal(db.rows.get(LEGACY_SYNC_ID).state, stored,
       "a read failure must not rewrite the stored row");
   }
+
+  const recoverDb = new FakeD1([
+    [LEGACY_SYNC_ID, { state: "{broken-json", rev: 7, updatedAt: 1234 }],
+  ]);
+  const replacement = sampleState("manual-recovery");
+  const recovered = await requestApi(recoverDb, { method: "PUT", body: { state: replacement } });
+  assert.equal(recovered.response.status, 200,
+    "an explicit force write from a current client must remain available for recovery");
+  assert.equal(recovered.data.stateRev, 8);
+  assert.deepEqual((await requestApi(recoverDb)).data.state, replacement);
 });
 
 test("legacy v0 clients can update v0 rooms but cannot erase a stored v1 schema", async () => {
