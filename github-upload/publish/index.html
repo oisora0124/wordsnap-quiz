@@ -5474,7 +5474,7 @@ accurate 正確な
 acknowledge 認める
 acquire 習得する
 adapt 適応する
-adequate 必要を満たす
+adequate 必要を満たすだけの
 adjust 調整する
 admire 賞賛する
 adopt 採用する
@@ -6843,10 +6843,34 @@ function posLabel(tag) {
   return { n: "名", v: "動", adj: "形", adv: "副" }[tag] || "";
 }
 
+// 内蔵サンプル「大学受験標準レベル単語300」の品詞。空所補充では「品詞が違うから空所に入らない」
+// ことを解答の根拠にするため、品詞が分からないと根拠を担保できず通常出題に落ちてしまう。
+// Datamuseへの問い合わせ待ちで最初の数十問が本来の出題にならないのを避けるため、
+// 手検証したこの300語ぶんは同梱して最初から使えるようにする（通信ゼロ・約2.6KB）。
+const BUILTIN_POS_GROUPS = {
+  n: "advantage ambition analysis anxiety aspect attitude authority burden capacity category circumstance component compromise concept conflict consequence context contrast crisis decade element evidence exception expectation expense extent factor framework generation hypothesis identity impact implication incentive income individual influence insight instance institution intention issue labor majority mechanism motive notion obligation obstacle opportunity option outcome perspective phenomenon philosophy policy pollution poverty prejudice principle priority procedure proportion range reform reputation resource sequence shortage species statistics status strategy structure substance tendency theory threat transition victim",
+  v: "abandon accomplish acknowledge acquire adapt adjust admire adopt advocate affect allocate alter announce anticipate appreciate approve arise assess assign associate assume attempt attribute blame collapse combine compel compete complain conceive conclude confirm confront constitute consume contemplate contradict contribute convince correspond criticize decline defend define deny derive deserve detect determine devote diminish distinguish distribute elaborate eliminate emerge emphasize enable encounter enhance ensure establish estimate evaluate exceed exclude exist expand expose extend facilitate forbid generate hesitate identify ignore imply impose indicate infer inhibit insist inspire integrate interpret intervene investigate involve justify maintain modify negotiate observe obtain occupy occur oppose overcome overlook participate perceive persuade possess postpone precede predict preserve prevent prohibit promote pursue recall recognize recommend recover reduce refer reflect refuse regard regulate reject rely represent resist resolve respond restore restrict retain reveal reward seek stimulate submit survive suspect sustain tolerate transform undergo undermine urge withdraw",
+  adj: "absolute accurate adequate alternative annual apparent appropriate arbitrary beneficial coherent comprehensive conscious consecutive consistent conventional critical crucial distinct diverse domestic efficient empirical enormous entire equivalent essential evident explicit extensive external familiar feasible flexible former frequent fundamental genuine grateful immediate inevitable initial intense mature multiple numerous objective obscure obvious particular permanent persistent plausible potential practical precise previous primary prominent rational relevant reliable reluctant remarkable remote severe significant stable sufficient temporary typical urban vague valid various vast vital",
+};
+const BUILTIN_POS = (() => {
+  const map = new Map();
+  for (const [tag, terms] of Object.entries(BUILTIN_POS_GROUPS)) {
+    for (const term of terms.split(" ")) map.set(term, tag);
+  }
+  return map;
+})();
+
+function builtinPosTag(term) {
+  return BUILTIN_POS.get(String(term || "").trim().toLowerCase()) || null;
+}
+
 // Looks up the primary part of speech from Datamuse (md=p tags).
 async function resolvePos(term) {
   const word = String(term || "").trim().toLowerCase();
   if (!word || /\s/.test(word) || !/^[a-z][a-z'-]*$/.test(word)) return { tag: null };
+  // 同梱の品詞表にあれば通信しない。内蔵サンプルは初回から本来の出題になる。
+  const builtin = builtinPosTag(word);
+  if (builtin) return { tag: builtin };
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
@@ -12559,6 +12583,14 @@ async function fetchContextFromDictionary(word) {
 // Datamuseはキー不要・無料で、結果は単語に保存されるので次回以降は問い合わせない。
 const CONTEXT_POS_PREFETCH = 4;
 async function ensurePosForContext(answer) {
+  // まず同梱の品詞表を出題対象すべてへ一気に当てる。通信ゼロなので出し惜しみしない。
+  // これで内蔵サンプルは1問目から誤答を品詞で除外でき、根拠のある出題になる。
+  for (const candidate of [answer, ...quizSelectedDeckWords()]) {
+    if (candidate.pos) continue;
+    const tag = builtinPosTag(candidate.term);
+    if (tag) candidate.pos = { tag };
+  }
+  // 表に無い語（利用者が自分で取り込んだ単語）だけ、少しずつ問い合わせて埋めていく
   const targets = [];
   if (!answer.pos) targets.push(answer);
   for (const candidate of quizSelectedDeckWords()) {
