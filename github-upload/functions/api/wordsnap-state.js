@@ -29,6 +29,10 @@ const HEADERS = { "content-type": "application/json; charset=utf-8", "cache-cont
 const MAX_RAW_BODY = 4_000_000;
 // 解凍後JSONの上限。正当な数万語データでも到達しない値にして「解凍爆弾」を防ぐ
 const MAX_INFLATED_JSON = 50_000_000;
+// 現行クライアントは1.8MBで送信を止める。サーバーではD1保存上限と同じ
+// 1.9MBを受信上限にして、巨大なbase64をデコード・解凍する前に拒否する。
+// 旧クライアントのプレーンstate受信には影響しない。
+const MAX_INCOMING_BASE64 = 1_900_000;
 // D1 は1行あたり約2MBの制限があるため、保存する base64 はその手前で拒否する
 const MAX_STORED_BASE64 = 1_900_000;
 // サーバーが認識している最新の learning スキーマ版。新しい learning スキーマを
@@ -132,11 +136,17 @@ export async function onRequest(context) {
   const syncId = cleanSyncId(url.searchParams.get("sync"));
   if (!syncId) return json({ error: "sync id required" }, 400);
 
+  // 未対応methodはD1へ触れる前に拒否する。攻撃的なPOST/DELETE等で
+  // ポーリング相当の読み取り課金を発生させない（GET/PUTの契約は不変）。
+  if (request.method !== "GET" && request.method !== "PUT") {
+    return json({ error: "method not allowed" }, 405);
+  }
+
   const db = env.DB;
-  // まずrevisionだけを読む。未変更ポーリングや成功PUTでは巨大stateの解凍が不要。
-  const current = await readRow(db, syncId, false);
 
   if (request.method === "GET") {
+    // まずrevisionだけを読む。未変更ポーリングでは巨大stateの解凍が不要。
+    const current = await readRow(db, syncId, false);
     const sinceRaw = url.searchParams.get("sinceRev");
     const sinceRev = sinceRaw !== null && sinceRaw !== "" ? Number(sinceRaw) : null;
     if (Number.isFinite(sinceRev) && sinceRev === current.rev) {
@@ -154,6 +164,12 @@ export async function onRequest(context) {
 
   if (request.method === "PUT") {
     // --- 入力検証（すべて「拒否する」方向のみ。正しいクライアントの動きは変えない） ---
+    // Content-Lengthが分かる場合はbodyを読む前に弾き、不要なメモリ確保を避ける。
+    // Transfer-Encoding等で不明な場合も、下の実測長チェックが必ず働く。
+    const contentLength = Number(request.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_RAW_BODY) {
+      return json({ error: "body too large" }, 413);
+    }
     let raw = "";
     try {
       raw = await request.text();
@@ -177,6 +193,9 @@ export async function onRequest(context) {
     // --- state の取り出し：圧縮形式（新クライアント）とプレーン（旧クライアント）の両対応 ---
     let state;
     if (body.format === "gzip-base64" && typeof body.stateGz === "string") {
+      if (body.stateGz.length > MAX_INCOMING_BASE64) {
+        return json({ error: "compressed state too large" }, 413);
+      }
       try {
         state = JSON.parse(await gunzipBase64ToText(body.stateGz));
       } catch (error) {
@@ -196,6 +215,10 @@ export async function onRequest(context) {
     ) {
       return json({ error: "invalid state" }, 422);
     }
+
+    // 有効なPUTであることを確認してから初めてD1へ触れる。不正JSON・巨大body・
+    // 壊れたgzipを大量送信されても、D1の読み取り課金を発生させない。
+    const current = await readRow(db, syncId, false);
 
     // SRS対応stateを一度保存したキーへ、古い版のクライアントが未知フィールドを
     // 落としたstateを上書きするのを防ぐ。最新版クライアント（incoming == HIGHEST）は
@@ -299,6 +322,7 @@ export async function onRequest(context) {
     return json({ ok: true, syncId, stateRev: savedRev, updatedAt: savedUpdatedAt });
   }
 
+  // methodは上で絞り込んでいるため到達しないが、将来の変更時もfail closedにする。
   return json({ error: "method not allowed" }, 405);
 }
 

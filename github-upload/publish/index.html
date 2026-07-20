@@ -4159,6 +4159,13 @@ textarea:focus-visible {
           <span id="storageWarningDetail"></span>
         </div>
       </div>
+      <div id="runtimeStorageWarning" class="storage-warning" role="alert" hidden>
+        <span class="storage-warning-icon" aria-hidden="true">⚠️</span>
+        <div class="storage-warning-text">
+          <strong>この変更を端末に保存できませんでした。</strong>
+          <span>同期状態を確認し、設定の「JSONを書き出す」からバックアップしてください。</span>
+        </div>
+      </div>
       <section class="hero boot-in">
         <div>
           <div class="hero-title">
@@ -6528,12 +6535,24 @@ const idb = {
   },
   async set(key, value) {
     const db = await this.open();
-    if (!db) return;
-    try {
-      db.transaction("kv", "readwrite").objectStore("kv").put(value, key);
-    } catch {
-      // ignore
-    }
+    if (!db) return false;
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        resolve(ok);
+      };
+      try {
+        const tx = db.transaction("kv", "readwrite");
+        tx.oncomplete = () => finish(true);
+        tx.onerror = () => finish(false);
+        tx.onabort = () => finish(false);
+        tx.objectStore("kv").put(value, key);
+      } catch {
+        finish(false);
+      }
+    });
   },
   async get(key) {
     const db = await this.open();
@@ -6550,6 +6569,13 @@ const idb = {
   },
 };
 
+let storageWriteGeneration = 0;
+
+function showRuntimeStorageWarning(visible) {
+  const box = document.getElementById("runtimeStorageWarning");
+  if (box) box.hidden = !visible;
+}
+
 // Writes the app state to localStorage AND the IndexedDB mirror, stamped with
 // a save time so we can tell which copy is newer when recovering.
 function persistAppState(options = {}) {
@@ -6557,12 +6583,21 @@ function persistAppState(options = {}) {
   appState.trash = sanitizeTrash(appState.trash, Date.now());
   appState.savedAt = Date.now();
   const json = JSON.stringify(appState);
+  const writeGeneration = ++storageWriteGeneration;
+  let localSaved = false;
   try {
     localStorage.setItem(STORAGE_KEY, json);
+    localSaved = true;
   } catch {
     // storage may be full / unavailable; the IndexedDB mirror still applies
   }
-  idb.set(STORAGE_KEY, json);
+  // 通常は何も表示しない。localStorageとIndexedDBの両方が失敗した場合だけ、
+  // 最新の保存試行について警告する（古い非同期結果で表示を巻き戻さない）。
+  const finishStorageCheck = (idbSaved) => {
+    if (writeGeneration !== storageWriteGeneration) return;
+    showRuntimeStorageWarning(!localSaved && !idbSaved);
+  };
+  idb.set(STORAGE_KEY, json).then(finishStorageCheck, () => finishStorageCheck(false));
   if (options.sync !== false) scheduleSyncPush();
 }
 
@@ -8938,6 +8973,9 @@ function loadTesseract() {
     const script = document.createElement("script");
     // バージョンを固定し、CDN側の更新で突然挙動が変わらないようにする。
     script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js";
+    // npm公開物のtesseract.js 7.0.0 dist/tesseract.min.jsから算出したSHA-384。
+    // CDN応答が1byteでも異なる場合は実行せず、OCRだけを安全側に失敗させる。
+    script.integrity = "sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM";
     script.crossOrigin = "anonymous";
     script.onload = () => resolve(window.Tesseract);
     script.onerror = () => {

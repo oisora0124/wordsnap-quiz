@@ -4,7 +4,8 @@
   "private": true,
   "description": "WordBank — 英単語クイズ。Cloudflare Pages Functions + D1 でサーバー保存。",
   "scripts": {
-    "test": "node scripts/check-release.mjs",
+    "test": "node --test scripts/api-contract.test.mjs && node scripts/check-release.mjs",
+    "test:api": "node --test scripts/api-contract.test.mjs",
     "check": "node scripts/check-release.mjs"
   }
 }

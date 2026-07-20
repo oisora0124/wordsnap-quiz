@@ -134,7 +134,20 @@ assert.match(api, /env\.DB/, "API must require the DB binding");
 assert.match(api, /RETURNING\s+rev,\s*updatedAt/i, "API atomic revision result is missing");
 assert.match(api, /MAX_RAW_BODY/, "API body-size guard is missing");
 assert.match(api, /MAX_INFLATED_JSON/, "API inflated-size guard is missing");
+assert.match(api, /MAX_INCOMING_BASE64/, "API compressed-input guard is missing");
 assert.match(api, /MAX_STORED_BASE64/, "API D1 row-size guard is missing");
+assert.ok(
+  publicHtml.includes(
+    'script.integrity = "sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM";',
+  ),
+  "Tesseract.js subresource integrity is missing or has changed",
+);
+assert.match(publicHtml, /id=["']runtimeStorageWarning["']/, "runtime storage warning is missing");
+assert.match(
+  publicHtml,
+  /showRuntimeStorageWarning\(!localSaved\s*&&\s*!idbSaved\)/,
+  "runtime storage warning must require both local stores to fail",
+);
 
 // Detect only realistic ASCII secrets, not the UI's abbreviated placeholders (AIza… / gsk_…).
 const scanned = [publicHtml, rootHtml, standaloneHtml, worker, api, schema].join("\n");
