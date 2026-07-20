@@ -7201,6 +7201,11 @@ async function syncRequest(method, body = null, requestOptions = {}) {
   } catch (error) {
     // abort例外（キー切替による中断）は番兵エラーに変換して静かに破棄させる
     if (gen !== syncState.requestGen) throw staleSyncError();
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error("同期サーバーが60秒以内に応答しませんでした。通信を確認して再試行します。");
+      timeoutError.syncTimeout = true;
+      throw timeoutError;
+    }
     throw error;
   } finally {
     window.clearTimeout(timeout);

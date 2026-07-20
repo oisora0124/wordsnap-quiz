@@ -469,6 +469,8 @@ assert.match(publicHtml, /setTimeout\(\(\)\s*=>\s*controller\.abort\(\),\s*SYNC_
   "client sync timeout must abort the in-flight fetch");
 assert.match(publicHtml, /clearTimeout\(timeout\)[\s\S]*?syncState\.abortControllers\.delete\(controller\)/,
   "client sync timeout must be cleared after every request");
+assert.match(publicHtml, /error\?\.name\s*===\s*["']AbortError["'][\s\S]*?timeoutError\.syncTimeout\s*=\s*true/,
+  "a sync timeout must be distinguished from a stale key-switch cancellation");
 assert.match(publicHtml, /if\s*\(!error\.data\.state\)\s*{[\s\S]*?error\.noRetry\s*=\s*true/,
   "a 409 response without remote state must stop instead of overwriting unseen changes");
 assert.doesNotMatch(publicHtml, /壊れた409応答（stateなし）でも[^\n]*再送/,
