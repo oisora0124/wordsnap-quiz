@@ -201,7 +201,18 @@ assert.equal(manifest.name, "WordBank", "manifest name must be WordBank");
 assert.ok(Array.isArray(manifest.icons) && manifest.icons.length >= 2, "manifest icons are incomplete");
 for (const icon of manifest.icons) {
   assert.ok(icon && typeof icon.src === "string", "manifest icon src is invalid");
-  assert.ok(existsSync(join(publishDir, icon.src)), `manifest icon is missing: ${icon.src}`);
+  const iconPath = join(publishDir, icon.src);
+  assert.ok(existsSync(iconPath), `manifest icon is missing: ${icon.src}`);
+  assert.equal(icon.type, "image/png", `manifest icon must declare PNG: ${icon.src}`);
+  const png = readFileSync(iconPath);
+  assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a",
+    `manifest icon is not a valid PNG: ${icon.src}`);
+  const expectedSize = String(icon.sizes || "").match(/^(\d+)x(\d+)$/);
+  assert.ok(expectedSize, `manifest icon has an invalid sizes value: ${icon.src}`);
+  assert.equal(png.readUInt32BE(16), Number(expectedSize[1]),
+    `manifest icon width does not match its declaration: ${icon.src}`);
+  assert.equal(png.readUInt32BE(20), Number(expectedSize[2]),
+    `manifest icon height does not match its declaration: ${icon.src}`);
 }
 
 assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v\d+["']/, "versioned cache name is missing");
