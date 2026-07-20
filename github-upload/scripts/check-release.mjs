@@ -518,6 +518,56 @@ await assert.rejects(lateRequest, (error) => error?.staleSync === true,
 assert.equal(staleSyncSandbox.__syncRace.syncState.abortControllers.size, 0,
   "a discarded request must not remain registered as in flight");
 
+// PUT待機中に発生したローカル変更が、完了後の単一キューでちょうど1回再送される。
+const syncQueueStart = publicHtml.indexOf("function scheduleSyncPush(");
+const syncQueueEnd = publicHtml.indexOf("\n// 戻り値: 取り込みで状態が変わったか", syncQueueStart);
+assert.ok(syncQueueStart >= 0 && syncQueueEnd > syncQueueStart,
+  "sync push-queue source is missing");
+let resolveFirstSyncPut;
+let syncPutCalls = 0;
+let nextTimerId = 1;
+const queuedTimers = new Map();
+const syncQueueSandbox = {
+  window: {
+    setTimeout(callback) {
+      const id = nextTimerId++;
+      queuedTimers.set(id, callback);
+      return id;
+    },
+    clearTimeout(id) { queuedTimers.delete(id); },
+  },
+};
+new Script(
+  "const syncState = { id: 'room-a', connected: true, applyingRemote: false, pushing: false, pushQueued: false, dirtyGen: 1, requestGen: 0, rev: 0, retryTimer: 0, pushTimer: 0 };\n" +
+    "const syncServerAvailable = () => true;\n" +
+    "const setSyncStatus = () => {};\n" +
+    "const isStaleSyncError = () => false;\n" +
+    "const validSyncGetResponse = () => true;\n" +
+    "const applyMergedRemoteState = () => {};\n" +
+    "const syncPutState = async () => { globalThis.__putCalls += 1; if (globalThis.__putCalls === 1) return new Promise((resolve) => { globalThis.__resolveFirst = resolve; }); return { stateRev: globalThis.__putCalls }; };\n" +
+    `${publicHtml.slice(syncQueueStart, syncQueueEnd)}\n` +
+    "globalThis.__putCalls = 0; globalThis.__syncQueue = { scheduleSyncPush, pushWordsnapState, syncState };",
+  { filename: "sync-push-queue-check.js" },
+).runInNewContext(syncQueueSandbox);
+const firstQueuedPush = syncQueueSandbox.__syncQueue.pushWordsnapState();
+syncQueueSandbox.__syncQueue.scheduleSyncPush();
+assert.equal(syncQueueSandbox.__syncQueue.syncState.pushQueued, true,
+  "a local change during PUT must mark one follow-up push as queued");
+syncQueueSandbox.__resolveFirst({ stateRev: 1 });
+await firstQueuedPush;
+assert.equal(queuedTimers.size, 1,
+  "finishing the first PUT must schedule exactly one follow-up push");
+const followUpTimer = [...queuedTimers.values()][0];
+queuedTimers.clear();
+followUpTimer();
+await Promise.resolve();
+await Promise.resolve();
+syncPutCalls = syncQueueSandbox.__putCalls;
+assert.equal(syncPutCalls, 2, "the queued local change must be sent exactly once");
+assert.equal(syncQueueSandbox.__syncQueue.syncState.pushQueued, false,
+  "the follow-up push must consume its queue marker");
+assert.equal(queuedTimers.size, 0, "a successful follow-up must not schedule another push");
+
 for (const column of ["key", "state", "rev", "updatedAt"]) {
   assert.match(schema, new RegExp(`\\b${column}\\b`), `D1 schema is missing ${column}`);
 }
