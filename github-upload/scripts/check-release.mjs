@@ -155,6 +155,8 @@ assert.match(
   /location\.protocol\s*===\s*["']https:["']/,
   "standalone download must be enabled for the published HTTPS app",
 );
+assert.match(publicHtml, /function\s+downloadBlob[\s\S]*?document\.body\.append\(link\)[\s\S]*?link\.click\(\)[\s\S]*?link\.remove\(\)[\s\S]*?setTimeout\(\(\)\s*=>\s*URL\.revokeObjectURL\(objectUrl\),\s*0\)/,
+  "blob downloads must remain attached until the browser has accepted the save action");
 assert.doesNotMatch(
   publicHtml,
   /document\.querySelector\(["']link\[rel=[\\"']stylesheet/,

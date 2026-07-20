@@ -6460,12 +6460,7 @@ async function downloadStandalone() {
     }
 
     const blob = new Blob([standaloneHtml], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "wordbank.html";
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, "wordbank.html");
     setStatus("WordBankをHTMLとして保存しました。現在の単語・成績・個人キー・AIキーはファイルに含まれません。");
   } catch (error) {
     const message = error?.name === "AbortError"
@@ -15665,13 +15660,21 @@ function safeDeckFileName(name) {
   return `${safe || "wordbank-deck"}.json`;
 }
 
-function downloadJsonBlob(blob, filename) {
+function downloadBlob(blob, filename) {
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
   link.download = filename;
+  // Safariを含め、保存処理がリンクを確実に認識してからURLを破棄できるよう一時的にDOMへ置く。
+  link.hidden = true;
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(objectUrl);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
+
+function downloadJsonBlob(blob, filename) {
+  downloadBlob(blob, filename);
 }
 
 async function shareActiveDeck() {
@@ -15750,12 +15753,7 @@ function parseDeckSharePayload(raw) {
 
 elements.exportButton.addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(appState, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "wordsnap-quiz-data.json";
-  link.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, "wordsnap-quiz-data.json");
 });
 
 elements.importDeckShareInput?.addEventListener("change", async () => {
