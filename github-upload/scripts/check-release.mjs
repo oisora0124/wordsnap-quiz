@@ -85,6 +85,12 @@ for (const attribute of ["aria-labelledby", "aria-describedby", "aria-controls"]
     }
   }
 }
+for (const id of ["quizRangeToggle", "trashToggleButton"]) {
+  const control = staticMarkup.match(new RegExp(`<button\\b[^>]*\\bid=["']${id}["'][^>]*>`, "i"));
+  assert.ok(control && /\baria-expanded=["']false["']/i.test(control[0]) &&
+    /\baria-controls=["'][^"']+["']/i.test(control[0]),
+  `${id} must expose both its collapsed state and controlled region`);
+}
 for (const match of staticMarkup.matchAll(/<button\b[^>]*>/gi)) {
   assert.match(match[0], /\btype=["']button["']/i,
     "a static button is missing type=button and may submit a future form unexpectedly");
