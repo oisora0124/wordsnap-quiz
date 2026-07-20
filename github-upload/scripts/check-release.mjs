@@ -434,10 +434,10 @@ assert.ok(getResponseStart >= 0 && getResponseEnd > getResponseStart,
 const getResponseSandbox = {};
 new Script(
   `${publicHtml.slice(getResponseStart, getResponseEnd)}\n` +
-    "globalThis.__validSyncGetResponse = validSyncGetResponse;",
+    "globalThis.__syncResponse = { validSyncGetResponse, validSyncPutResponse };",
   { filename: "sync-get-response-check.js" },
 ).runInNewContext(getResponseSandbox);
-const validSyncGetResponse = getResponseSandbox.__validSyncGetResponse;
+const { validSyncGetResponse, validSyncPutResponse } = getResponseSandbox.__syncResponse;
 assert.equal(validSyncGetResponse({ state: null, stateRev: 0 }, null), true,
   "a new empty sync room must remain backward compatible");
 assert.equal(validSyncGetResponse({ state: null, stateRev: 3, notModified: true }, 3), true,
@@ -454,6 +454,19 @@ for (const invalid of [
 ]) {
   assert.equal(validSyncGetResponse(invalid[0], invalid[1]), false,
     "an ambiguous or malformed successful GET must fail closed");
+}
+assert.equal(validSyncPutResponse({ ok: true, stateRev: 1 }), true,
+  "a successful PUT with a positive integer revision must be accepted");
+for (const invalid of [
+  null,
+  { ok: false, stateRev: 1 },
+  { ok: true },
+  { ok: true, stateRev: 0 },
+  { ok: true, stateRev: -1 },
+  { ok: true, stateRev: 1.5 },
+]) {
+  assert.equal(validSyncPutResponse(invalid), false,
+    "a PUT without a confirmed positive integer revision must fail closed");
 }
 
 for (const column of ["key", "state", "rev", "updatedAt"]) {

@@ -7173,6 +7173,12 @@ function validSyncGetResponse(data, requestedSinceRev) {
   );
 }
 
+function validSyncPutResponse(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data) || data.ok !== true) return false;
+  const rev = Number(data.stateRev);
+  return Number.isInteger(rev) && rev > 0;
+}
+
 async function syncRequest(method, body = null, requestOptions = {}) {
   // 送信時の世代を覚え、応答受信時に世代が変わっていたら結果を破棄する
   const gen = syncState.requestGen;
@@ -7221,6 +7227,11 @@ async function syncRequest(method, body = null, requestOptions = {}) {
   }
   if (method === "GET" && !validSyncGetResponse(data, requestOptions.sinceRev)) {
     const error = new Error("同期サーバーの応答を安全に確認できないため、自動処理を中止しました。");
+    error.noRetry = true;
+    throw error;
+  }
+  if (method === "PUT" && !validSyncPutResponse(data)) {
+    const error = new Error("同期サーバーの保存結果を確認できないため、保存済みとして扱いませんでした。");
     error.noRetry = true;
     throw error;
   }
