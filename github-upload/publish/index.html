@@ -4770,6 +4770,9 @@ accurate 正確な"
                 <button id="syncPullButton" class="secondary" type="button" title="サーバーから最新のデータを取得して、この端末に反映します。">今すぐ読み込む</button>
                 <button id="syncNewKeyButton" class="ghost" type="button" title="新しい個人キーを発行し、今のデータをそのまま引き継ぎます。">新しい個人キーを発行</button>
               </div>
+              <p id="syncKeySecurityWarning" class="sync-status is-error" role="alert" hidden>
+                この個人キーは旧形式です。同期はそのまま使えますが、短いキーは推測されやすいため、JSONバックアップ後に「新しい個人キーを発行」で安全な形式へ移すことを推奨します。
+              </p>
               <p class="settings-desc">
                 <strong>個人リンクをコピー</strong>＝このページのリンクをコピー（別端末で開くと同じデータに）。
                 <strong>今すぐ読み込む</strong>＝サーバーの最新をこの端末に取り込み。どちらも現在の単語は消えません。
@@ -5909,6 +5912,7 @@ const elements = {
   syncJoinButton: document.querySelector("#syncJoinButton"),
   syncIdInput: document.querySelector("#syncIdInput"),
   syncKeyToggleButton: document.querySelector("#syncKeyToggleButton"),
+  syncKeySecurityWarning: document.querySelector("#syncKeySecurityWarning"),
   syncConnectButton: document.querySelector("#syncConnectButton"),
   syncGenerateButton: document.querySelector("#syncGenerateButton"),
   syncCopyLinkButton: document.querySelector("#syncCopyLinkButton"),
@@ -7975,9 +7979,19 @@ function generatePrivateKey() {
   return `ws_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+function isModernPrivateKey(id) {
+  return /^ws_[0-9a-f]{60}$/.test(String(id || ""));
+}
+
+function updateSyncKeySecurityWarning(id = syncState.id) {
+  if (!elements.syncKeySecurityWarning) return;
+  elements.syncKeySecurityWarning.hidden = !id || isModernPrivateKey(id);
+}
+
 // 個人キーをURL(?w=...)に埋め込む。個人リンクのコピーと同一端末での再読込に使う。
 // PWA manifest の start_url は静的なので、ホーム画面アイコンだけでキー保持を保証しない。
 function rememberSyncIdInUrl(id) {
+  updateSyncKeySecurityWarning(id);
   try {
     const url = new URL(window.location.href);
     if (url.searchParams.get("w") !== id) {
@@ -8278,6 +8292,7 @@ function initWordsnapSync() {
   }
 
   elements.syncIdInput.value = syncState.id;
+  updateSyncKeySecurityWarning(syncState.id);
   if (elements.syncPullButton) elements.syncPullButton.disabled = !syncState.id;
   if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = !syncState.id;
 

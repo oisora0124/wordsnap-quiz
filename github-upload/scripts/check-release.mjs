@@ -300,6 +300,24 @@ assert.match(publicHtml, /サイトデータ消去や機種変更後の復元に
   "PWA recovery disclosure must require an externally retained recovery artifact");
 assert.doesNotMatch(publicHtml, /ホーム画面に追加すると、機種変更してもデータが残ります/,
   "the app must not claim that a home-screen icon alone survives device migration");
+assert.match(publicHtml, /id=["']syncKeySecurityWarning["'][^>]*role=["']alert["'][^>]*hidden/,
+  "legacy sync-key warning is missing");
+assert.match(publicHtml, /function\s+isModernPrivateKey\(id\)\s*{\s*return \/\^ws_\[0-9a-f\]\{60\}\$\//,
+  "modern sync keys must be recognized by their full 240-bit format");
+const keyCheckStart = publicHtml.indexOf("function isModernPrivateKey(");
+const keyCheckEnd = publicHtml.indexOf("\nfunction updateSyncKeySecurityWarning(", keyCheckStart);
+const keySandbox = {};
+new Script(
+  `${publicHtml.slice(keyCheckStart, keyCheckEnd)}\n` +
+    "globalThis.__isModernPrivateKey = isModernPrivateKey;",
+  { filename: "sync-key-strength-check.js" },
+).runInNewContext(keySandbox);
+assert.equal(keySandbox.__isModernPrivateKey(`ws_${"a".repeat(60)}`), true,
+  "a generated 240-bit sync key must not show the legacy warning");
+for (const weak of ["family", "ws_short", `ws_${"a".repeat(59)}`, `ws_${"g".repeat(60)}`]) {
+  assert.equal(keySandbox.__isModernPrivateKey(weak), false,
+    "legacy or malformed sync keys must show the migration warning");
+}
 assert.match(
   publicHtml,
   /showRuntimeStorageWarning\(!localSaved\s*&&\s*!idbSaved\)/,
