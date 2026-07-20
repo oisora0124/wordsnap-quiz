@@ -227,7 +227,21 @@ test("unsupported methods and oversized input are rejected before D1 access", as
   const disallowed = await requestApi(methodDb, { method: "POST", body: {} });
   assert.equal(disallowed.response.status, 405);
   assert.equal(disallowed.response.headers.get("allow"), "GET, PUT");
+  assert.equal(disallowed.response.headers.get("access-control-allow-origin"), null,
+    "sync data must not become readable cross-origin");
   assert.equal(methodDb.calls.length, 0);
+
+  const preflightDb = new FakeD1();
+  const preflight = await requestApi(preflightDb, {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://untrusted.example",
+      "access-control-request-method": "PUT",
+    },
+  });
+  assert.equal(preflight.response.status, 405);
+  assert.equal(preflight.response.headers.get("access-control-allow-origin"), null);
+  assert.equal(preflightDb.calls.length, 0);
 
   const lengthDb = new FakeD1();
   const tooLong = await requestApi(lengthDb, {
