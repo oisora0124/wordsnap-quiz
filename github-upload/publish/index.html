@@ -13187,6 +13187,17 @@ function scheduleReview(word) {
 // 解答結果を学習状態（習得/復習）に反映する。通常クイズ・範囲クイズ・総復習で共通の判定。
 // 習得条件は「2回連続正解」：1回目の正解は復習スケジュールに留め、誤答は連続カウンタを0に戻す。
 // 正解で習得済みが取り消されることはない（既に mastered なら維持する）。
+// 復習日の間隔。3日以上の段階には±12%のばらつきを与える。
+// 固定値のままだと、まとめて取り込んだ語がその後もずっと同じ日に戻ってきて
+// 「今日は200語、明日は0語」のような偏りが続くため、山をならす。
+// 1日以内の段階は、ばらつかせても意味がないうえ当日中の再確認を壊すのでそのまま。
+function srsIntervalMs(stage) {
+  const days = SRS_INTERVAL_DAYS[stage] || 0;
+  if (days < 3) return days * SRS_DAY_MS;
+  const jitter = 1 + (Math.random() * 0.24 - 0.12);
+  return Math.round(days * SRS_DAY_MS * jitter);
+}
+
 function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.now(), options = {}) {
   const learning = word.learning;
   const responseMs = Number(options.responseMs);
@@ -13206,7 +13217,7 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
   const advanceSrs = () => {
     const nextStage = Math.min(SRS_INTERVAL_DAYS.length - 1, currentStage + 1);
     learning.srsStage = nextStage;
-    learning.nextReviewAt = now + SRS_INTERVAL_DAYS[nextStage] * SRS_DAY_MS;
+    learning.nextReviewAt = now + srsIntervalMs(nextStage);
   };
   const bumpStreak = () =>
     (learning.correctStreak = Math.max(0, Math.floor(Number(learning.correctStreak) || 0)) + 1);
@@ -13242,9 +13253,11 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
       }
     }
   } else {
-    // 誤答は日次SRSを最初からやり直し、翌日に再確認する。2〜3問後/5分後の
-    // 短期再確認は既存reviewAt・blockedUntilで別に維持する。
-    learning.srsStage = 0;
+    // 誤答は翌日に再確認する。2〜3問後/5分後の短期再確認は既存reviewAt・blockedUntilで維持。
+    // 段階は0へ全部戻さず2つだけ下げる。120日まで育てた語を一度取りこぼしただけで
+    // 最初からやり直させると、ほぼ覚えている語の復習が何十回も増えて他の語を圧迫するため。
+    // 落とし続ければ0まで下がるので、覚えていない語が甘くなることはない。
+    learning.srsStage = Math.max(0, currentStage - 2);
     learning.nextReviewAt = now + SRS_DAY_MS;
     learning.correctStreak = 0;
     scheduleReview(word);
