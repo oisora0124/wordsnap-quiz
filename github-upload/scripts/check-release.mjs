@@ -433,7 +433,8 @@ assert.ok(getResponseStart >= 0 && getResponseEnd > getResponseStart,
   "sync GET response validator source is missing");
 const getResponseSandbox = {};
 new Script(
-  `${publicHtml.slice(getResponseStart, getResponseEnd)}\n` +
+  "const cleanSyncId = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 64);\n" +
+    `${publicHtml.slice(getResponseStart, getResponseEnd)}\n` +
     "globalThis.__syncResponse = { validSyncGetResponse, validSyncPutResponse };",
   { filename: "sync-get-response-check.js" },
 ).runInNewContext(getResponseSandbox);
@@ -444,6 +445,9 @@ assert.equal(validSyncGetResponse({ state: null, stateRev: 3, notModified: true 
   "an explicit matching notModified response must be accepted");
 assert.equal(validSyncGetResponse({ state: { words: [], decks: [] }, stateRev: 3 }, null), true,
   "a full valid sync state must be accepted");
+assert.equal(validSyncGetResponse(
+  { syncId: "room-a", state: { words: [], decks: [] }, stateRev: 3 }, null, "room-a"), true,
+  "a response for the requested sync id must be accepted");
 for (const invalid of [
   [{ state: null, stateRev: 3 }, null],
   [{ state: null, stateRev: 3, notModified: true }, 2],
@@ -455,8 +459,15 @@ for (const invalid of [
   assert.equal(validSyncGetResponse(invalid[0], invalid[1]), false,
     "an ambiguous or malformed successful GET must fail closed");
 }
+assert.equal(validSyncGetResponse(
+  { syncId: "room-b", state: { words: [], decks: [] }, stateRev: 3 }, null, "room-a"), false,
+  "a GET response for another sync id must fail closed");
 assert.equal(validSyncPutResponse({ ok: true, stateRev: 1 }), true,
   "a successful PUT with a positive integer revision must be accepted");
+assert.equal(validSyncPutResponse({ ok: true, syncId: "room-a", stateRev: 1 }, "room-a"), true,
+  "a PUT confirmation for the requested sync id must be accepted");
+assert.equal(validSyncPutResponse({ ok: true, syncId: "room-b", stateRev: 1 }, "room-a"), false,
+  "a PUT confirmation for another sync id must fail closed");
 for (const invalid of [
   null,
   { ok: false, stateRev: 1 },

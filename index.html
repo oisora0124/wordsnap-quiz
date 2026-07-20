@@ -7148,8 +7148,9 @@ function bumpSyncRequestGen() {
   syncState.abortControllers.clear();
 }
 
-function validSyncGetResponse(data, requestedSinceRev) {
+function validSyncGetResponse(data, requestedSinceRev, expectedSyncId = "") {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  if (expectedSyncId && cleanSyncId(data.syncId) !== cleanSyncId(expectedSyncId)) return false;
   const rev = Number(data.stateRev);
   if (!Number.isInteger(rev) || rev < 0) return false;
   if (data.state !== null && data.state !== undefined) {
@@ -7173,8 +7174,9 @@ function validSyncGetResponse(data, requestedSinceRev) {
   );
 }
 
-function validSyncPutResponse(data) {
+function validSyncPutResponse(data, expectedSyncId = "") {
   if (!data || typeof data !== "object" || Array.isArray(data) || data.ok !== true) return false;
+  if (expectedSyncId && cleanSyncId(data.syncId) !== cleanSyncId(expectedSyncId)) return false;
   const rev = Number(data.stateRev);
   return Number.isInteger(rev) && rev > 0;
 }
@@ -7225,12 +7227,12 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     error.data = data;
     throw error;
   }
-  if (method === "GET" && !validSyncGetResponse(data, requestOptions.sinceRev)) {
+  if (method === "GET" && !validSyncGetResponse(data, requestOptions.sinceRev, syncState.id)) {
     const error = new Error("同期サーバーの応答を安全に確認できないため、自動処理を中止しました。");
     error.noRetry = true;
     throw error;
   }
-  if (method === "PUT" && !validSyncPutResponse(data)) {
+  if (method === "PUT" && !validSyncPutResponse(data, syncState.id)) {
     const error = new Error("同期サーバーの保存結果を確認できないため、保存済みとして扱いませんでした。");
     error.noRetry = true;
     throw error;
@@ -7858,7 +7860,8 @@ async function pushWordsnapState(options = {}) {
       const validConflictState = error.data.state && validSyncGetResponse({
         state: error.data.state,
         stateRev: error.data.stateRev,
-      });
+        syncId: error.data.syncId,
+      }, null, syncState.id);
       if (!validConflictState) {
         // 最新stateを見ずにrevisionだけ合わせて再送すると、相手端末の差分を丸ごと
         // 上書きし得る。現行APIは409に完全なstateとrevisionを必ず含めるため、
