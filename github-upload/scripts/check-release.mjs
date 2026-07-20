@@ -427,6 +427,32 @@ const idempotentTwice = mergeStates(idempotentOnce, crossDeckLegacyMerge);
 assert.equal(JSON.stringify(idempotentTwice), JSON.stringify(idempotentOnce),
   "repeating the same application-state merge must be idempotent");
 
+const getResponseStart = publicHtml.indexOf("function validSyncGetResponse(");
+const getResponseEnd = publicHtml.indexOf("\nasync function syncRequest(", getResponseStart);
+assert.ok(getResponseStart >= 0 && getResponseEnd > getResponseStart,
+  "sync GET response validator source is missing");
+const getResponseSandbox = {};
+new Script(
+  `${publicHtml.slice(getResponseStart, getResponseEnd)}\n` +
+    "globalThis.__validSyncGetResponse = validSyncGetResponse;",
+  { filename: "sync-get-response-check.js" },
+).runInNewContext(getResponseSandbox);
+const validSyncGetResponse = getResponseSandbox.__validSyncGetResponse;
+assert.equal(validSyncGetResponse({ state: null, stateRev: 0 }, null), true,
+  "a new empty sync room must remain backward compatible");
+assert.equal(validSyncGetResponse({ state: null, stateRev: 3, notModified: true }, 3), true,
+  "an explicit matching notModified response must be accepted");
+assert.equal(validSyncGetResponse({ state: { words: [], decks: [] }, stateRev: 3 }, null), true,
+  "a full valid sync state must be accepted");
+for (const invalid of [
+  [{ state: null, stateRev: 3 }, null],
+  [{ state: null, stateRev: 3, notModified: true }, 2],
+  [{ state: { words: [] }, stateRev: 3 }, null],
+]) {
+  assert.equal(validSyncGetResponse(invalid[0], invalid[1]), false,
+    "an ambiguous or malformed successful GET must fail closed");
+}
+
 for (const column of ["key", "state", "rev", "updatedAt"]) {
   assert.match(schema, new RegExp(`\\b${column}\\b`), `D1 schema is missing ${column}`);
 }

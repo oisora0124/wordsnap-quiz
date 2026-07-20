@@ -7148,6 +7148,30 @@ function bumpSyncRequestGen() {
   syncState.abortControllers.clear();
 }
 
+function validSyncGetResponse(data, requestedSinceRev) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const rev = Math.max(0, Math.floor(Number(data.stateRev) || 0));
+  if (data.state !== null && data.state !== undefined) {
+    return Boolean(
+      data.state &&
+      typeof data.state === "object" &&
+      !Array.isArray(data.state) &&
+      Array.isArray(data.state.words) &&
+      Array.isArray(data.state.decks),
+    );
+  }
+  // stateなしが正常なのは、新規キー(rev 0)か、既知revisionと一致した明示的な
+  // notModifiedだけ。正のrevisionなのにstateも印も無い応答を空領域として扱うと、
+  // 接続直後のpushで見えていないリモート状態を上書きし得る。
+  const since = Number(requestedSinceRev);
+  return rev === 0 || (
+    data.notModified === true &&
+    Number.isFinite(since) &&
+    since > 0 &&
+    rev === since
+  );
+}
+
 async function syncRequest(method, body = null, requestOptions = {}) {
   // 送信時の世代を覚え、応答受信時に世代が変わっていたら結果を破棄する
   const gen = syncState.requestGen;
@@ -7187,6 +7211,11 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     const error = new Error(data.error || "同期サーバーへ接続できませんでした。");
     error.status = response.status;
     error.data = data;
+    throw error;
+  }
+  if (method === "GET" && !validSyncGetResponse(data, requestOptions.sinceRev)) {
+    const error = new Error("同期サーバーの応答を安全に確認できないため、自動処理を中止しました。");
+    error.noRetry = true;
     throw error;
   }
   return data;
