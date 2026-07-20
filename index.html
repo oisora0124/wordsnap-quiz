@@ -6836,7 +6836,12 @@ function normalizeCefr(cefr) {
 
 function normalizePos(pos) {
   if (!pos || typeof pos !== "object") return null;
-  return { tag: pos.tag || null };
+  // tags は「この語が取り得る品詞すべて」。空所補充の根拠判定に使う（tag は表示用の代表）。
+  const tags = Array.isArray(pos.tags)
+    ? pos.tags.filter((t) => ["n", "v", "adj", "adv"].includes(t))
+    : [];
+  const tag = pos.tag || tags[0] || null;
+  return { tag, tags: tags.length ? tags : tag ? [tag] : [] };
 }
 
 function posLabel(tag) {
@@ -6860,8 +6865,28 @@ const BUILTIN_POS = (() => {
   return map;
 })();
 
+// 名詞としても動詞としても普通に使う語。代表の品詞だけで「空所に入らない」と判断すると、
+// 例えば正解が動詞のときに impact を「名詞だから入らない」と誤って除外根拠にしてしまう。
+const BUILTIN_POS_NOUN_AND_VERB = new Set(
+  ("impact influence contrast conflict compromise reform decline blame collapse attribute " +
+    "advocate regard reward range issue factor structure transition estimate associate " +
+    "increase promise approach respect result challenge demand support process record " +
+    "present object project contract progress").split(" "),
+);
+
 function builtinPosTag(term) {
   return BUILTIN_POS.get(String(term || "").trim().toLowerCase()) || null;
+}
+
+// その語が取り得る品詞すべて。空所補充の根拠判定はこちらを使う。
+function builtinPosTags(term) {
+  const key = String(term || "").trim().toLowerCase();
+  const tag = BUILTIN_POS.get(key);
+  if (!tag) return [];
+  if (BUILTIN_POS_NOUN_AND_VERB.has(key)) {
+    return tag === "n" ? ["n", "v"] : tag === "v" ? ["v", "n"] : [tag, "n", "v"];
+  }
+  return [tag];
 }
 
 // Looks up the primary part of speech from Datamuse (md=p tags).
@@ -6886,10 +6911,14 @@ async function resolvePos(term) {
     }
     const entry = Array.isArray(data) ? data[0] : null;
     if (entry && entry.word === word && Array.isArray(entry.tags)) {
-      const tag = entry.tags.find((t) => ["n", "v", "adj", "adv"].includes(t)) || null;
-      return { tag };
+      // Datamuseは品詞を全部返す（impact なら ["n","v"]）。表示用には先頭を使うが、
+      // 空所補充で「この語は空所に入らない」と言い切るには全部の品詞が要る。
+      // 1つだけ拾うと、名詞としても動詞としても使える語を「品詞が違うから入らない」と
+      // 誤って判定してしまう。
+      const tags = entry.tags.filter((t) => ["n", "v", "adj", "adv"].includes(t));
+      return { tag: tags[0] || null, tags };
     }
-    return { tag: null };
+    return { tag: null, tags: [] };
   } catch {
     return null; // network failure: retry on a later render
   }
@@ -12615,7 +12644,7 @@ async function ensurePosForContext(answer) {
       // 応答待ちの間に単語が削除・変更されていないか確認してから反映する
       const live = appState.words.find((item) => item.id === target.id);
       if (live && normalizeTerm(live.term) === normalizeTerm(target.term)) {
-        live.pos = { tag: result.tag };
+        live.pos = { tag: result.tag, tags: result.tags || (result.tag ? [result.tag] : []) };
       }
     }),
   );
@@ -12795,18 +12824,31 @@ let contextBasisFallbackNote = "";
 //   (1) 出題語の派生形（名詞化など）＝品詞が違うので文法的に入らない
 //   (2) 品詞が分かっている登録語で、その品詞が出題語と違う
 // どちらでもない語は「意味は違うが空所には入り得る」可能性が残り、消去の根拠にならない。
+// その語が取り得る品詞をすべて集める（同梱表 → 登録済みの解決結果の順）。
+function posTagsFor(term, word = null) {
+  const builtin = builtinPosTags(term);
+  if (builtin.length) return builtin;
+  const source =
+    word ||
+    (appState.words || []).find(
+      (w) => String(w.term || "").trim().toLowerCase() === String(term || "").trim().toLowerCase(),
+    );
+  const tags = Array.isArray(source?.pos?.tags) ? source.pos.tags : [];
+  if (tags.length) return tags;
+  return source?.pos?.tag ? [source.pos.tag] : [];
+}
+
 function contextDistractorHasBasis(answer, term) {
   const answerTerm = String(answer?.term || "").trim().toLowerCase();
   const candidate = String(term || "").trim().toLowerCase();
   if (!answerTerm || !candidate) return false;
   if (hasDerivationalSuffix(answerTerm, candidate, DERIVATIONAL_SUFFIXES)) return true;
-  const answerPos = String(answer?.pos?.tag || "").toLowerCase();
-  if (!answerPos) return false; // 出題語の品詞が不明だと品詞では除外できない
-  const registered = (appState.words || []).find(
-    (w) => String(w.term || "").trim().toLowerCase() === candidate,
-  );
-  const candidatePos = String(registered?.pos?.tag || "").toLowerCase();
-  return Boolean(candidatePos && candidatePos !== answerPos);
+  const answerTags = posTagsFor(answerTerm, answer);
+  const candidateTags = posTagsFor(candidate);
+  // 品詞が1つでも重なれば、その語も空所の役割を担える可能性が残り、除外の根拠にならない。
+  // 代表の品詞だけで比べると、名詞と動詞の両方で使える語を取りこぼす。
+  if (!answerTags.length || !candidateTags.length) return false;
+  return !candidateTags.some((tag) => answerTags.includes(tag));
 }
 
 // 4択全体として、根拠を持って正解を選べるか。
@@ -13159,6 +13201,8 @@ function buildReviewQuiz() {
       // どの入口でも、誤答を1件も作れない場合は問題を返さず共通の空状態へ合流させる。
       quizEmptyReason =
         "意味の異なる単語をもう1語以上登録するか、同じ日本語訳だけの単語が続かないよう訳を見直してください。1択の問題は採点されません。";
+      // この語の切り替え理由を持ち越さない（次の問題で無関係な注記が出るのを防ぐ）
+      contextBasisFallbackNote = "";
       return null;
     }
     const choices = shuffle([answer, ...distractors]);
@@ -13477,7 +13521,10 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
     .map((word) => {
       let score = 0;
       const dist = spellingDistance(answer.term, word.term);
-      if (dist > 0 && dist <= 2) score += 3; // 綴りが紛らわしい（affect/effect 等）
+      // 紛らわしさはスコアと別に持つ。スコアで判定すると、空所補充で品詞が同じ場合の
+      // 減点と相殺されて（3-3=0）上限チェックをすり抜けてしまう。
+      const confusable = dist > 0 && dist <= 2;
+      if (confusable) score += 3; // 綴りが紛らわしい（affect/effect 等）
       if (answerPos && word.pos?.tag) {
         const samePos = word.pos.tag === answerPos;
         if (preferDifferentPos) {
@@ -13488,7 +13535,7 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
           score += 1; // 意味の4択：同じ品詞＝意味カテゴリが近い
         }
       }
-      return { word, score };
+      return { word, score, confusable };
     })
     .sort((a, b) => b.score - a.score);
   // 紛らわしい誤答は1つまでにする。上位スコアだけで3つ埋めると、どれも似た語になって
@@ -13497,17 +13544,18 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
   const MAX_CONFUSABLE = 1;
   const picked = [];
   const takeFrom = (allowConfusable) => {
-    let confusableUsed = picked.filter(
-      (w) => spellingDistance(answer.term, w.term) > 0 && spellingDistance(answer.term, w.term) <= 2,
-    ).length;
-    for (const { word, score } of ranked) {
+    let confusableUsed = picked.filter((w) => {
+      const d = spellingDistance(answer.term, w.term);
+      return d > 0 && d <= 2;
+    }).length;
+    for (const { word, confusable } of ranked) {
       if (picked.length >= count) return;
       const key = normalizeMeaning(word.meaning);
       if (seen.has(key)) continue;
       // 訳が近すぎる語は「難易度」ではなく「正解が2つ」の問題になるので、
       // 選択肢が足りなくなる場合でも必ず除外する（allowConfusable でも緩めない）。
       if (meaningsTooClose(answer.meaning, word.meaning)) continue;
-      if (!allowConfusable && score >= 3) {
+      if (!allowConfusable && confusable) {
         if (confusableUsed >= MAX_CONFUSABLE) continue;
         confusableUsed += 1;
       }
@@ -13997,7 +14045,7 @@ async function backfillAllWordsPos() {
         const live = appState.words.find((item) => item.id === word.id);
         if (!live || normalizeTerm(live.term) !== normalizeTerm(word.term)) continue;
         // 応答が無い語も「判定済み」として置き、同じ語を何度も問い合わせない
-        live.pos = { tag: result?.tag || null };
+        live.pos = { tag: result?.tag || null, tags: result?.tags || [] };
         changed = true;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 400));
@@ -14131,7 +14179,7 @@ function backfillSavedPos() {
       // 応答待ちの間に単語が削除・置換されていないか確認してから反映する（CEFRと同じガード）
       const live = appState.words.find((item) => item.id === word.id);
       if (!live || normalizeTerm(live.term) !== normalizeTerm(word.term)) continue;
-      live.pos = { tag: result.tag };
+      live.pos = { tag: result.tag, tags: result.tags || (result.tag ? [result.tag] : []) };
       changed = true;
       const badge = elements.savedList.querySelector(`.pos-badge[data-pos-word="${live.id}"]`);
       if (badge) badge.textContent = posLabel(result.tag);
