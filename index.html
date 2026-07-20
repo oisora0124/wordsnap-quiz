@@ -12544,6 +12544,16 @@ async function fetchContextFromDictionary(word) {
     // （品詞が分からない語は従来どおり全定義から選ぶ。辞書だけで語義までは特定できない）
     const posMap = { n: "noun", v: "verb", adj: "adjective", adv: "adverb" };
     const wantPos = posMap[word?.pos?.tag] || null;
+    // 辞書の応答には品詞が入っている。例文を取りに来たついでに拾えば、
+    // 品詞を別途Datamuseへ問い合わせずに済み、その語の出題根拠が早く揃う。
+    if (!word?.pos) {
+      const firstPos = String(
+        (Array.isArray(data) ? data : [])[0]?.meanings?.[0]?.partOfSpeech || "",
+      ).toLowerCase();
+      const tag = { noun: "n", verb: "v", adjective: "adj", adverb: "adv" }[firstPos] || null;
+      const live = appState.words.find((item) => item.id === word?.id);
+      if (tag && live) live.pos = { tag };
+    }
     const matched = [];
     const others = [];
     for (const entry of Array.isArray(data) ? data : []) {
@@ -12976,6 +12986,9 @@ function startContextQuiz() {
   const first = appState.words.find((w) => w.id === reviewSession?.queue?.[0]);
   if (first && !contextAttempted(first)) ensureContextItem(first).catch(() => {});
   prefetchNextContextItem();
+  // 自分で取り込んだ単語の品詞を背景で埋めていく。解いている間に揃うので、
+  // 後半ほど「根拠を担保できず通常出題」になる問題が減っていく。
+  backfillAllWordsPos().catch(() => {});
 }
 
 // 例文中の対象語（独立した単語）をハイライトしたHTMLを返す。
@@ -13950,6 +13963,48 @@ function scheduleIdleTask(callback) {
     window.requestIdleCallback(() => callback(), { timeout: 700 });
   } else {
     window.setTimeout(callback, 0);
+  }
+}
+
+// 【後から追加した単語の出題品質】空所補充は品詞で誤答を除外して解答の根拠を作るため、
+// 品詞が無い単語は根拠を担保できず通常出題に落ちる。従来の補完は「保存した単語」画面に
+// 並んだ行だけが対象なので、クイズしか使わない利用者の単語はいつまでも埋まらなかった。
+// 例文モードを使う（＝外部送信に同意済みの）ときだけ、画面に関係なく背景で埋めていく。
+let posBackfillAllRunning = false;
+async function backfillAllWordsPos() {
+  if (posBackfillAllRunning) return;
+  if (contextGenMode() === "off" || !contextNetworkConsented()) return;
+  posBackfillAllRunning = true;
+  let changed = false;
+  try {
+    // 同梱の品詞表で埋まる分は通信しない
+    for (const word of appState.words) {
+      if (word.pos) continue;
+      const tag = builtinPosTag(word.term);
+      if (tag) {
+        word.pos = { tag };
+        changed = true;
+      }
+    }
+    // 残りは少しずつ問い合わせる。外部APIを一気に叩かないよう間隔を空ける。
+    for (let guard = 0; guard < 500; guard += 1) {
+      const batch = appState.words.filter((word) => !word.pos).slice(0, METADATA_IDLE_BATCH_SIZE);
+      if (!batch.length) break;
+      const resolved = await Promise.all(
+        batch.map(async (word) => ({ word, result: await resolvePosOnce(word.term).catch(() => null) })),
+      );
+      for (const { word, result } of resolved) {
+        const live = appState.words.find((item) => item.id === word.id);
+        if (!live || normalizeTerm(live.term) !== normalizeTerm(word.term)) continue;
+        // 応答が無い語も「判定済み」として置き、同じ語を何度も問い合わせない
+        live.pos = { tag: result?.tag || null };
+        changed = true;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 400));
+    }
+  } finally {
+    posBackfillAllRunning = false;
+    if (changed) persistAppState();
   }
 }
 
