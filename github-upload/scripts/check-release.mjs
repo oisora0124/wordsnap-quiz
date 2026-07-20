@@ -63,6 +63,14 @@ for (const model of ["gemini-3.5-flash", "qwen/qwen3.6-27b"]) {
 
 assert.equal(rootHtml, publicHtml, "root index.html and publish/index.html must be identical");
 assert.match(publicHtml, /<title>\s*WordBank\s*<\/title>/i, "WordBank title is missing");
+const staticMarkup = publicHtml.slice(0, publicHtml.indexOf("<script>"));
+const staticIds = [...staticMarkup.matchAll(/\sid=(["'])([^"']+)\1/g)].map((match) => match[2]);
+assert.equal(new Set(staticIds).size, staticIds.length,
+  "static HTML contains duplicate ids that can bind controls to the wrong element");
+const staticIdSet = new Set(staticIds);
+for (const match of staticMarkup.matchAll(/\sfor=(["'])([^"']+)\1/g)) {
+  assert.ok(staticIdSet.has(match[2]), `label references a missing control id: ${match[2]}`);
+}
 assert.match(
   publicHtml,
   /<meta\s+name=["']referrer["']\s+content=["']no-referrer["']\s*\/?>/i,
