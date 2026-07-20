@@ -4535,7 +4535,7 @@ accurate 正確な"
                 <option value="unknown">未判定</option>
               </select>
             </label>
-            <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false">範囲</button>
+            <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false" aria-controls="quizRangeRow">範囲</button>
             <label class="quiz-setup-check" title="単語の出題順をランダムにします。例文問題の割合は隣の設定で選べます。">
               <input id="quizShuffle" type="checkbox" checked />
               シャッフル
@@ -11372,7 +11372,7 @@ function startQuizFromRange() {
   });
 }
 
-// 「前回の設定」（単語帳・範囲・シャッフル・例文問題の割合）を保存する
+// 「前回の設定」（単語帳・CEFR・範囲・シャッフル・例文問題の割合）を保存する
 function persistLastQuizSettings() {
   try {
     const useRange = !!(elements.quizRangeRow && !elements.quizRangeRow.hidden);
@@ -11380,6 +11380,7 @@ function persistLastQuizSettings() {
       QUIZ_LAST_SETTINGS_KEY,
       JSON.stringify({
         deckId: elements.quizDeckSelect ? elements.quizDeckSelect.value : "all",
+        cefr: elements.quizCefrSelect ? elements.quizCefrSelect.value : "all",
         useRange,
         from: useRange && elements.quizRangeFrom ? elements.quizRangeFrom.value : "",
         to: useRange && elements.quizRangeTo ? elements.quizRangeTo.value : "",
@@ -11403,6 +11404,14 @@ function restoreLastQuizSettings() {
       [...elements.quizDeckSelect.options].some((opt) => opt.value === saved.deckId)
     ) {
       elements.quizDeckSelect.value = saved.deckId;
+      updateQuizDeckCount();
+    }
+    if (
+      saved.cefr &&
+      elements.quizCefrSelect &&
+      [...elements.quizCefrSelect.options].some((opt) => opt.value === saved.cefr)
+    ) {
+      elements.quizCefrSelect.value = saved.cefr;
       updateQuizDeckCount();
     }
     if (elements.quizShuffle && typeof saved.shuffle === "boolean") {

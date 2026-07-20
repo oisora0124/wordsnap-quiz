@@ -692,6 +692,16 @@ assert.match(
 );
 assert.match(
   publicHtml,
+  /cefr:\s*elements\.quizCefrSelect\s*\?\s*elements\.quizCefrSelect\.value\s*:\s*"all"/,
+  "the selected CEFR filter must be saved with the other quiz settings",
+);
+assert.match(
+  publicHtml,
+  /elements\.quizCefrSelect\.value\s*=\s*saved\.cefr/,
+  "a valid saved CEFR filter must be restored",
+);
+assert.match(
+  publicHtml,
   /contextAmount !== "none" && contextGenMode\(\) !== "off" && !contextNetworkConsented\(\)/,
   "some/all must keep the existing external-service consent gate",
 );
