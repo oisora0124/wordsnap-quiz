@@ -5973,6 +5973,9 @@ const IMPORT_MAX_FILE_BYTES = 8 * 1024 * 1024; // JSON読み込み: 8MB
 const IMPORT_MAX_WORDS = 50000; // JSON読み込み: 5万語
 const DECK_SHARE_MAX_FILE_BYTES = 2 * 1024 * 1024;
 const DECK_SHARE_MAX_WORDS = 5000;
+// 同期サーバーが応答しない場合にpulling/pushing状態を無期限に残さない。
+// 1万語級の圧縮送受信と低速回線にも余裕を持たせ、60秒で安全に中断して既存の再試行へ戻す。
+const SYNC_REQUEST_TIMEOUT_MS = 60 * 1000;
 const OCR_MAX_FILE_BYTES = 40 * 1024 * 1024; // 画像取り込み(OCR/AI): 40MB
 const OCR_MAX_PIXELS = 80 * 1000 * 1000; // 画像取り込み(OCR/AI): 8,000万画素
 // エラーメッセージ中の上限表記は定数から作る（値を変えたら文言も自動で揃う）
@@ -7138,6 +7141,9 @@ async function syncRequest(method, body = null, requestOptions = {}) {
   // 送信時の世代を覚え、応答受信時に世代が変わっていたら結果を破棄する
   const gen = syncState.requestGen;
   const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = controller
+    ? window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS)
+    : 0;
   if (controller) syncState.abortControllers.add(controller);
   const options = {
     method,
@@ -7162,6 +7168,7 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     if (gen !== syncState.requestGen) throw staleSyncError();
     throw error;
   } finally {
+    window.clearTimeout(timeout);
     if (controller) syncState.abortControllers.delete(controller);
   }
   if (gen !== syncState.requestGen) throw staleSyncError();

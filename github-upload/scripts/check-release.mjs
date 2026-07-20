@@ -431,6 +431,12 @@ assert.match(api, /MAX_RAW_BODY/, "API body-size guard is missing");
 assert.match(api, /MAX_INFLATED_JSON/, "API inflated-size guard is missing");
 assert.match(api, /MAX_INCOMING_BASE64/, "API compressed-input guard is missing");
 assert.match(api, /MAX_STORED_BASE64/, "API D1 row-size guard is missing");
+assert.match(publicHtml, /const\s+SYNC_REQUEST_TIMEOUT_MS\s*=\s*60\s*\*\s*1000/,
+  "client sync requests must have a bounded timeout");
+assert.match(publicHtml, /setTimeout\(\(\)\s*=>\s*controller\.abort\(\),\s*SYNC_REQUEST_TIMEOUT_MS\)/,
+  "client sync timeout must abort the in-flight fetch");
+assert.match(publicHtml, /clearTimeout\(timeout\)[\s\S]*?syncState\.abortControllers\.delete\(controller\)/,
+  "client sync timeout must be cleared after every request");
 assert.match(api, /latest\.corrupt[\s\S]*?code:\s*["']corrupt_state["']/,
   "API must fail closed when a stored state cannot be decoded");
 assert.ok(
