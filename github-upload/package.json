@@ -2,5 +2,9 @@
   "name": "wordsnap-quiz",
   "version": "1.0.0",
   "private": true,
-  "description": "WordBank — 英単語クイズ。Cloudflare Pages Functions + D1 でサーバー保存。"
+  "description": "WordBank — 英単語クイズ。Cloudflare Pages Functions + D1 でサーバー保存。",
+  "scripts": {
+    "test": "node scripts/check-release.mjs",
+    "check": "node scripts/check-release.mjs"
+  }
 }

@@ -6378,39 +6378,52 @@ function initStepTabs() {
 }
 
 async function downloadStandalone() {
-  setStatus("ツールを1つのHTMLにまとめています…");
+  setStatus("ツールの保存用HTMLを準備しています…");
   try {
-    const [html, css, cefrJs, enrichJs, appJs] = await Promise.all([
-      fetch("index.html").then((res) => res.text()),
-      fetch("styles.css").then((res) => res.text()),
-      fetch("cefr.js").then((res) => res.text()),
-      fetch("enrich.js").then((res) => res.text()),
-      fetch("app.js").then((res) => res.text()),
-    ]);
-
-    const guard = (code) => code.replace(/<\/script>/g, "<\\/script>");
-    // Tolerant of attribute order / quotes / extra whitespace in the tags.
-    const bundled = html
-      .replace(/<link\b[^>]*href=["']styles\.css["'][^>]*>/i, `<style>\n${css}\n</style>`)
-      .replace(/<script\b[^>]*src=["']cefr\.js["'][^>]*>\s*<\/script>/i, `<script>\n${guard(cefrJs)}\n<\/script>`)
-      .replace(/<script\b[^>]*src=["']enrich\.js["'][^>]*>\s*<\/script>/i, `<script>\n${guard(enrichJs)}\n<\/script>`)
-      .replace(/<script\b[^>]*src=["']app\.js["'][^>]*>\s*<\/script>/i, `<script>\n${guard(appJs)}\n<\/script>`);
-
-    // Fail loudly rather than save a broken file if a tag didn't get inlined.
-    if (/href=["']styles\.css["']|src=["'](?:cefr|enrich|app)\.js["']/i.test(bundled)) {
-      throw new Error("HTMLの結合に失敗しました（タグ構成を確認してください）。");
+    // 公開中の index.html はCSSとJavaScriptをすでに内包している。実行後のDOMを
+    // 直列化すると入力中のAPIキーや一時表示が混入し得るため、未実行の配布元を取得する。
+    const sourceUrl = new URL("index.html", window.location.href);
+    sourceUrl.search = "";
+    sourceUrl.hash = "";
+    const response = await fetch(sourceUrl, { cache: "no-store" });
+    if (!response.ok) throw new Error(`配布元を取得できませんでした（HTTP ${response.status}）。`);
+    const html = await response.text();
+    if (!/<title>\s*WordBank\s*<\/title>/i.test(html) || !html.includes("function downloadStandalone")) {
+      throw new Error("取得したファイルがWordBank本体ではありません。");
     }
 
-    const blob = new Blob([bundled], { type: "text/html" });
+    // 保存版を別フォルダやfile://で開いてもロゴが欠けないよう、HTMLから参照する
+    // 2つのテーマ用画像をData URLへ埋め込む。PWA manifestは保存版では不要なので外す。
+    const blobToDataUrl = (blob) =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error || new Error("画像の埋め込みに失敗しました。"));
+        reader.readAsDataURL(blob);
+      });
+    const assetPaths = ["assets/wordsnap-icon-light.png", "assets/wordsnap-icon-dark.png"];
+    const embeddedAssets = await Promise.all(
+      assetPaths.map(async (path) => {
+        const assetResponse = await fetch(new URL(path, sourceUrl), { cache: "no-store" });
+        if (!assetResponse.ok) throw new Error(`画像を取得できませんでした（${path}）。`);
+        return [path, await blobToDataUrl(await assetResponse.blob())];
+      }),
+    );
+    let standaloneHtml = html.replace(/\s*<link\b[^>]*rel=["']manifest["'][^>]*>/i, "");
+    for (const [path, dataUrl] of embeddedAssets) {
+      standaloneHtml = standaloneHtml.split(path).join(dataUrl);
+    }
+
+    const blob = new Blob([standaloneHtml], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "wordsnap-quiz.html";
+    link.download = "wordbank.html";
     link.click();
     URL.revokeObjectURL(url);
-    setStatus("ツールを単一HTMLとして保存しました。各自で開くと単語データは独立して管理されます。");
+    setStatus("WordBankをHTMLとして保存しました。現在の単語・成績・個人キー・AIキーはファイルに含まれません。");
   } catch (error) {
-    setStatus(`保存に失敗しました：${error.message || "ローカルサーバー経由（http）でお試しください。"}`);
+    setStatus(`保存に失敗しました：${error.message || "公開URLから開いてお試しください。"}`);
   }
 }
 
@@ -7827,7 +7840,10 @@ async function forcePullReplace() {
   window.clearTimeout(syncState.pushTimer);
   syncState.pushQueued = false;
   try {
+    // サーバー内容で置き換える直前の端末状態を、既存の「元に戻す」へ退避する。
+    // 取得失敗時は置換自体が起きないため、退避は成功レスポンスを適用する直前で十分。
     const remote = await syncRequest("GET");
+    const localSnapshot = snapshotState();
     syncState.rev = Number(remote.stateRev) || syncState.rev;
     syncState.connected = true;
     // applyingRemote 中の persist は再プッシュしない（サーバー内容をそのまま採用するため）
@@ -7838,7 +7854,11 @@ async function forcePullReplace() {
     persistAppState();
     syncState.applyingRemote = false;
     renderAll();
-    setSyncStatus(`✓ サーバーの内容に置き換えました（${appState.words.length}語）。`, "live");
+    offerUndo(localSnapshot);
+    setSyncStatus(
+      `✓ サーバーの内容に置き換えました（${appState.words.length}語）。取り消す場合は「保存した単語」の「元に戻す」を押してください。`,
+      "live",
+    );
   } catch (error) {
     if (isStaleSyncError(error)) return; // さらに新しいキー切替があった場合は静かに譲る
     syncState.connected = false;
@@ -7951,9 +7971,8 @@ async function issueNewSyncId() {
         "live",
       );
     } else {
-      // 新キー向けに予約された再送を破棄してから旧キーへ戻す。失敗した新キーを
-      // localStorageやURLに残すと、再起動後に他端末とは別の保管場所へ分岐してしまう。
-      bumpSyncRequestGen();
+      // 失敗した新キーをlocalStorageやURLに残すと、再起動後に他端末とは別の
+      // 保管場所へ分岐してしまうため、接続先の表示と永続値をすべて旧キーへ戻す。
       syncState.id = oldId;
       syncState.rev = oldRev;
       syncState.connected = false;
@@ -7964,6 +7983,8 @@ async function issueNewSyncId() {
       }
       if (elements.syncIdInput) elements.syncIdInput.value = oldId;
       rememberSyncIdInUrl(oldId);
+      // 新キー向けに予約された再送を世代ごと破棄してから、旧キーの同期を再開する。
+      bumpSyncRequestGen();
       await connectWordsnapSync({ silent: true });
       setSyncStatus(
         syncState.connected
@@ -14074,7 +14095,7 @@ async function backfillAllWordsPos() {
         batch.map(async (word) => ({ word, result: await resolvePosOnce(word.term).catch(() => null) })),
       );
       for (const { word, result } of resolved) {
-        if (!result) {
+        if (result === null) {
           // 通信失敗を永続的な「品詞なし」にせず、このセッション内の無限再試行だけ防ぐ。
           posBackfillAllFailedTerms.add(String(word.term || "").trim().toLowerCase());
           continue;
@@ -15657,10 +15678,9 @@ elements.vibrateToggle?.addEventListener("change", () => {
   if (elements.vibrateToggle.checked) vibrateFeedback(15); // ONにした瞬間に体感できるよう1回だけ振動
   playSound("tap");
 });
-// "ツールを保存" rebuilds the single HTML by fetching the separate source files,
-// which fails when this is already the bundled file opened via file://. Show it
-// only in the multi-file (development) build that still links external assets.
-if (document.querySelector('link[rel="stylesheet"]')) {
+// 配布元HTMLを安全に再取得できる http/https 版だけ「ツールを保存」を表示する。
+// file:// で開いた保存版は fetch できないため、失敗するボタンを出さない。
+if (location.protocol === "http:" || location.protocol === "https:") {
   elements.downloadToolButton.addEventListener("click", downloadStandalone);
 } else {
   elements.downloadToolButton.hidden = true;

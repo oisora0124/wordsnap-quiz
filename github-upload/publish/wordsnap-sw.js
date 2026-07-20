@@ -6,8 +6,8 @@
 //   - /api/（同期サーバー）とクロスオリジン（辞書API等）は絶対にキャッシュせず素通しする。
 //     オフライン中に解いた進捗はlocalStorageに溜まり、オンライン復帰時にアプリ側が同期する前提。
 // キャッシュ名はバージョン付き。更新時は番号を上げると activate で古いキャッシュが消える。
-// v3: 存在しない wordsnap-quiz.html のプリキャッシュをやめた。番号を上げて古い重複を消す。
-const CACHE_NAME = "wordsnap-v3";
+// v4: オフラインfallbackからも、存在しない wordsnap-quiz.html 参照を削除した。
+const CACHE_NAME = "wordsnap-v4";
 
 // 最初に確保しておく最低限のファイル（1つ失敗しても他は続ける）
 // かつて wordsnap-quiz.html も入れていたが、このファイルは存在せず、配信側の
@@ -62,8 +62,7 @@ self.addEventListener("fetch", (event) => {
         .catch(() =>
           caches
             .match(request, { ignoreSearch: true })
-            .then((cached) => cached || caches.match("./"))
-            .then((cached) => cached || caches.match("./wordsnap-quiz.html")),
+            .then((cached) => cached || caches.match("./")),
         ),
     );
     return;
