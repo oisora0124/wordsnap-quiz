@@ -45,6 +45,9 @@ assert.equal(lexicalShadowSchema.additionalProperties, false,
   "lexical shadow schema must reject unspecified fields");
 assert.ok(lexicalShadowSchema.required.includes("approvalStatus"),
   "lexical shadow records must include an approval state");
+assert.ok(lexicalShadowSchema.required.includes("provenance") &&
+    lexicalShadowSchema.properties.provenance.minItems === 1,
+  "lexical shadow records must include at least one provenance entry");
 assert.deepEqual(lexicalShadowSchema.properties.provenance.items.properties.licenseStatus.enum,
   ["verified", "user-provided", "not-required"],
   "lexical provenance must not accept an unverified license state");

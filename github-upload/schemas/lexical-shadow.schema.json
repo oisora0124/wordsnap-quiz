@@ -5,7 +5,7 @@
   "description": "既存wordを正本に保ったまま語義分割を比較する影データ。利用条件を確認していない外部語彙データは格納しない。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["shadowVersion", "wordId", "lemma", "sense", "approvalStatus"],
+  "required": ["shadowVersion", "wordId", "lemma", "sense", "provenance", "approvalStatus"],
   "properties": {
     "shadowVersion": { "const": 1 },
     "wordId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,96}$" },
@@ -38,6 +38,7 @@
     },
     "provenance": {
       "type": "array",
+      "minItems": 1,
       "maxItems": 16,
       "items": {
         "type": "object",
