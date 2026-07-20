@@ -345,6 +345,31 @@ for (const weak of ["family", "ws_short", `ws_${"a".repeat(59)}`, `ws_${"g".repe
   assert.equal(keySandbox.__isModernPrivateKey(weak), false,
     "legacy or malformed sync keys must show the migration warning");
 }
+const keyGenerateStart = publicHtml.indexOf("function generatePrivateKey(");
+const keyGenerateEnd = publicHtml.indexOf("\nfunction isModernPrivateKey(", keyGenerateStart);
+assert.ok(keyGenerateStart >= 0 && keyGenerateEnd > keyGenerateStart,
+  "private sync-key generator source is missing");
+function runKeyGenerator(cryptoValue) {
+  const sandbox = { crypto: cryptoValue, Uint8Array };
+  new Script(
+    `${publicHtml.slice(keyGenerateStart, keyGenerateEnd)}\n` +
+      "globalThis.__generatePrivateKey = generatePrivateKey;",
+    { filename: "sync-key-generation-check.js" },
+  ).runInNewContext(sandbox);
+  return sandbox.__generatePrivateKey;
+}
+const generatedKey = runKeyGenerator({
+  getRandomValues(bytes) {
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = index;
+    return bytes;
+  },
+})();
+assert.equal(generatedKey, `ws_${Array.from({ length: 30 }, (_, index) => index.toString(16).padStart(2, "0")).join("")}`,
+  "private sync keys must encode all 30 Web Crypto bytes");
+assert.equal(keySandbox.__isModernPrivateKey(generatedKey), true,
+  "newly generated sync keys must satisfy the modern-key policy");
+assert.throws(() => runKeyGenerator(null)(), /Secure random number generation is unavailable/,
+  "sync-key generation must fail instead of falling back to predictable randomness");
 assert.match(
   publicHtml,
   /showRuntimeStorageWarning\(!localSaved\s*&&\s*!idbSaved\)/,
