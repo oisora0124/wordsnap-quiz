@@ -69,6 +69,27 @@ assert.match(
   "sync keys in the page URL must not be sent as referrers",
 );
 assert.match(publicHtml, /function\s+downloadStandalone\s*\(/, "standalone download function is missing");
+const sampleMatch = publicHtml.match(/const\s+SAMPLE_TEXT\s*=\s*`([\s\S]*?)`;/);
+assert.ok(sampleMatch, "built-in vocabulary sample is missing");
+const sampleRows = sampleMatch[1]
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .map((line) => {
+    const separator = line.indexOf(" ");
+    return {
+      valid: separator > 0,
+      term: separator > 0 ? line.slice(0, separator).trim().toLowerCase() : "",
+      meaning: separator > 0 ? line.slice(separator + 1).trim() : "",
+    };
+  });
+assert.equal(sampleRows.length, 300, "built-in sample must contain exactly 300 valid rows");
+assert.ok(sampleRows.every((row) => row.valid && row.term && row.meaning),
+  "built-in sample contains a malformed row or an empty term/meaning");
+assert.equal(new Set(sampleRows.map((row) => row.term)).size, sampleRows.length,
+  "built-in sample contains duplicate terms");
+assert.equal(new Set(sampleRows.map((row) => row.meaning)).size, sampleRows.length,
+  "built-in sample contains duplicate meanings that weaken multiple-choice questions");
 const inlineScripts = [...publicHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
 assert.ok(inlineScripts.length >= 1, "no inline JavaScript found");
 for (const [index, match] of inlineScripts.entries()) {
