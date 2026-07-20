@@ -190,6 +190,69 @@ await assert.doesNotReject(failedOptionalInstall.installPromise,
 assert.equal(failedOptionalInstall.wasSkipped(), true,
   "a worker with the core app cached should be allowed to activate");
 
+// 学習状態は既存利用者の履歴へ直接影響するため、HTML内の実関数を固定入力で回帰検査する。
+const learningStart = publicHtml.indexOf("function scheduleReview(");
+const learningEnd = publicHtml.indexOf("\nfunction shuffle(", learningStart);
+assert.ok(learningStart >= 0 && learningEnd > learningStart, "learning scheduler source is missing");
+const learningSandbox = {};
+new Script(
+  "const SRS_DAY_MS = 86400000;\n" +
+    "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];\n" +
+    "const SLOW_ANSWER_MS = 5000;\n" +
+    "const MAX_TIMED_ANSWER_MS = 60000;\n" +
+    "const appState = { quizCounter: 10 };\n" +
+    "Math.random = () => 0.5;\n" +
+    `${publicHtml.slice(learningStart, learningEnd)}\n` +
+    "globalThis.__learning = { applyLearningResult };",
+  { filename: "learning-scheduler-check.js" },
+).runInNewContext(learningSandbox);
+const now = 1_700_000_000_000;
+const learningWord = {
+  learning: {
+    status: "new", firstAttempted: false, reviewAt: 0, correctStreak: 0,
+    srsStage: 0, nextReviewAt: 0, srsUpdatedAt: 0, lastSrsResult: "",
+  },
+};
+learningSandbox.__learning.applyLearningResult(learningWord, true, false, now, { responseMs: 1000 });
+assert.equal(learningWord.learning.status, "review", "one correct answer must not immediately master a word");
+assert.equal(learningWord.learning.correctStreak, 1, "the first correct answer must start a streak");
+assert.equal(learningWord.learning.nextReviewAt, now + 86_400_000,
+  "the first correct answer must start the one-day SRS stage");
+learningSandbox.__learning.applyLearningResult(learningWord, true, false, now + 1000, { responseMs: 1000 });
+assert.equal(learningWord.learning.status, "mastered", "two consecutive fast correct answers must master a word");
+
+learningWord.learning.srsStage = 5;
+learningSandbox.__learning.applyLearningResult(learningWord, false, true, now + 2000, { responseMs: 1000 });
+assert.equal(learningWord.learning.status, "review", "a wrong answer must return a word to review");
+assert.equal(learningWord.learning.srsStage, 3, "a wrong answer must reduce the SRS stage by two");
+assert.equal(learningWord.learning.correctStreak, 0, "a wrong answer must reset the correct streak");
+
+const mergeLearningStart = publicHtml.indexOf("function mergeLearningState(");
+const mergeLearningEnd = publicHtml.indexOf("\nfunction applyMergedRemoteState(", mergeLearningStart);
+assert.ok(mergeLearningStart >= 0 && mergeLearningEnd > mergeLearningStart,
+  "learning merge source is missing");
+const mergeLearningSandbox = {};
+new Script(
+  "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];\n" +
+    `${publicHtml.slice(mergeLearningStart, mergeLearningEnd)}\n` +
+    "globalThis.__mergeLearning = mergeLearningState;",
+  { filename: "learning-merge-check.js" },
+).runInNewContext(mergeLearningSandbox);
+const mergeNow = Date.now();
+const invalidFuture = {
+  status: "mastered", srsStage: 7, srsUpdatedAt: mergeNow + 60 * 60 * 1000,
+  nextReviewAt: mergeNow + 120 * 86_400_000, lastSrsResult: "correct",
+};
+const validRecent = {
+  status: "review", srsStage: 2, srsUpdatedAt: mergeNow - 1000,
+  nextReviewAt: mergeNow + 86_400_000, lastSrsResult: "wrong",
+};
+const mergedLearning = mergeLearningSandbox.__mergeLearning(invalidFuture, validRecent);
+assert.equal(mergedLearning.status, "review",
+  "a far-future device clock must not override a valid recent learning result");
+assert.equal(mergedLearning.srsUpdatedAt, validRecent.srsUpdatedAt,
+  "a far-future learning timestamp must not survive synchronization");
+
 for (const column of ["key", "state", "rev", "updatedAt"]) {
   assert.match(schema, new RegExp(`\\b${column}\\b`), `D1 schema is missing ${column}`);
 }
