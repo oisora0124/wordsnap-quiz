@@ -12086,6 +12086,25 @@ async function fetchDerivedFormDistractors(word, sentence, signal) {
 }
 
 // 辞書API（キー不要）から、対象語を実際に含む例文を1つ取る。誤答の意味は作れない。
+// 辞書の example には "moral absolutes" や "to accomplish a design, an object, a promise" のような
+// 定義の断片が混ざる。断片から空所を作ると前後の手がかりが無く問題として成立しないため、
+// 文らしいものを優先する。文らしい候補が1つも無ければ従来どおり全体から選ぶ（出題機会は落とさない）。
+function sentenceLikeExamples(list) {
+  const good = list.filter((example) => {
+    const text = String(example).trim();
+    const wordCount = text.split(/\s+/).length;
+    if (wordCount < 5) return false;
+    if (/^to\s+\S+[^,]*,[^,]*,/i.test(text)) return false; // 定義を並べた断片
+    return /[.!?]$/.test(text) || wordCount >= 8;
+  });
+  return good.length ? good : list;
+}
+
+function pickExample(list) {
+  const pool = sentenceLikeExamples(list);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 async function fetchContextFromDictionary(word) {
   const term = String(word?.term || "").trim();
   const re = termWordRegex(term, "i");
@@ -12120,11 +12139,11 @@ async function fetchContextFromDictionary(word) {
     // あればそちらを使いたい（語義が合っている可能性が高い）ので、ここでは諦めて null を返す。
     // 保存例文も無ければ呼び出し側が改めて品詞不一致の例文を使う（出題機会は落とさない）。
     if (matched.length) {
-      return { en: matched[Math.floor(Math.random() * matched.length)], distractors: [], src: "dict" };
+      return { en: pickExample(matched), distractors: [], src: "dict" };
     }
     if (!others.length) return null;
     return {
-      en: others[Math.floor(Math.random() * others.length)],
+      en: pickExample(others),
       distractors: [],
       src: "dict",
       posMismatch: true, // 登録品詞と違う定義の例文＝優先度が低いことを示す

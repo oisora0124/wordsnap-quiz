@@ -11,12 +11,10 @@
 - 静的サイト: `publish/`（アプリ本体は `publish/index.html` の単一ファイル）
 - 保存API（**稼働中**）: `functions/api/wordsnap-state.js`
   — Cloudflare Pages Functions + D1。`rev` による原子的CAS、gzip+base64圧縮、差分同期に対応。
-- 保存API（**未使用・旧**）: `netlify/functions/wordsnap-state.mjs`
-  — Netlify Functions + Netlify Blobs。Netlify側のデプロイは停止済み。
-  非原子的CASで圧縮にも未対応のため、使う場合はD1版に揃える必要がある。
 
-どちらも同じ契約（`GET`/`PUT /api/wordsnap-state?sync=KEY`、`baseRev`/`stateRev` による
-楽観的排他、競合時 409）を実装している。
+契約は `GET`/`PUT /api/wordsnap-state?sync=KEY`、`baseRev`/`stateRev` による楽観的排他、
+競合時 409。（Netlify Blobs 版は非原子的CAS・圧縮非対応のまま停止していたため削除した。
+必要になれば git 履歴から復元できる。）
 
 ## 編集時の注意
 

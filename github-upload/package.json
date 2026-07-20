@@ -2,8 +2,5 @@
   "name": "wordsnap-quiz",
   "version": "1.0.0",
   "private": true,
-  "description": "WordSnap Quiz — 写真から英単語クイズ。Netlify Functions + Blobs でサーバー保存。",
-  "dependencies": {
-    "@netlify/blobs": "^8.1.0"
-  }
+  "description": "WordBank — 英単語クイズ。Cloudflare Pages Functions + D1 でサーバー保存。"
 }
