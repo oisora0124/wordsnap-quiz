@@ -10749,17 +10749,39 @@ function migrateV10ContextCache() {
       entry.lastUsed = Number(entry.at) || 0;
     }
   }
-  // 安全側の一括移行を採る。保存処理が1件でも本体をtombstoneへ縮小した場合、または保存後に
-  // v10の全キーを本体として確認できない場合は旧キーを残す。一時的な二重保持で容量不足に
-  // なっても、完全なv10を最後のコピーとして保持するためデータを失わない。
-  const migratedKeys = Object.keys(migrated);
-  const saved = saveContextCache({ preferBodyKeys: new Set(migratedKeys) });
-  const persisted = saved ? readStoredContextCache() : null;
-  const migratedCount = migratedKeys.filter((key) => {
-    const entry = persisted?.[key];
-    return entry && typeof entry === "object" && !entry.tombstone;
-  }).length;
-  if (saved && !contextCacheLastSaveResult.shrunk && migratedCount === migratedKeys.length) {
+  // 移行対象の本体は一括保存が確認できるまでLRU縮小から保護する。1000件を超えていても、まず
+  // v11へ全本体を渡してから通常保存時のLRUへ任せることで、旧キーだけを消して内容を失わない。
+  // tombstoneの期限切れなど別の縮小が起きても、全本体を確認できれば移行自体は完了としてよい。
+  const migratedBodyKeys = new Set(
+    Object.keys(migrated).filter((key) => !migrated[key]?.tombstone),
+  );
+  const allBodiesPersisted = () => {
+    const persisted = readStoredContextCache();
+    return persisted && [...migratedBodyKeys].every((key) => {
+      const entry = persisted[key];
+      return entry && typeof entry === "object" && !entry.tombstone;
+    });
+  };
+  let saved = saveContextCache({ preferBodyKeys: migratedBodyKeys });
+  let completed = saved && allBodiesPersisted();
+
+  // v10とv11の二重保持だけが容量超過の原因なら、旧文字列をメモリに退避して一度だけ場所を空ける。
+  // v11の全本体を確認できなければ元のv10を戻すため、容量逼迫端末でも最後の完全なコピーを失わない。
+  if (!saved && [...migratedBodyKeys].every((key) => !contextQuizCache[key]?.tombstone)) {
+    try {
+      localStorage.removeItem(CONTEXT_QUIZ_V10_CACHE_KEY);
+      saved = saveContextCache({ preferBodyKeys: migratedBodyKeys });
+      completed = saved && allBodiesPersisted();
+      if (!completed) localStorage.setItem(CONTEXT_QUIZ_V10_CACHE_KEY, raw);
+    } catch {
+      try {
+        localStorage.setItem(CONTEXT_QUIZ_V10_CACHE_KEY, raw);
+      } catch {
+        // v11も保存できていないため通常は元へ戻せる。戻せない保存環境ではメモリ上の全本体を使い続ける
+      }
+    }
+  }
+  if (completed) {
     try {
       localStorage.removeItem(CONTEXT_QUIZ_V10_CACHE_KEY);
     } catch {
@@ -10879,13 +10901,20 @@ function contextEntryRecency(entry) {
     : Number(entry?.lastUsed) || Number(entry?.at) || 0;
 }
 
-function evictOldestContextEntries(cache, count) {
-  const keys = Object.keys(cache)
-    .filter((key) => cache[key] && typeof cache[key] === "object" && !cache[key].tombstone)
+function evictOldestContextEntries(cache, count, protectedBodyKeys = null) {
+  const bodyKeys = Object.keys(cache)
+    .filter((key) => cache[key] && typeof cache[key] === "object" && !cache[key].tombstone);
+  const keys = bodyKeys
+    .filter((key) => !protectedBodyKeys?.has(key))
     .sort((a, b) => contextEntryRecency(cache[a]) - contextEntryRecency(cache[b]));
   // 最新の本体1件まで捨てると、保存失敗のたびに生成直後の語を失うため1件は残す。
+  // v10移行中の本体は保存確認まで保護し、容量縮小を理由に旧キーと本体の両方を失わない。
   // 追い出す本体は完全削除せず最小限のtombstoneへ置き換え、同じcapでのAI再生成を防ぐ。
-  const removable = Math.min(Math.max(0, Number(count) || 0), Math.max(0, keys.length - 1));
+  const removable = Math.min(
+    Math.max(0, Number(count) || 0),
+    keys.length,
+    Math.max(0, bodyKeys.length - 1),
+  );
   const evictedAt = Date.now();
   keys.slice(0, removable).forEach((key) => {
     cache[key] = { tombstone: true, cap: cache[key].cap, evictedAt };
@@ -10975,7 +11004,7 @@ function saveContextCache(options = {}) {
   if (expiredOrExcessTombstones) contextCacheLastSaveResult.shrunk = true;
   const bodyCount = Object.values(cache).filter((entry) => entry && !entry.tombstone).length;
   if (bodyCount > CONTEXT_CACHE_MAX) {
-    if (evictOldestContextEntries(cache, bodyCount - CONTEXT_CACHE_MAX)) {
+    if (evictOldestContextEntries(cache, bodyCount - CONTEXT_CACHE_MAX, preferBodyKeys)) {
       contextCacheLastSaveResult.shrunk = true;
     }
   }
@@ -10993,10 +11022,13 @@ function saveContextCache(options = {}) {
       if (attempt >= 4) break;
       const remainingBodies = Object.values(cache).filter((entry) => entry && !entry.tombstone).length;
       const count = Math.max(1, Math.ceil(remainingBodies * 0.2));
-      const evicted = evictOldestContextEntries(cache, count);
-      // 本体を全て軽量化しても他のlocalStorageデータとの合計で収まらない場合だけ、
-      // 最古のtombstoneも減らす。通常の容量超過ではtombstoneを残す経路が優先される。
-      const discarded = evicted ? 0 : discardOldestContextTombstones(cache, Math.max(1, Math.ceil(Object.keys(cache).length * 0.2)));
+      const evicted = evictOldestContextEntries(cache, count, preferBodyKeys);
+      // まず本体を軽量化し、それでも次の保存に失敗したらtombstoneも同じ試行枠内で減らす。
+      // 本体が多いだけで全再試行を使い切り、tombstoneを一度も整理できない状態を防ぐ。
+      const tombstoneCount = Object.values(cache).filter((entry) => entry?.tombstone).length;
+      const discarded = attempt > 0 || !evicted
+        ? discardOldestContextTombstones(cache, Math.max(1, Math.ceil(tombstoneCount * 0.2)))
+        : 0;
       if (!evicted && !discarded) break;
       contextCacheLastSaveResult.shrunk = true;
     }
@@ -11035,15 +11067,6 @@ window.addEventListener("pagehide", () => {
 function contextEntryIsStale(entry) {
   if (!entry) return true;
   const currentCap = contextCapability();
-  // tombstoneには出題本体がないが、同じcapで生成を試みた事実は残っている。保持期間中は
-  // staleにせず通常問題へフォールバックし、キーや生成手段が変わったときだけ再生成を許す。
-  if (entry.tombstone) {
-    return (
-      entry.cap !== currentCap ||
-      !Number(entry.evictedAt) ||
-      Date.now() - Number(entry.evictedAt) > CONTEXT_TOMBSTONE_TTL_MS
-    );
-  }
   const cachedRank = contextCapabilityRank(entry.cap);
   const currentRank = contextCapabilityRank(currentCap);
   if (cachedRank === undefined || currentRank === undefined) return true;
@@ -11053,6 +11076,16 @@ function contextEntryIsStale(entry) {
     cachedRank === CONTEXT_SRC_RANK.ai &&
     currentRank === CONTEXT_SRC_RANK.ai &&
     entry.cap !== currentCap;
+  // tombstoneも通常の成功記録と同じ能力ランクで扱う。AIから辞書へ下げた変更では上書きせず、
+  // 元のAI設定へ戻したときに同じ語へ再POSTしない。上位手段への変更とAI識別子変更だけ更新する。
+  if (entry.tombstone) {
+    return (
+      !Number(entry.evictedAt) ||
+      Date.now() - Number(entry.evictedAt) > CONTEXT_TOMBSTONE_TTL_MS ||
+      currentRank > cachedRank ||
+      aiIdentityChanged
+    );
+  }
   // 生成失敗は設定・キーの変更で直る可能性があるため、能力が上下どちらへ変わっても再試行する。
   if (entry.failed) {
     return (
@@ -12001,7 +12034,7 @@ function renderContextGenSettings() {
   const provider = aiProviderForContext();
   const cachePersistenceNote =
     window.__wsStoragePersistent && !contextCacheStorageFailed
-      ? "生成した内容と試行記録はこの端末に保存され、同じキーでは記録がある間は次回AIを呼びません。保存容量を超えると古い生成内容は軽量な試行記録だけ残して削除され、その語は通常出題になります。試行記録も上限・保持期間を超えると古いものから消えます。"
+      ? "生成した内容と試行記録はこの端末に保存され、正常に生成できた語は同じキーで次回AIを呼びません。AI・辞書・保存例文のすべてで生成に失敗した語だけは、一時的な障害を残し続けないため6時間後に再試行します。保存容量を超えると古い生成内容は軽量な試行記録だけ残して削除され、その語は通常出題になります。試行記録も上限・保持期間を超えると古いものから消えます。"
       : "現在は生成内容を端末へ保存できていないため、このタブを閉じたり再読込した後は同じ語でもAIを再度呼ぶ可能性があります。ブラウザの保存設定や空き容量を確認してください。";
   if (mode === "off") {
     hint.textContent =
