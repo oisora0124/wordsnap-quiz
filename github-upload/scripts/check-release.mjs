@@ -448,6 +448,9 @@ for (const invalid of [
   [{ state: null, stateRev: 3 }, null],
   [{ state: null, stateRev: 3, notModified: true }, 2],
   [{ state: { words: [] }, stateRev: 3 }, null],
+  [{ state: { words: [], decks: [] }, stateRev: -1 }, null],
+  [{ state: { words: [], decks: [] }, stateRev: 1.5 }, null],
+  [{ state: { words: [], decks: [] }, stateRev: "not-a-revision" }, null],
 ]) {
   assert.equal(validSyncGetResponse(invalid[0], invalid[1]), false,
     "an ambiguous or malformed successful GET must fail closed");

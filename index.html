@@ -7150,7 +7150,8 @@ function bumpSyncRequestGen() {
 
 function validSyncGetResponse(data, requestedSinceRev) {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
-  const rev = Math.max(0, Math.floor(Number(data.stateRev) || 0));
+  const rev = Number(data.stateRev);
+  if (!Number.isInteger(rev) || rev < 0) return false;
   if (data.state !== null && data.state !== undefined) {
     return Boolean(
       data.state &&
