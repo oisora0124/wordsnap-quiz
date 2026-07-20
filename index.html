@@ -6769,6 +6769,15 @@ function loadState() {
   }
 }
 
+function nonNegativeNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function nonNegativeInteger(value) {
+  return Math.floor(nonNegativeNumber(value));
+}
+
 function normalizeState(state) {
   // 同期サーバー等から壊れた応答（null・words非配列）が来ても例外にせず、安全な空状態に落とす。
   // ここで例外を投げると同期経路（pull/connect/409）が恒久的に止まってしまう。
@@ -6796,7 +6805,7 @@ function normalizeState(state) {
         .map((deck) => ({
           id: sanitizeId(deck?.id),
           name: String(deck?.name || "").trim() || "単語帳",
-          updatedAt: Number(deck?.updatedAt || 0),
+          updatedAt: nonNegativeNumber(deck?.updatedAt),
         }))
         .filter((deck) => deck.id)
     : [];
@@ -6844,9 +6853,9 @@ function normalizeState(state) {
     ),
     words,
     decks,
-    quizCounter: Number(source.quizCounter || 0),
+    quizCounter: nonNegativeInteger(source.quizCounter),
     activeDeckId,
-    savedAt: Number(source.savedAt || 0),
+    savedAt: nonNegativeNumber(source.savedAt),
     deletions: sanitizeDeletions(source.deletions, Date.now()),
     trash: sanitizeTrash(source.trash, Date.now()),
     streak: normalizeStreak(source.streak),
@@ -6867,8 +6876,8 @@ function normalizeWord(word) {
     enrich: normalizeEnrich(w.enrich),
     favorite: Boolean(w.favorite),
     stats: {
-      correct: Number(w.stats?.correct || 0),
-      wrong: Number(w.stats?.wrong || 0),
+      correct: nonNegativeInteger(w.stats?.correct),
+      wrong: nonNegativeInteger(w.stats?.wrong),
     },
     history: normalizeHistory(w.history),
     learning: normalizeLearning(w),
@@ -6898,6 +6907,7 @@ function normalizeEnrich(enrich) {
 }
 
 const SAFE_CEFR_LEVELS = new Set(["A1", "A2", "B1", "B2", "C1", "C2"]);
+const SAFE_POS_TAGS = new Set(["n", "v", "adj", "adv"]);
 
 function safeCefrLevel(value) {
   const level = String(value || "").trim().toUpperCase();
@@ -6914,10 +6924,17 @@ function normalizePos(pos) {
   if (!pos || typeof pos !== "object") return null;
   // tags は「この語が取り得る品詞すべて」。空所補充の根拠判定に使う（tag は表示用の代表）。
   const tags = Array.isArray(pos.tags)
-    ? pos.tags.filter((t) => ["n", "v", "adj", "adv"].includes(t))
+    ? [
+        ...new Set(
+          pos.tags
+            .map((value) => String(value || "").toLowerCase())
+            .filter((tag) => SAFE_POS_TAGS.has(tag)),
+        ),
+      ]
     : [];
-  const tag = pos.tag || tags[0] || null;
-  return { tag, tags: tags.length ? tags : tag ? [tag] : [] };
+  const requestedTag = String(pos.tag || "").toLowerCase();
+  const tag = SAFE_POS_TAGS.has(requestedTag) ? requestedTag : tags[0] || null;
+  return { tag, tags: tag ? [...new Set([tag, ...tags])] : [] };
 }
 
 function posLabel(tag) {
@@ -7012,20 +7029,22 @@ function normalizeHistory(history) {
 
 function normalizeLearning(word) {
   if (word.learning) {
-    const rawStage = Math.floor(Number(word.learning.srsStage) || 0);
-    const rawNextReviewAt = Number(word.learning.nextReviewAt || 0);
-    const rawSrsUpdatedAt = Number(word.learning.srsUpdatedAt || 0);
+    const rawStage = nonNegativeInteger(word.learning.srsStage);
+    const rawNextReviewAt = nonNegativeNumber(word.learning.nextReviewAt);
+    const rawSrsUpdatedAt = nonNegativeNumber(word.learning.srsUpdatedAt);
     const rawLastResult = String(word.learning.lastSrsResult || "");
+    const rawStatus = String(word.learning.status || "");
+    const status = ["new", "review", "mastered"].includes(rawStatus) ? rawStatus : "new";
     return {
-      status: word.learning.status || "new",
+      status,
       firstAttempted: Boolean(word.learning.firstAttempted),
-      reviewAt: Number(word.learning.reviewAt || 0),
-      blockedUntil: Number(word.learning.blockedUntil || 0), // 誤答した単語がこの時刻まで再出題されない（旧データは0=足止めなし）
+      reviewAt: nonNegativeInteger(word.learning.reviewAt),
+      blockedUntil: nonNegativeNumber(word.learning.blockedUntil), // 誤答した単語がこの時刻まで再出題されない（旧データは0=足止めなし）
       // 連続正解数（2回連続で習得済みになる）。旧データには無いフィールドなので0で補う
-      correctStreak: Math.max(0, Math.floor(Number(word.learning.correctStreak) || 0)),
+      correctStreak: nonNegativeInteger(word.learning.correctStreak),
       srsStage: Math.max(0, Math.min(SRS_INTERVAL_DAYS.length - 1, rawStage)),
-      nextReviewAt: Number.isFinite(rawNextReviewAt) && rawNextReviewAt > 0 ? rawNextReviewAt : 0,
-      srsUpdatedAt: Number.isFinite(rawSrsUpdatedAt) && rawSrsUpdatedAt > 0 ? rawSrsUpdatedAt : 0,
+      nextReviewAt: rawNextReviewAt,
+      srsUpdatedAt: rawSrsUpdatedAt,
       lastSrsResult: rawLastResult === "correct" || rawLastResult === "wrong" ? rawLastResult : "",
     };
   }

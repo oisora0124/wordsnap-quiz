@@ -178,6 +178,43 @@ assert.match(publicHtml, /Object\.fromEntries\(entries\.slice\(-CACHE_PERSIST_LI
 assert.match(publicHtml, /function\s+persist\(\)\s*{\s*try\s*{[\s\S]*?localStorage\.setItem\(CACHE_KEY/,
   "CEFR cache write failures must not stop the app");
 
+// 同期・JSON取込の壊れた数値や品詞が、正答率・復習順・教材判定を汚染しない。
+const numericNormalizeStart = publicHtml.indexOf("function nonNegativeNumber(");
+const numericNormalizeEnd = publicHtml.indexOf("\nfunction normalizeState(", numericNormalizeStart);
+assert.ok(numericNormalizeStart >= 0 && numericNormalizeEnd > numericNormalizeStart,
+  "numeric normalization source is missing");
+const numericSandbox = {};
+new Script(
+  `${publicHtml.slice(numericNormalizeStart, numericNormalizeEnd)}\n` +
+    "globalThis.__numbers = { nonNegativeNumber, nonNegativeInteger };",
+  { filename: "numeric-normalization-check.js" },
+).runInNewContext(numericSandbox);
+assert.equal(numericSandbox.__numbers.nonNegativeInteger("4.9"), 4,
+  "valid counters must be normalized to integers");
+for (const invalid of [-1, Number.NaN, Number.POSITIVE_INFINITY, "not-a-number"]) {
+  assert.equal(numericSandbox.__numbers.nonNegativeNumber(invalid), 0,
+    "invalid counters and timestamps must fall back to zero");
+}
+assert.match(publicHtml, /const\s+SAFE_POS_TAGS\s*=\s*new Set\(\["n", "v", "adj", "adv"\]\)/,
+  "part-of-speech allowlist is missing");
+const posNormalizeStart = publicHtml.indexOf("const SAFE_POS_TAGS");
+const posNormalizeEnd = publicHtml.indexOf("\nfunction posLabel(", posNormalizeStart);
+assert.ok(posNormalizeStart >= 0 && posNormalizeEnd > posNormalizeStart,
+  "part-of-speech normalization source is missing");
+const posSandbox = {};
+new Script(
+  `${publicHtml.slice(posNormalizeStart, posNormalizeEnd)}\n` +
+    "globalThis.__pos = { normalizePos };",
+  { filename: "pos-normalization-check.js" },
+).runInNewContext(posSandbox);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(posSandbox.__pos.normalizePos({ tag: "<img>", tags: ["N", "v", "v", "bad"] }))),
+  { tag: "n", tags: ["n", "v"] },
+  "invalid and duplicate part-of-speech values must be rejected",
+);
+assert.match(publicHtml, /const\s+status\s*=\s*\["new", "review", "mastered"\]\.includes\(rawStatus\)\s*\?\s*rawStatus\s*:\s*"new"/,
+  "learning status must fall back to new for invalid imports");
+
 // 「この設定で出題」の例文問題は opt-in。旧保存値やシャッフルだけで暗黙に有効化しない。
 assert.match(
   publicHtml,
