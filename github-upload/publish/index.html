@@ -7809,13 +7809,20 @@ async function pushWordsnapState(options = {}) {
       return;
     }
     if (error.status === 409 && error.data && !options.retried) {
-      syncState.rev = Number(error.data.stateRev) || syncState.rev;
-      // 壊れた409応答（stateなし）でも例外にせず、リビジョンだけ合わせて再送する
-      if (error.data.state) applyMergedRemoteState(error.data.state);
-      syncState.pushing = false;
-      handedOff = true; // 未送信分の消化は再送呼び出し側の finally に任せる
-      await pushWordsnapState({ force: true, retried: true, retryAttempt });
-      return;
+      if (!error.data.state) {
+        // 最新stateを見ずにrevisionだけ合わせて再送すると、相手端末の差分を丸ごと
+        // 上書きし得る。現行APIは409にstateを必ず含めるため、欠落は異常応答として
+        // fail closedにし、次のGET/手動同期で安全に取り直す。
+        error.noRetry = true;
+        error.message = "同期の競合データを確認できないため、自動再送を中止しました。もう一度同期してください。";
+      } else {
+        syncState.rev = Number(error.data.stateRev) || syncState.rev;
+        applyMergedRemoteState(error.data.state);
+        syncState.pushing = false;
+        handedOff = true; // 未送信分の消化は再送呼び出し側の finally に任せる
+        await pushWordsnapState({ force: true, retried: true, retryAttempt });
+        return;
+      }
     }
     // サイズ超過（noRetry）はリトライしても解決しないため自動再送しない
     retryNeeded = retryAttempt < 2 && !error.noRetry;
