@@ -6886,12 +6886,17 @@ function normalizeEnrich(enrich) {
   return base;
 }
 
+const SAFE_CEFR_LEVELS = new Set(["A1", "A2", "B1", "B2", "C1", "C2"]);
+
+function safeCefrLevel(value) {
+  const level = String(value || "").trim().toUpperCase();
+  return SAFE_CEFR_LEVELS.has(level) ? level : null;
+}
+
 function normalizeCefr(cefr) {
   if (!cefr || typeof cefr !== "object") return null;
-  return {
-    level: cefr.level || null,
-    estimated: Boolean(cefr.estimated),
-  };
+  const level = safeCefrLevel(cefr.level);
+  return level ? { level, estimated: Boolean(cefr.estimated) } : null;
 }
 
 function normalizePos(pos) {
@@ -14083,31 +14088,33 @@ function renderStepPanel(id) {
 }
 
 function cefrClass(result) {
-  if (!result || !result.level) return "cefr-unknown";
-  return `cefr-${result.level}${result.estimated ? " cefr-estimated" : ""}`;
+  const level = safeCefrLevel(result?.level);
+  if (!level) return "cefr-unknown";
+  return `cefr-${level}${result.estimated ? " cefr-estimated" : ""}`;
 }
 
 function cefrText(result) {
   if (result == null) return "…";
-  if (!result.level) return "—";
-  return result.level;
+  return safeCefrLevel(result.level) || "—";
 }
 
 function cefrTitle(result) {
   if (result == null) return "CEFRレベルを判定中";
-  if (!result.level) return "CEFRレベル不明";
+  const level = safeCefrLevel(result.level);
+  if (!level) return "CEFRレベル不明";
   return result.estimated
-    ? `CEFRレベル ${result.level}（出現頻度からの推定です）`
-    : `CEFRレベル ${result.level}`;
+    ? `CEFRレベル ${level}（出現頻度からの推定です）`
+    : `CEFRレベル ${level}`;
 }
 
 // バッジの表示文字は確定値も推定値も同じ（例: "C2"）。推定である旨は
 // title（ツールチップ）とaria-label（読み上げ）にだけ含める。
 function cefrAriaLabel(result) {
-  if (result == null || !result.level) return "";
+  const level = safeCefrLevel(result?.level);
+  if (!level) return "";
   return result.estimated
-    ? `CEFR ${result.level}（出現頻度からの推定）`
-    : `CEFR ${result.level}`;
+    ? `CEFR ${level}（出現頻度からの推定）`
+    : `CEFR ${level}`;
 }
 
 function cefrBadgeMarkup(term, stored) {
@@ -14116,7 +14123,7 @@ function cefrBadgeMarkup(term, stored) {
   const ariaLabel = cefrAriaLabel(result);
   return `<span class="cefr-badge ${cefrClass(result)}" data-cefr-term="${escapeHtml(key)}" title="${escapeHtml(
     cefrTitle(result),
-  )}"${ariaLabel ? ` aria-label="${escapeHtml(ariaLabel)}"` : ""}>${cefrText(result)}</span>`;
+  )}"${ariaLabel ? ` aria-label="${escapeHtml(ariaLabel)}"` : ""}>${escapeHtml(cefrText(result))}</span>`;
 }
 
 function updateCefrBadge(badge, result) {

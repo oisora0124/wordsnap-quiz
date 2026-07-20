@@ -149,6 +149,29 @@ assert.match(
   "runtime storage warning must require both local stores to fail",
 );
 
+// JSON取込・同期・ローカルCEFRキャッシュの不正値を、class属性や本文へ未検証で埋め込まない。
+assert.match(publicHtml, /const\s+SAFE_CEFR_LEVELS\s*=\s*new Set\(\["A1", "A2", "B1", "B2", "C1", "C2"\]\)/,
+  "CEFR allowlist is missing");
+assert.match(publicHtml, /function\s+safeCefrLevel\(value\)[\s\S]*?SAFE_CEFR_LEVELS\.has\(level\)\s*\?\s*level\s*:\s*null/,
+  "CEFR values must be normalized through the allowlist");
+assert.match(publicHtml, /escapeHtml\(cefrText\(result\)\)/,
+  "CEFR badge text must be escaped before innerHTML insertion");
+const cefrNormalizeStart = publicHtml.indexOf("const SAFE_CEFR_LEVELS");
+const cefrNormalizeEnd = publicHtml.indexOf("\nfunction normalizePos(", cefrNormalizeStart);
+assert.ok(cefrNormalizeStart >= 0 && cefrNormalizeEnd > cefrNormalizeStart,
+  "CEFR normalization source is missing");
+const cefrSandbox = {};
+new Script(
+  `${publicHtml.slice(cefrNormalizeStart, cefrNormalizeEnd)}\n` +
+    "globalThis.__cefr = { safeCefrLevel, normalizeCefr };",
+  { filename: "cefr-normalization-check.js" },
+).runInNewContext(cefrSandbox);
+assert.equal(cefrSandbox.__cefr.safeCefrLevel("b2"), "B2", "valid CEFR must be normalized");
+assert.equal(cefrSandbox.__cefr.safeCefrLevel('<img src=x onerror=alert(1)>'), null,
+  "invalid CEFR markup must be rejected");
+assert.equal(cefrSandbox.__cefr.normalizeCefr({ level: 'A1\" onmouseover=alert(1)' }), null,
+  "imported CEFR attributes must be rejected");
+
 // 「この設定で出題」の例文問題は opt-in。旧保存値やシャッフルだけで暗黙に有効化しない。
 assert.match(
   publicHtml,
