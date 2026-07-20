@@ -19,12 +19,15 @@
 
 ## 編集時の注意
 
-アプリ本体は `publish/index.html` を編集し、リポジトリ直下の `index.html` へコピーして
-同期させる（2ファイルは同一内容を保つ）。
+アプリ本体は `publish/index.html` を編集し、次のコマンドでリポジトリ直下の
+`index.html` へ同期させる（2ファイルは同一内容を保つ）。
 
 ```
-cp github-upload/publish/index.html index.html
+cd github-upload
+npm run sync:html
 ```
+
+コマンドはコピー後に内容一致も確認する。公開前の `npm test` でも不一致を拒否する。
 
 ## 公開前チェック
 

@@ -23,7 +23,11 @@
 //   2. schema.sql を適用（states テーブル作成）
 //   3. Pages プロジェクトの Functions バインディングで、変数名 DB に上記 D1 を割り当てる
 
-const HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+const HEADERS = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store",
+  "x-content-type-options": "nosniff",
+};
 
 // bodyの上限は従来どおり4MB（gzip後のstateはこの中に余裕で収まる）
 const MAX_RAW_BODY = 4_000_000;
@@ -41,8 +45,15 @@ const MAX_STORED_BASE64 = 1_900_000;
 // 追加の read/decompress 無しで通過するため、通常 PUT のコストは変わらない。
 const HIGHEST_LEARNING_VERSION = 1;
 
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: HEADERS });
+function json(body, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...HEADERS, ...extraHeaders },
+  });
+}
+
+function methodNotAllowed() {
+  return json({ error: "method not allowed" }, 405, { allow: "GET, PUT" });
 }
 
 // キーは英数字・ハイフン・アンダーバーのみ、最大64文字（Netlify版 cleanSyncId と同一仕様）
@@ -139,7 +150,7 @@ export async function onRequest(context) {
   // 未対応methodはD1へ触れる前に拒否する。攻撃的なPOST/DELETE等で
   // ポーリング相当の読み取り課金を発生させない（GET/PUTの契約は不変）。
   if (request.method !== "GET" && request.method !== "PUT") {
-    return json({ error: "method not allowed" }, 405);
+    return methodNotAllowed();
   }
 
   const db = env.DB;
@@ -323,7 +334,7 @@ export async function onRequest(context) {
   }
 
   // methodは上で絞り込んでいるため到達しないが、将来の変更時もfail closedにする。
-  return json({ error: "method not allowed" }, 405);
+  return methodNotAllowed();
 }
 
 async function rowExists(db, syncId) {

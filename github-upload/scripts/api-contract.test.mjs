@@ -101,6 +101,8 @@ test("GET preserves legacy arbitrary sync ids and the initial empty-state contra
   const db = new FakeD1();
   const { response, data } = await requestApi(db);
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.deepEqual(data, { syncId: LEGACY_SYNC_ID, state: null, stateRev: 0, updatedAt: 0 });
 
   db.calls.length = 0;
@@ -210,6 +212,7 @@ test("unsupported methods and oversized input are rejected before D1 access", as
   const methodDb = new FakeD1();
   const disallowed = await requestApi(methodDb, { method: "POST", body: {} });
   assert.equal(disallowed.response.status, 405);
+  assert.equal(disallowed.response.headers.get("allow"), "GET, PUT");
   assert.equal(methodDb.calls.length, 0);
 
   const lengthDb = new FakeD1();
