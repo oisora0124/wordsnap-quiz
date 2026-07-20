@@ -258,6 +258,30 @@ test("a new room with a mismatched baseRev is not created", async () => {
   assert.equal(db.rows.has(LEGACY_SYNC_ID), false);
 });
 
+test("simultaneous first writes create one revision and return the winner to the loser", async () => {
+  const db = new FakeD1();
+  const leftState = sampleState("concurrent-left");
+  const rightState = sampleState("concurrent-right");
+  const results = await Promise.all([
+    requestApi(db, { method: "PUT", body: { baseRev: 0, state: leftState } }),
+    requestApi(db, { method: "PUT", body: { baseRev: 0, state: rightState } }),
+  ]);
+
+  const success = results.find((result) => result.response.status === 200);
+  const conflict = results.find((result) => result.response.status === 409);
+  assert.ok(success, "exactly one concurrent create must succeed");
+  assert.ok(conflict, "the other concurrent create must receive a conflict");
+  assert.equal(results.filter((result) => result.response.status === 200).length, 1);
+  assert.equal(results.filter((result) => result.response.status === 409).length, 1);
+  assert.equal(success.data.stateRev, 1);
+  assert.equal(conflict.data.stateRev, 1);
+
+  const latest = await requestApi(db);
+  assert.equal(latest.data.stateRev, 1, "the race must advance the revision only once");
+  assert.deepEqual(conflict.data.state, latest.data.state,
+    "the losing writer must receive the complete winning state for safe merge");
+});
+
 test("unsupported methods and oversized input are rejected before D1 access", async () => {
   const methodDb = new FakeD1();
   const disallowed = await requestApi(methodDb, { method: "POST", body: {} });
