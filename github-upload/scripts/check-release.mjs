@@ -61,6 +61,37 @@ assert.match(
   /function\s+forcePullReplace[\s\S]*?offerUndo\(localSnapshot\)/,
   "force-pull replacement must offer restoration of the previous local state",
 );
+assert.match(publicHtml, /wordsnap-undo:v1:/, "undo checkpoint storage key is missing");
+assert.match(
+  publicHtml,
+  /function\s+offerUndo[\s\S]*?localStorage\.setItem\(UNDO_STORAGE_KEY/,
+  "undo checkpoint must be durable in local storage",
+);
+assert.match(
+  publicHtml,
+  /let\s+undoSnapshot\s*=\s*readLocalUndoSnapshot\(\)/,
+  "durable undo checkpoint must be recovered during startup",
+);
+
+// 実際の保存処理と同じ変換を行い、生成後HTMLも構文・参照・秘密情報を検査する。
+let standaloneHtml = publicHtml.replace(/\s*<link\b[^>]*rel=["']manifest["'][^>]*>/i, "");
+for (const assetPath of ["assets/wordsnap-icon-light.png", "assets/wordsnap-icon-dark.png"]) {
+  const dataUrl = `data:image/png;base64,${readFileSync(join(publishDir, assetPath)).toString("base64")}`;
+  standaloneHtml = standaloneHtml.split(assetPath).join(dataUrl);
+}
+assert.doesNotMatch(standaloneHtml, /rel=["']manifest["']/i, "standalone HTML still has a manifest");
+assert.doesNotMatch(
+  standaloneHtml,
+  /assets\/wordsnap-icon-(?:light|dark)\.png/,
+  "standalone HTML still has external theme icon references",
+);
+const standaloneScripts = [...standaloneHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
+for (const [index, match] of standaloneScripts.entries()) {
+  assert.doesNotThrow(
+    () => new Script(match[1], { filename: `standalone:inline-script-${index + 1}.js` }),
+    `standalone inline script ${index + 1} has a syntax error`,
+  );
+}
 
 assert.equal(manifest.name, "WordBank", "manifest name must be WordBank");
 assert.ok(Array.isArray(manifest.icons) && manifest.icons.length >= 2, "manifest icons are incomplete");
@@ -70,10 +101,26 @@ for (const icon of manifest.icons) {
 }
 
 assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v\d+["']/, "versioned cache name is missing");
+assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v5["']/, "service worker cache version must be v5");
 assert.doesNotMatch(
   worker,
   /["']\.\/wordsnap-quiz\.html["']/,
   "service worker references a file that is not published",
+);
+assert.match(
+  worker,
+  /new\s+URL\(["']\.\/["'],\s*self\.registration\.scope\)\.href/,
+  "navigation cache key must be normalized without sync-key query parameters",
+);
+assert.match(
+  worker,
+  /cache\.put\(navigationCacheUrl,\s*copy\)[\s\S]*?\.catch\(\(\)\s*=>\s*\{\}\)[\s\S]*?\.then\(\(\)\s*=>\s*response\)/,
+  "navigation cache write must finish without breaking a valid network response",
+);
+assert.match(
+  worker,
+  /cache\.put\(request,\s*copy\)[\s\S]*?\.catch\(\(\)\s*=>\s*\{\}\)[\s\S]*?\.then\(\(\)\s*=>\s*response\)/,
+  "asset cache write must finish without breaking a valid network response",
 );
 for (const requiredAsset of ["./", "./wordsnap.webmanifest", "./assets/icon-192.png", "./assets/icon-512.png"]) {
   assert.ok(worker.includes(JSON.stringify(requiredAsset)), `service worker precache is missing ${requiredAsset}`);
@@ -90,7 +137,7 @@ assert.match(api, /MAX_INFLATED_JSON/, "API inflated-size guard is missing");
 assert.match(api, /MAX_STORED_BASE64/, "API D1 row-size guard is missing");
 
 // Detect only realistic ASCII secrets, not the UI's abbreviated placeholders (AIza… / gsk_…).
-const scanned = [publicHtml, rootHtml, worker, api, schema].join("\n");
+const scanned = [publicHtml, rootHtml, standaloneHtml, worker, api, schema].join("\n");
 assert.doesNotMatch(scanned, /AIza[0-9A-Za-z_-]{30,}/, "possible Gemini API key committed");
 assert.doesNotMatch(scanned, /gsk_[0-9A-Za-z]{30,}/, "possible Groq API key committed");
 assert.doesNotMatch(scanned, /ws_[0-9a-f]{60}\b/i, "possible real WordBank sync key committed");

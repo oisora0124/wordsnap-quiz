@@ -6,8 +6,8 @@
 //   - /api/（同期サーバー）とクロスオリジン（辞書API等）は絶対にキャッシュせず素通しする。
 //     オフライン中に解いた進捗はlocalStorageに溜まり、オンライン復帰時にアプリ側が同期する前提。
 // キャッシュ名はバージョン付き。更新時は番号を上げると activate で古いキャッシュが消える。
-// v4: オフラインfallbackからも、存在しない wordsnap-quiz.html 参照を削除した。
-const CACHE_NAME = "wordsnap-v4";
+// v5: 個人キー付きURLをキャッシュせず、v4に残ったキー付きキャッシュもactivateで削除する。
+const CACHE_NAME = "wordsnap-v5";
 
 // 最初に確保しておく最低限のファイル（1つ失敗しても他は続ける）
 // かつて wordsnap-quiz.html も入れていたが、このファイルは存在せず、配信側の
@@ -55,9 +55,15 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
+          if (!response.ok) return response;
           const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          return response;
+          // ?w= の個人キーをCache Storageへ残さず、キー切替ごとの重複も作らない。
+          const navigationCacheUrl = new URL("./", self.registration.scope).href;
+          return caches
+            .open(CACHE_NAME)
+            .then((cache) => cache.put(navigationCacheUrl, copy))
+            .catch(() => {})
+            .then(() => response);
         })
         .catch(() =>
           caches
@@ -75,7 +81,11 @@ self.addEventListener("fetch", (event) => {
       return fetch(request).then((response) => {
         if (response.ok) {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          return caches
+            .open(CACHE_NAME)
+            .then((cache) => cache.put(request, copy))
+            .catch(() => {})
+            .then(() => response);
         }
         return response;
       });

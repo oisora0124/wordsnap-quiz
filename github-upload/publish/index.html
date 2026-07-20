@@ -6461,6 +6461,8 @@ function loadClientId() {
 
 const clientId = loadClientId();
 let STORAGE_KEY = storageKeyFor(clientId);
+const undoStorageKeyFor = (id) => `wordsnap-undo:v1:${id}`;
+let UNDO_STORAGE_KEY = undoStorageKeyFor(clientId);
 let appState = loadState();
 let candidates = [];
 let wordSearchQuery = "";
@@ -8350,7 +8352,29 @@ function saveState() {
 }
 
 // One-step undo for destructive actions (delete word, clear all, JSON import).
-let undoSnapshot = null;
+// 強制取得の直後に再読込・クラッシュしても戻せるよう、同期対象外の端末内領域へも保存する。
+
+function parseUndoSnapshot(raw) {
+  try {
+    const record = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const state = record?.state;
+    if (!state || !Array.isArray(state.words) || !Array.isArray(state.decks)) return null;
+    return normalizeState(state);
+  } catch {
+    return null;
+  }
+}
+
+function readLocalUndoSnapshot() {
+  try {
+    return parseUndoSnapshot(localStorage.getItem(UNDO_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+let undoSnapshot = readLocalUndoSnapshot();
+if (undoSnapshot && elements.undoButton) elements.undoButton.hidden = false;
 
 function snapshotState() {
   return JSON.parse(JSON.stringify(appState));
@@ -8358,11 +8382,22 @@ function snapshotState() {
 
 function offerUndo(snapshot) {
   undoSnapshot = snapshot;
+  const json = JSON.stringify({ createdAt: Date.now(), state: snapshot });
+  try {
+    localStorage.setItem(UNDO_STORAGE_KEY, json);
+  } catch {
+    // 保存領域が使えない場合も、このタブ内の1回取り消しは維持する
+  }
   if (elements.undoButton) elements.undoButton.hidden = false;
 }
 
 function clearUndo() {
   undoSnapshot = null;
+  try {
+    localStorage.removeItem(UNDO_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
   if (elements.undoButton) elements.undoButton.hidden = true;
 }
 
@@ -15752,6 +15787,7 @@ async function recoverPersisted() {
       // localStorage had no id (likely wiped): adopt the durable id and reload
       localStorage.setItem(CLIENT_KEY, idbClient);
       STORAGE_KEY = storageKeyFor(idbClient);
+      UNDO_STORAGE_KEY = undoStorageKeyFor(idbClient);
       // フォールバックで同期が先に始まっている場合は、丸ごと置換するとサーバー由来の
       // マージ済みデータが消えるため、必ずマージで取り込む
       appState = syncInitStarted ? mergeAppStates(appState, loadState()) : loadState();
