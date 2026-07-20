@@ -149,6 +149,62 @@ assert.match(
   "runtime storage warning must require both local stores to fail",
 );
 
+// 「この設定で出題」の例文問題は opt-in。旧保存値やシャッフルだけで暗黙に有効化しない。
+assert.match(
+  publicHtml,
+  /<select id="quizContextAmountSelect"[^>]*>[\s\S]*?<option value="none">出さない<\/option>[\s\S]*?<option value="some">一部（約半分）<\/option>[\s\S]*?<option value="all">全部<\/option>/,
+  "quiz context amount selector is missing or its safe default is not first",
+);
+assert.match(
+  publicHtml,
+  /function\s+normalizeQuizContextAmount\(value\)\s*{\s*return value === "some" \|\| value === "all" \? value : "none";/,
+  "quiz context amount must fall back to none for missing/legacy values",
+);
+const startReviewStart = publicHtml.indexOf("function startReview(");
+const startReviewEnd = publicHtml.indexOf("\nfunction eligibleReviewWords(", startReviewStart);
+assert.ok(startReviewStart >= 0 && startReviewEnd > startReviewStart, "startReview source is missing");
+const startReviewSource = publicHtml.slice(startReviewStart, startReviewEnd);
+assert.match(
+  startReviewSource,
+  /context:\s*Boolean\(options\.context\) \|\| contextAmount === "all"/,
+  "all must enable context questions for the whole configured quiz",
+);
+assert.match(
+  startReviewSource,
+  /mixFormat:\s*contextAmount === "some"/,
+  "some must explicitly enable mixed question formats",
+);
+assert.doesNotMatch(
+  startReviewSource,
+  /mixFormat:\s*shuffled/,
+  "shuffle must not implicitly enable context questions",
+);
+assert.match(
+  publicHtml,
+  /mixFormat:\s*contextAmount === "some" && Boolean\(saved\.mixFormat\)/,
+  "legacy resume snapshots must not restore implicit mixed context questions",
+);
+assert.match(
+  publicHtml,
+  /contextAmount:\s*selectedQuizContextAmount\(\)/,
+  "quiz context amount must be saved on this device",
+);
+assert.match(
+  publicHtml,
+  /contextAmount !== "none" && contextGenMode\(\) !== "off" && !contextNetworkConsented\(\)/,
+  "some/all must keep the existing external-service consent gate",
+);
+assert.match(
+  publicHtml,
+  /reviewSession === pendingSession\s*&&\s*currentQuiz\?\.contextPending/,
+  "mixed context generation must resume rendering after its pending request",
+);
+assert.match(
+  publicHtml,
+  /startReview\(result\.allIds,[\s\S]*?contextAmount:\s*result\.contextAmount/,
+  "retrying a completed quiz must keep the selected context amount",
+);
+
 // Detect only realistic ASCII secrets, not the UI's abbreviated placeholders (AIza… / gsk_…).
 const scanned = [publicHtml, rootHtml, standaloneHtml, worker, api, schema].join("\n");
 assert.doesNotMatch(scanned, /AIza[0-9A-Za-z_-]{30,}/, "possible Gemini API key committed");

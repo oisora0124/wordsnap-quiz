@@ -4534,9 +4534,17 @@ accurate 正確な"
               </select>
             </label>
             <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false">範囲</button>
-            <label class="quiz-setup-check" title="順番をランダムにします。例文モードを一度使って同意済みなら、出題形式（意味の4択／例文の空所補充）もランダムに混ざります。">
+            <label class="quiz-setup-check" title="単語の出題順をランダムにします。例文問題の割合は隣の設定で選べます。">
               <input id="quizShuffle" type="checkbox" checked />
               シャッフル
+            </label>
+            <label class="quiz-setup-field">
+              <span>例文問題</span>
+              <select id="quizContextAmountSelect" aria-describedby="quizSetupHint">
+                <option value="none">出さない</option>
+                <option value="some">一部（約半分）</option>
+                <option value="all">全部</option>
+              </select>
             </label>
             <button id="quizRangeStartButton" type="button" title="上で選んだ単語帳・範囲の単語を1周だけ出題します（習得済みも含む）">この設定で出題</button>
             <span id="quizDeckCount" class="quiz-setup-count"></span>
@@ -4550,8 +4558,9 @@ accurate 正確な"
             <span class="quiz-range-hint quiz-range-note">※番号は選択した単語帳・CEFR条件での追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
           </div>
           <!-- 2つの開始ボタンの違いが分かりにくいという指摘への補足（文言のみ・挙動は不変） -->
-          <p class="settings-desc quiz-setup-hint">
+          <p id="quizSetupHint" class="settings-desc quiz-setup-hint">
             「この設定で出題」＝上の単語帳・範囲を<strong>1周だけ</strong>出題（習得済みも含む）。
+            例文問題は初期値では<strong>出しません</strong>。「一部」または「全部」を選んだ場合だけ空所補充を含めます。
             「クイズを始める（おまかせ）」＝覚えていない単語を自動で選んで<strong>エンドレス</strong>に出題。
             「苦手だけ」＝誤答歴があり正答率80%未満の単語、「今日の復習」＝日付が来た単語だけを1周。
           </p>
@@ -5853,6 +5862,7 @@ const elements = {
   quizRangeFrom: document.querySelector("#quizRangeFrom"),
   quizRangeTo: document.querySelector("#quizRangeTo"),
   quizShuffle: document.querySelector("#quizShuffle"),
+  quizContextAmountSelect: document.querySelector("#quizContextAmountSelect"),
   quizRangeStartButton: document.querySelector("#quizRangeStartButton"),
   quizDeckCount: document.querySelector("#quizDeckCount"),
   accuracy: document.querySelector("#accuracy"),
@@ -5932,7 +5942,7 @@ const AUTO_NEXT_DELAY_KEY = "wordsnap-auto-next-delay";
 const AUTO_SPEAK_KEY = "wordsnap-auto-speak"; // 出題時に発音を自動再生するか
 const VIBRATE_KEY = "wordsnap-vibrate"; // 正解/不正解の振動フィードバック
 const QUIZ_RESUME_KEY = "wordsnap-quiz-resume:v1"; // 進行中クイズの再開用スナップショット
-const QUIZ_LAST_SETTINGS_KEY = "wordsnap-quiz-last-settings:v1"; // 前回のクイズ設定（単語帳・範囲・シャッフル）
+const QUIZ_LAST_SETTINGS_KEY = "wordsnap-quiz-last-settings:v1"; // 前回のクイズ設定（単語帳・範囲・シャッフル・例文問題の割合）
 const SYNC_ID_KEY = "wordsnap-sync-id:v1";
 const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
@@ -10949,7 +10959,8 @@ function persistReviewProgress() {
         label: reviewSession.label,
         total: reviewSession.total,
         context: reviewSession.context, // 再開時に例文モードを維持する
-        // 形式の混在と、その割り当てを決める種。再開しても同じ出題になるよう一緒に保存する
+        // 例文問題の明示設定と、その割り当てを決める種。再開しても同じ出題になるよう一緒に保存する
+        contextAmount: reviewSession.contextAmount,
         mixFormat: reviewSession.mixFormat,
         formatSeed: reviewSession.formatSeed,
         missedIds: reviewSession.missedIds,
@@ -11010,13 +11021,19 @@ function resumeSavedReview() {
     updateResumeButton();
     return;
   }
+  // 旧版では「シャッフル」が暗黙に例文問題を混ぜていた。contextAmount を持たない
+  // 旧スナップショットでは mixFormat を引き継がず、明示的な例文モードだけを維持する。
+  const contextAmount = saved.context
+    ? "all"
+    : normalizeQuizContextAmount(saved.contextAmount);
   reviewSession = {
     allIds: saved.allIds,
     queue: saved.queue,
     total: Number(saved.total) || saved.allIds.length,
     label: String(saved.label || "復習"),
     context: Boolean(saved.context), // 例文モードかどうかも復元する
-    mixFormat: Boolean(saved.mixFormat),
+    contextAmount,
+    mixFormat: contextAmount === "some" && Boolean(saved.mixFormat),
     formatSeed: String(saved.formatSeed || ""),
     missedIds: Array.isArray(saved.missedIds) ? saved.missedIds : [],
   };
@@ -11032,6 +11049,14 @@ function resumeSavedReview() {
   if (reviewSession) setStatus(`前回の続きから再開しました（残り${remaining}語）。`);
 }
 
+function normalizeQuizContextAmount(value) {
+  return value === "some" || value === "all" ? value : "none";
+}
+
+function selectedQuizContextAmount() {
+  return normalizeQuizContextAmount(elements.quizContextAmountSelect?.value);
+}
+
 function startReview(ids, options = {}) {
   const valid = ids.filter((id) => appState.words.some((word) => word.id === id));
   if (valid.length === 0) return;
@@ -11044,16 +11069,19 @@ function startReview(ids, options = {}) {
     queue = shuffle(valid.slice());
   }
   const label = options.label || "復習";
-  // 「シャッフル」を選んだ通常セッションでは、単語の順番だけでなく出題形式も混ぜる
-  // （意味の4択／例文の空所補充）。例文モードは形式を選んで入っているので混ぜない。
-  const shuffled = options.order !== "priority" && options.shuffle !== false;
+  // 例文問題は「例文で解く」か、クイズ設定で一部／全部を明示したときだけ使う。
+  // シャッフルは単語の順番だけに作用し、出題形式を勝手に変えない。
+  const contextAmount = options.context
+    ? "all"
+    : normalizeQuizContextAmount(options.contextAmount);
   reviewSession = {
     allIds: valid,
     queue,
     total: valid.length,
     label,
-    context: Boolean(options.context), // 例文モードか（true なら文中で意味を問う）
-    mixFormat: shuffled && !options.context,
+    context: Boolean(options.context) || contextAmount === "all", // 全問を例文の空所補充にするか
+    contextAmount,
+    mixFormat: contextAmount === "some", // 約半分だけ例文の空所補充にするか
     // 形式は「セッションの種＋単語ID」から決める。同じ問題を組み立て直しても
     // 形式が変わらず、再開しても同じ出題になる（乱数を都度引くと再描画で入れ替わる）。
     formatSeed: Math.random().toString(36).slice(2, 10),
@@ -11180,14 +11208,27 @@ function startQuizFromRange() {
   const deckLabel =
     elements.quizDeckSelect.value === "all" ? "すべて" : deckName(elements.quizDeckSelect.value);
   const rangeLabel = from === 1 && to === total ? "全部" : `${from}〜${to}番`;
+  const contextAmount = selectedQuizContextAmount();
+  // 例文を新しく作る設定では単語と意味を外部サービスへ送るため、初回だけ2段階で確認する。
+  // 「作らない」設定では保存済み例文しか使わず通信しないので、確認は不要。
+  if (contextAmount !== "none" && contextGenMode() !== "off" && !contextNetworkConsented()) {
+    if (!armDangerButton(elements.quizRangeStartButton, "もう一度押すと開始")) {
+      setStatus(
+        "例文問題を含めると、出題する単語と意味を外部サービス（辞書API・語彙API、AIキー設定時はGeminiまたはGroq）へ送って例文と選択肢を作ります。よければもう一度「この設定で出題」を押してください。「出さない」に戻せば送信しません。",
+      );
+      return;
+    }
+    localStorage.setItem(CONTEXT_GEN_CONSENT_KEY, "1");
+  }
   persistLastQuizSettings(); // 次回起動時に同じ設定から始められるよう保存する
   startReview(selected.map((word) => word.id), {
     label: `${deckLabel}・${rangeLabel}`,
     shuffle: elements.quizShuffle ? elements.quizShuffle.checked : true,
+    contextAmount,
   });
 }
 
-// 「前回の設定」（単語帳・範囲・シャッフル）を保存する
+// 「前回の設定」（単語帳・範囲・シャッフル・例文問題の割合）を保存する
 function persistLastQuizSettings() {
   try {
     const useRange = !!(elements.quizRangeRow && !elements.quizRangeRow.hidden);
@@ -11199,6 +11240,7 @@ function persistLastQuizSettings() {
         from: useRange && elements.quizRangeFrom ? elements.quizRangeFrom.value : "",
         to: useRange && elements.quizRangeTo ? elements.quizRangeTo.value : "",
         shuffle: elements.quizShuffle ? elements.quizShuffle.checked : true,
+        contextAmount: selectedQuizContextAmount(),
       }),
     );
   } catch {
@@ -11221,6 +11263,10 @@ function restoreLastQuizSettings() {
     }
     if (elements.quizShuffle && typeof saved.shuffle === "boolean") {
       elements.quizShuffle.checked = saved.shuffle;
+    }
+    if (elements.quizContextAmountSelect) {
+      // 旧版の保存値には contextAmount が無い。その場合も初期値「出さない」を維持する。
+      elements.quizContextAmountSelect.value = normalizeQuizContextAmount(saved.contextAmount);
     }
     if (saved.useRange && elements.quizRangeRow) {
       elements.quizRangeRow.hidden = false;
@@ -11280,6 +11326,7 @@ function buildReviewResult(session) {
     missedWords,
     allIds: (session.allIds || []).slice(),
     context: Boolean(session.context), // 「もう一度解く」で例文モードを維持するため保持する
+    contextAmount: normalizeQuizContextAmount(session.contextAmount),
   };
 }
 
@@ -11326,7 +11373,11 @@ function renderReviewResult() {
   again.textContent = "もう一度解く";
   again.addEventListener("click", () => {
     reviewResult = null;
-    startReview(result.allIds, { label: result.label, context: result.context });
+    startReview(result.allIds, {
+      label: result.label,
+      context: result.context,
+      contextAmount: result.contextAmount,
+    });
   });
   const close = document.createElement("button");
   close.type = "button";
@@ -13028,7 +13079,7 @@ function prefetchNextContextItem() {
   if (!reviewSession) return;
   const nextId = reviewSession.queue[1];
   if (!nextId) return;
-  // 例文モードでは常に、シャッフルの混在では次が例文に当たる語のときだけ先読みする。
+  // 「全部」では常に、「一部」では次が例文に当たる語のときだけ先読みする。
   // 通常出題に当たる語まで先読みすると、使わない例文のためにAPIを消費してしまう。
   if (!reviewSession.context && !mixedFormatUsesContext(reviewSession, nextId)) return;
   const next = appState.words.find((w) => w.id === nextId);
@@ -13226,10 +13277,9 @@ function renderQuizPromptWord(quiz) {
 // セッションの種と単語IDから決めるので、同じ単語なら何度呼んでも同じ答えになる。
 function mixedFormatUsesContext(session, wordId) {
   if (!session?.mixFormat) return false;
-  // 例文づくりは単語と訳を外部サービスへ送る。「例文で解く」では開始前に同意を取るが、
-  // 通常のシャッフルにはその確認が無いので、同意済みでない限り形式を混ぜない
-  // （同意なしに送信が始まってしまうため）。設定で「作らない」にしている場合も混ぜない。
-  if (contextGenMode() === "off" || !contextNetworkConsented()) return false;
+  // 新しく例文を作る場合は外部送信への同意が必要。「作らない」設定では保存済み例文しか
+  // 使わないため、同意なしでも明示選択どおりに（用意済みの語だけ）例文問題を出せる。
+  if (contextGenMode() !== "off" && !contextNetworkConsented()) return false;
   const source = `${session.formatSeed || ""}:${wordId}`;
   // FNV-1a + 最後に撹拌。単純な hash*31+c だと最下位ビットが「文字コードの偶奇の合計」に
   // なってしまい、種を変えても割り当てがほとんど変わらなかった。
@@ -13260,9 +13310,11 @@ function buildReviewQuiz() {
       Number(answer.learning?.nextReviewAt || 0) > 0 &&
       Number(answer.learning.nextReviewAt) <= Date.now();
 
-    // 例文モードのセッション、またはシャッフルで例文に当たった単語は空所補充で出す
+    // 「全部」のセッション、または「一部」で例文に割り当てた単語は空所補充で出す
     const useContextFormat =
       reviewSession.context || mixedFormatUsesContext(reviewSession, answer.id);
+    // 通常形式を明示選択した問題には、直前の例文フォールバック理由を持ち越さない。
+    if (!useContextFormat) contextBasisFallbackNote = "";
     if (useContextFormat) {
       const item = contextItemFor(answer);
       if (!item && !contextAttempted(answer)) {
@@ -13277,7 +13329,6 @@ function buildReviewQuiz() {
           .then(() => {
             if (
               reviewSession === pendingSession &&
-              reviewSession?.context &&
               currentQuiz?.contextPending &&
               currentQuiz.answer?.id === pendingId
             ) {
@@ -15289,6 +15340,17 @@ elements.quizDeckSelect?.addEventListener("change", () => {
 elements.quizCefrSelect?.addEventListener("change", () => {
   updateQuizDeckCount();
   renderQuiz();
+});
+elements.quizContextAmountSelect?.addEventListener("change", () => {
+  // 選んだ時点で端末へ保存する。開始ボタンを押さずに閉じても次回復元される。
+  persistLastQuizSettings();
+  // 外部送信確認の1回目を押したあと「出さない」へ戻した場合、確認状態を残さない。
+  const button = elements.quizRangeStartButton;
+  if (button?.dataset.armed === "1") {
+    window.clearTimeout(Number(button.dataset.armTimer || 0));
+    delete button.dataset.armed;
+    button.textContent = button.dataset.originalLabel || "この設定で出題";
+  }
 });
 elements.quizRangeToggle?.addEventListener("click", () => {
   const show = elements.quizRangeRow.hidden;
