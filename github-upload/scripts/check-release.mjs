@@ -215,6 +215,18 @@ assert.deepEqual(
 assert.match(publicHtml, /const\s+status\s*=\s*\["new", "review", "mastered"\]\.includes\(rawStatus\)\s*\?\s*rawStatus\s*:\s*"new"/,
   "learning status must fall back to new for invalid imports");
 
+// バックグラウンドタブで同期ポーリングを継続せず、D1無料枠を浪費しない。
+const pollingStart = publicHtml.indexOf("function startSyncPolling(");
+const pollingEnd = publicHtml.indexOf("\nfunction scheduleSyncPush(", pollingStart);
+assert.ok(pollingStart >= 0 && pollingEnd > pollingStart, "sync polling source is missing");
+const pollingSource = publicHtml.slice(pollingStart, pollingEnd);
+assert.match(pollingSource, /stopSyncPolling\(\);[\s\S]*?if\s*\(document\.hidden\)\s*return/,
+  "sync polling must not start while the tab is hidden");
+assert.match(pollingSource, /function\s+stopSyncPolling\(\)[\s\S]*?syncState\.pollTimer\s*=\s*0/,
+  "sync polling stop must clear its active timer state");
+assert.match(publicHtml, /visibilitychange[\s\S]*?if\s*\(document\.hidden\)\s*{\s*stopSyncPolling\(\)/,
+  "sync polling must stop when the tab becomes hidden");
+
 // 「この設定で出題」の例文問題は opt-in。旧保存値やシャッフルだけで暗黙に有効化しない。
 assert.match(
   publicHtml,

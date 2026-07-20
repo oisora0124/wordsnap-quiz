@@ -7704,10 +7704,18 @@ async function connectWordsnapSync(options = {}) {
 }
 
 function startSyncPolling() {
-  window.clearInterval(syncState.pollTimer);
+  stopSyncPolling();
+  // 非表示タブで15秒ごとのD1読み取りを続けない。復帰時はvisibilitychangeで
+  // 即時pullしてからポーリングを再開するため、他端末の変更は取りこぼさない。
+  if (document.hidden) return;
   syncState.pollTimer = window.setInterval(() => {
     pullWordsnapState({ silent: true });
   }, 15000);
+}
+
+function stopSyncPolling() {
+  window.clearInterval(syncState.pollTimer);
+  syncState.pollTimer = 0;
 }
 
 function scheduleSyncPush() {
@@ -8021,7 +8029,7 @@ async function issueNewSyncId() {
     return;
   }
   // 旧キーへの自動同期を止め、遅れて届く応答が新キーへ混ざらないようにする
-  window.clearInterval(syncState.pollTimer);
+  stopSyncPolling();
   window.clearTimeout(syncState.pushTimer);
   syncState.pushQueued = false;
   bumpSyncRequestGen();
@@ -8092,7 +8100,7 @@ async function adoptForeignSyncId(newId) {
   if (elements.syncSwitchBanner) elements.syncSwitchBanner.hidden = true;
   hideSyncMergeOffer();
   // 元のキーで動いていた自動同期（ポーリング・保留中のpush）を止めてから切り替える
-  window.clearInterval(syncState.pollTimer);
+  stopSyncPolling();
   window.clearTimeout(syncState.pushTimer);
   syncState.pushQueued = false;
   // 進行中の旧キーへのGET/PUTを中断し、遅れて届く応答が新キーへ混ざるのを防ぐ
@@ -8364,7 +8372,9 @@ function initWordsnapSync() {
   // 別端末の変更を素早く取り込むため、アプリに戻ってきたタイミングで毎回サーバーから読む。
   // モバイルでは window の focus が発火しないことがあるので、visibilitychange / pageshow も使う。
   const pullIfConnected = () => {
-    if (syncState.connected) pullWordsnapState({ silent: true });
+    if (!syncState.connected) return;
+    if (!document.hidden && !syncState.pollTimer) startSyncPolling();
+    pullWordsnapState({ silent: true });
   };
   // タブが前面に戻ったら、表示中の未解答問題の回答計測を今から取り直す（バックグラウンド
   // 放置時間を除外）。これで「離席していただけの既知語」が遅い正解扱いされて習得できなく
@@ -8374,10 +8384,12 @@ function initWordsnapSync() {
   };
   window.addEventListener("focus", pullIfConnected);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
-      resetQuizTimerOnResume();
-      pullIfConnected();
+    if (document.hidden) {
+      stopSyncPolling();
+      return;
     }
+    resetQuizTimerOnResume();
+    pullIfConnected();
   });
   window.addEventListener("pageshow", pullIfConnected);
   // オフライン復帰時：オフライン中に解いた進捗（stats・history・streak等）を即サーバーへ反映する。
