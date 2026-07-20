@@ -16,8 +16,9 @@ const manifestPath = join(publishDir, "wordsnap.webmanifest");
 const workerPath = join(publishDir, "wordsnap-sw.js");
 const apiPath = join(projectDir, "functions", "api", "wordsnap-state.js");
 const schemaPath = join(projectDir, "schema.sql");
+const distributionPath = join(repoDir, "DISTRIBUTION.md");
 
-for (const path of [publicHtmlPath, rootHtmlPath, manifestPath, workerPath, apiPath, schemaPath]) {
+for (const path of [publicHtmlPath, rootHtmlPath, manifestPath, workerPath, apiPath, schemaPath, distributionPath]) {
   assert.ok(existsSync(path), `required file is missing: ${path}`);
 }
 
@@ -26,7 +27,13 @@ const rootHtml = read(rootHtmlPath);
 const worker = read(workerPath);
 const api = read(apiPath);
 const schema = read(schemaPath);
+const distribution = read(distributionPath);
 const manifest = JSON.parse(read(manifestPath));
+
+assert.match(distribution, /公開版では自動発行される個人キーに紐づけてWordBankの同期サーバーにも保存/,
+  "distribution guide must disclose automatic server sync");
+assert.doesNotMatch(distribution, /同期を使わなければ、データはその端末から出ません/,
+  "distribution guide still claims that public data stays only on the device");
 
 assert.equal(rootHtml, publicHtml, "root index.html and publish/index.html must be identical");
 assert.match(publicHtml, /<title>\s*WordBank\s*<\/title>/i, "WordBank title is missing");
