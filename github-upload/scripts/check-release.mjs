@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Script } from "node:vm";
 
@@ -460,10 +460,26 @@ assert.match(
   "retrying a completed quiz must keep the selected context amount",
 );
 
-// Detect only realistic ASCII secrets, not the UI's abbreviated placeholders (AIza… / gsk_…).
-const scanned = [publicHtml, rootHtml, standaloneHtml, worker, api, schema].join("\n");
+// 公開物だけでなく、仕様書・fixture・ログ相当のテキストへ誤貼付した秘密も拒否する。
+// .git / node_modules / 画像は対象外。実在し得る長さだけに絞り、UIの省略例は誤検出しない。
+const SECRET_TEXT_EXTENSIONS = new Set([
+  ".html", ".js", ".mjs", ".json", ".md", ".sql", ".txt", ".yml", ".yaml",
+]);
+function repositoryTextFiles(directory) {
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...repositoryTextFiles(path));
+    else if (entry.isFile() && SECRET_TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) files.push(path);
+  }
+  return files;
+}
+const scanned = [standaloneHtml, ...repositoryTextFiles(repoDir).map(read)].join("\n");
 assert.doesNotMatch(scanned, /AIza[0-9A-Za-z_-]{30,}/, "possible Gemini API key committed");
 assert.doesNotMatch(scanned, /gsk_[0-9A-Za-z]{30,}/, "possible Groq API key committed");
+assert.doesNotMatch(scanned, /sk-(?:proj-)?[0-9A-Za-z_-]{30,}/, "possible OpenAI API key committed");
+assert.doesNotMatch(scanned, /(?:ghp_|github_pat_)[0-9A-Za-z_]{30,}/, "possible GitHub token committed");
 assert.doesNotMatch(scanned, /ws_[0-9a-f]{60}\b/i, "possible real WordBank sync key committed");
 
 console.log("WordBank release checks passed.");
