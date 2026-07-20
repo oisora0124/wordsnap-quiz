@@ -6,13 +6,15 @@
 //   - /api/（同期サーバー）とクロスオリジン（辞書API等）は絶対にキャッシュせず素通しする。
 //     オフライン中に解いた進捗はlocalStorageに溜まり、オンライン復帰時にアプリ側が同期する前提。
 // キャッシュ名はバージョン付き。更新時は番号を上げると activate で古いキャッシュが消える。
-const CACHE_NAME = "wordsnap-v2";
+// v3: 存在しない wordsnap-quiz.html のプリキャッシュをやめた。番号を上げて古い重複を消す。
+const CACHE_NAME = "wordsnap-v3";
 
 // 最初に確保しておく最低限のファイル（1つ失敗しても他は続ける）
-// 本番はindex.html（"./"）、ローカルサーバーではwordsnap-quiz.htmlなので両方入れておく
+// かつて wordsnap-quiz.html も入れていたが、このファイルは存在せず、配信側の
+// フォールバックで index.html が返るため、アプリ本体（約550KB）を誤ったURLで
+// もう一部キャッシュしていた。端末の空き容量を無駄に使うので "./" だけにする。
 const PRECACHE_URLS = [
   "./",
-  "./wordsnap-quiz.html",
   "./wordsnap.webmanifest",
   "./assets/icon-192.png",
   "./assets/icon-512.png",

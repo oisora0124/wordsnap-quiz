@@ -1,5 +1,5 @@
 // WordBank の保存データを Cloudflare D1（SQLite・強整合）に保管する Pages Function。
-// Netlify Functions + Blobs 版（netlify/functions/wordsnap-state.mjs）と「同じ契約」に揃えている：
+// 契約（旧 Netlify Functions + Blobs 版と同じもの。Netlify版は停止済みのため削除した）：
 //
 //   GET  /api/wordsnap-state?sync=KEY        -> { syncId, state, stateRev, updatedAt }
 //   PUT  /api/wordsnap-state?sync=KEY  body: { baseRev, state }
