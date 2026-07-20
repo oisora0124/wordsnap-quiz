@@ -123,8 +123,9 @@ async function readRow(db, syncId, includeState = true) {
       : "SELECT rev, updatedAt FROM states WHERE key = ?")
     .bind(syncId)
     .first();
-  if (!row) return { state: null, rev: 0, updatedAt: 0 };
+  if (!row) return { state: null, rev: 0, updatedAt: 0, corrupt: false };
   let state = null;
+  let corrupt = false;
   if (includeState) {
     try {
       state = row.state ? JSON.parse(row.state) : null;
@@ -132,10 +133,13 @@ async function readRow(db, syncId, includeState = true) {
         state = JSON.parse(await gunzipBase64ToText(state.__gz));
       }
     } catch {
-      state = null; // 万一DB内が壊れていても500にせず null 扱い
+      // null（新規キー）と破損行を区別する。破損を空状態として200で返すと、
+      // 新しい端末が「リモートは空」と判断して空データを自動送信し、復旧不能になる。
+      state = null;
+      corrupt = true;
     }
   }
-  return { state, rev: Number(row.rev) || 0, updatedAt: Number(row.updatedAt) || 0 };
+  return { state, rev: Number(row.rev) || 0, updatedAt: Number(row.updatedAt) || 0, corrupt };
 }
 
 export async function onRequest(context) {
@@ -170,6 +174,9 @@ export async function onRequest(context) {
       });
     }
     const latest = await readRow(db, syncId);
+    if (latest.corrupt) {
+      return json({ error: "保存データを読み取れません。空データでは上書きしていません。", code: "corrupt_state" }, 500);
+    }
     return json({ syncId, state: latest.state, stateRev: latest.rev, updatedAt: latest.updatedAt });
   }
 
@@ -240,6 +247,9 @@ export async function onRequest(context) {
     );
     if (incomingLearningVersion < HIGHEST_LEARNING_VERSION) {
       const latest = await readRow(db, syncId);
+      if (latest.corrupt) {
+        return json({ error: "保存データを読み取れません。自動上書きを中止しました。", code: "corrupt_state" }, 500);
+      }
       const storedLearningVersion = Math.max(
         0,
         Math.floor(Number(latest.state?.learningSchemaVersion) || 0),
@@ -325,6 +335,9 @@ export async function onRequest(context) {
       // 競合: 最新を読み直して 409 で返す（クライアントは pull→マージ→再push する）
       // state は readRow が解凍済みプレーンにして返す＝応答契約は従来と同じ。
       const latest = await readRow(db, syncId);
+      if (latest.corrupt) {
+        return json({ error: "保存データを読み取れません。自動競合解決を中止しました。", code: "corrupt_state" }, 500);
+      }
       return json(
         { error: "conflict", syncId, state: latest.state, stateRev: latest.rev, updatedAt: latest.updatedAt },
         409,
