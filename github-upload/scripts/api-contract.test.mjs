@@ -220,6 +220,32 @@ test("plaintext and gzip PUTs keep the revision, force-write, and conflict contr
   assert.equal(latest.data.stateRev, 3);
 });
 
+test("a 10,000-word compressed state survives a full D1 round trip", async () => {
+  const largeState = {
+    learningSchemaVersion: 1,
+    words: Array.from({ length: 10_000 }, (_, index) => ({
+      id: `word-${index}`,
+      term: `term-${index}`,
+      meaning: `meaning-${index}`,
+      stats: { correct: index % 7, wrong: index % 3 },
+    })),
+    decks: [{ id: "deck-1", name: "Large deck" }],
+  };
+  const stateGz = await gzipBase64(largeState);
+  assert.ok(stateGz.length < 1_900_000, "the large-state fixture must exercise the supported path");
+
+  const db = new FakeD1();
+  const saved = await requestApi(db, {
+    method: "PUT",
+    body: { baseRev: 0, stateGz, format: "gzip-base64" },
+  });
+  assert.equal(saved.response.status, 200);
+  const loaded = await requestApi(db);
+  assert.equal(loaded.response.status, 200);
+  assert.equal(loaded.data.state.words.length, 10_000);
+  assert.deepEqual(loaded.data.state.words.at(-1), largeState.words.at(-1));
+});
+
 test("a new room with a mismatched baseRev is not created", async () => {
   const db = new FakeD1();
   const result = await requestApi(db, {
