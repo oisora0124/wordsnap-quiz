@@ -11864,6 +11864,8 @@ function contextGenPrompt(word) {
     "要件:",
     '1. "sentence": その単語をそのままの形で含む自然な英文を1文（10〜20語）。空所補充問題にするので、',
     "   前後の文脈だけで空所に入る語が一つに決まる内容にし、他の難単語は避ける。",
+    "   空所の前後に、その語でなければならない理由になる手がかり（一緒に使われる語、対比、結果、",
+    "   場面の説明など）を必ず入れる。手がかりが無く、いろいろな語が入り得る漠然とした文にしない。",
     '2. "distractors": 空所に入れると誤りになる英単語をちょうど3つ。難易度を散らし、次の役割を1つずつ割り当てる:',
     "   (a) 出題語と同じ語源の別の品詞・派生形（例: 動詞が出題語なら名詞形や形容詞形）。文法的に空所へ入らない形にする。",
     "   (b) 出題語と同じ品詞だが、この文脈では意味が明らかに合わない語。綴りは出題語と似せない。",
@@ -12479,14 +12481,21 @@ async function fetchDerivedFormDistractors(word, sentence, signal) {
 // 定義の断片が混ざる。断片から空所を作ると前後の手がかりが無く問題として成立しないため、
 // 文らしいものを優先する。文らしい候補が1つも無ければ従来どおり全体から選ぶ（出題機会は落とさない）。
 function sentenceLikeExamples(list) {
-  const good = list.filter((example) => {
+  const sentences = list.filter((example) => {
     const text = String(example).trim();
     const wordCount = text.split(/\s+/).length;
     if (wordCount < 5) return false;
     if (/^to\s+\S+[^,]*,[^,]*,/i.test(text)) return false; // 定義を並べた断片
     return /[.!?]$/.test(text) || wordCount >= 8;
   });
-  return good.length ? good : list;
+  // さらに「なぜその語なのか」を文から言えるだけの手がかりがあるものを優先する。
+  // "He acquired a title." のような短文は文法上は正しくても、空所に入る語を
+  // 一つに絞る材料が無く、当てずっぽうになってしまう。
+  const contextful = sentences.filter(
+    (example) => String(example).trim().split(/\s+/).length >= 8,
+  );
+  if (contextful.length) return contextful;
+  return sentences.length ? sentences : list;
 }
 
 function pickExample(list) {
@@ -12729,7 +12738,9 @@ function buildContextChoices(answer, item) {
       // pickDistractors 自体は通常クイズでも使うため意味重複の責務を保ち、空所補充固有の
       // 語形安全性はここで先に絞る。足りなくても危険語で4択を埋めず、注記付きで続行する。
       .filter((w) => isContextDistractorSafe(answer, item, w.term));
-    for (const w of pickDistractors(basePool, answer, 3 - generated.length)) {
+    for (const w of pickDistractors(basePool, answer, 3 - generated.length, [], {
+      preferDifferentPos: true,
+    })) {
       const term = String(w.term || "").trim();
       const k = term.toLowerCase();
       // 最終追加の直前にも再確認し、将来 pool の作り方が変わっても検証を迂回させない。
@@ -13329,7 +13340,11 @@ function meaningsTooClose(a, b) {
   return shorter.length >= 3 && longer.includes(shorter);
 }
 
-function pickDistractors(pool, answer, count = 3, excludeMeanings = []) {
+// options.preferDifferentPos: 空所補充で使う。意味を4択で問う通常クイズでは
+// 「同じ品詞＝意味カテゴリが近い」ほど良い誤答になるが、空所補充では逆で、
+// 同じ品詞の語は空所に文法的に入ってしまい「正解が2つ」に見えて根拠が立たない。
+// 品詞が違えば文の形から確実に除外でき、解答の根拠を持って選べる。
+function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options = {}) {
   // excludeMeanings: 既に選択肢に入っている意味（AI生成の誤答など）。ここで一緒に除外しないと、
   // 呼び出し側で弾いた分だけ選択肢が減って4択に満たなくなる。
   const seen = new Set([
@@ -13339,12 +13354,22 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = []) {
   const answerPos = answer.pos?.tag || null;
   // まず shuffle して同点をランダム化してから、紛らわしさスコアの高い順に並べる。
   // Array.prototype.sort は安定なので、同スコアはシャッフル順（＝ランダム）のまま残る。
+  const preferDifferentPos = Boolean(options.preferDifferentPos);
   const ranked = shuffle(pool)
     .map((word) => {
       let score = 0;
       const dist = spellingDistance(answer.term, word.term);
       if (dist > 0 && dist <= 2) score += 3; // 綴りが紛らわしい（affect/effect 等）
-      if (answerPos && word.pos?.tag === answerPos) score += 1; // 同じ品詞＝意味カテゴリが近い
+      if (answerPos && word.pos?.tag) {
+        const samePos = word.pos.tag === answerPos;
+        if (preferDifferentPos) {
+          // 空所補充：品詞が違う語を上に。同じ品詞は空所へ入り得るので最後に回す。
+          if (!samePos) score += 2;
+          else score -= 3;
+        } else if (samePos) {
+          score += 1; // 意味の4択：同じ品詞＝意味カテゴリが近い
+        }
+      }
       return { word, score };
     })
     .sort((a, b) => b.score - a.score);
