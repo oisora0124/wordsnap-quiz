@@ -112,6 +112,16 @@ async function gzipTextToBase64(text) {
   return btoa(binary);
 }
 
+function validStateShape(value) {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Array.isArray(value.words) &&
+    Array.isArray(value.decks),
+  );
+}
+
 // DBの1行を読み、stateを「解凍済みプレーン」で返す。
 // 保存形式は2通りを受理する（後方互換）:
 //   新: {"__gz":"<base64>"} マーカー → 解凍してJSONパース
@@ -132,6 +142,7 @@ async function readRow(db, syncId, includeState = true) {
       if (state && typeof state === "object" && !Array.isArray(state) && typeof state.__gz === "string") {
         state = JSON.parse(await gunzipBase64ToText(state.__gz));
       }
+      if (!validStateShape(state)) throw new Error("stored state has an invalid shape");
     } catch {
       // null（新規キー）と破損行を区別する。破損を空状態として200で返すと、
       // 新しい端末が「リモートは空」と判断して空データを自動送信し、復旧不能になる。
@@ -224,13 +235,7 @@ export async function onRequest(context) {
       state = body.state;
     }
     // 検証は解凍後のstateに対して行う（プレーン受信時も同一の検証）
-    if (
-      !state ||
-      typeof state !== "object" ||
-      Array.isArray(state) ||
-      !Array.isArray(state.words) ||
-      !Array.isArray(state.decks)
-    ) {
+    if (!validStateShape(state)) {
       return json({ error: "invalid state" }, 422);
     }
 

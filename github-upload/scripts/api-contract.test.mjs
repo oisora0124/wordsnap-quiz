@@ -134,15 +134,17 @@ test("old plaintext D1 rows remain readable", async () => {
 });
 
 test("a corrupt stored row fails closed instead of looking like an empty room", async () => {
-  const db = new FakeD1([
-    [LEGACY_SYNC_ID, { state: "{broken-json", rev: 7, updatedAt: 1234 }],
-  ]);
-  const { response, data } = await requestApi(db);
-  assert.equal(response.status, 500);
-  assert.equal(data.code, "corrupt_state");
-  assert.equal("state" in data, false, "a corrupt row must not be returned as state:null");
-  assert.equal(db.rows.get(LEGACY_SYNC_ID).state, "{broken-json",
-    "a read failure must not rewrite the stored row");
+  for (const stored of ["{broken-json", "", "null", "{}", JSON.stringify({ words: [], decks: null })]) {
+    const db = new FakeD1([
+      [LEGACY_SYNC_ID, { state: stored, rev: 7, updatedAt: 1234 }],
+    ]);
+    const { response, data } = await requestApi(db);
+    assert.equal(response.status, 500);
+    assert.equal(data.code, "corrupt_state");
+    assert.equal("state" in data, false, "a corrupt row must not be returned as state:null");
+    assert.equal(db.rows.get(LEGACY_SYNC_ID).state, stored,
+      "a read failure must not rewrite the stored row");
+  }
 });
 
 test("legacy v0 clients can update v0 rooms but cannot erase a stored v1 schema", async () => {
