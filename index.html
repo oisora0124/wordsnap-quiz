@@ -12553,6 +12553,32 @@ async function fetchContextFromDictionary(word) {
 
 // 1語分の例文＋誤答を用意する。auto: AI→辞書→保存済み / dict: 辞書→保存済み / off: 保存済みのみ。
 // 失敗も記録して無限リトライを防ぐ（その語は通常の単語出題にフォールバックする）。
+// 空所補充では「品詞が違うから空所に入らない」ことを解答の根拠にする。ところが品詞は
+// ライブラリ画面に並んだ単語しか解決されないため、クイズだけを使っていると判定材料が無く、
+// ほとんどの問題が根拠なしと判断されてしまう。出題語と誤答候補の分だけ先に確定させる。
+// Datamuseはキー不要・無料で、結果は単語に保存されるので次回以降は問い合わせない。
+const CONTEXT_POS_PREFETCH = 4;
+async function ensurePosForContext(answer) {
+  const targets = [];
+  if (!answer.pos) targets.push(answer);
+  for (const candidate of quizSelectedDeckWords()) {
+    if (targets.length >= CONTEXT_POS_PREFETCH + 1) break;
+    if (candidate.id !== answer.id && !candidate.pos) targets.push(candidate);
+  }
+  if (!targets.length) return;
+  await Promise.all(
+    targets.map(async (target) => {
+      const result = await resolvePosOnce(target.term).catch(() => null);
+      if (!result) return;
+      // 応答待ちの間に単語が削除・変更されていないか確認してから反映する
+      const live = appState.words.find((item) => item.id === target.id);
+      if (live && normalizeTerm(live.term) === normalizeTerm(target.term)) {
+        live.pos = { tag: result.tag };
+      }
+    }),
+  );
+}
+
 async function ensureContextItem(word) {
   const key = contextCacheKey(word);
   let cached = contextCacheEntry(word);
@@ -12567,6 +12593,8 @@ async function ensureContextItem(word) {
   const cap = mode === "off" ? "stored" : willUseAI ? contextAiCapability(aiProvider) : "dict";
   const inflightKey = `${key}::${cap}`;
   if (contextInflight.has(inflightKey)) return contextInflight.get(inflightKey);
+  // 品詞は解答の根拠判定に使う。失敗しても例文生成は続ける（根拠が立たなければ通常出題になる）。
+  if (mode !== "off") await ensurePosForContext(word).catch(() => {});
   const task = runContextGenerationOnce(key, cap, async () => {
     // タブ間ロックを取得した後にも最新キャッシュを読み、待機直前に完了した結果を再利用する。
     const latestStored = readStoredContextCache()?.[key];
@@ -12717,6 +12745,38 @@ async function ensureContextItem(word) {
 // 既存の単語プールから補う（意味の重複は従来どおり避ける）。
 // 空所補充の選択肢は「英単語」。正解も誤答も label に英単語を入れて表示を統一する。
 // 正解は登録単語オブジェクトそのものではなく id を保った包みにする（採点は id 比較のまま動く）。
+// 直近の空所補充で「根拠を担保できず通常出題に切り替えた」理由。表示用。
+let contextBasisFallbackNote = "";
+
+// その誤答が「空所には入らない」と学習者が根拠を持って言い切れるか。
+// 言い切れる型は次の2つだけ:
+//   (1) 出題語の派生形（名詞化など）＝品詞が違うので文法的に入らない
+//   (2) 品詞が分かっている登録語で、その品詞が出題語と違う
+// どちらでもない語は「意味は違うが空所には入り得る」可能性が残り、消去の根拠にならない。
+function contextDistractorHasBasis(answer, term) {
+  const answerTerm = String(answer?.term || "").trim().toLowerCase();
+  const candidate = String(term || "").trim().toLowerCase();
+  if (!answerTerm || !candidate) return false;
+  if (hasDerivationalSuffix(answerTerm, candidate, DERIVATIONAL_SUFFIXES)) return true;
+  const answerPos = String(answer?.pos?.tag || "").toLowerCase();
+  if (!answerPos) return false; // 出題語の品詞が不明だと品詞では除外できない
+  const registered = (appState.words || []).find(
+    (w) => String(w.term || "").trim().toLowerCase() === candidate,
+  );
+  const candidatePos = String(registered?.pos?.tag || "").toLowerCase();
+  return Boolean(candidatePos && candidatePos !== answerPos);
+}
+
+// 4択全体として、根拠を持って正解を選べるか。
+// AIが「空所に自然に入るのは正解だけ」を同じ応答内で自己検証できていれば、それが根拠になる。
+// 検証が無い経路（辞書のみ等）では、誤答が1つずつ上の型で除外できることを求める。
+function contextChoicesHaveBasis(answer, item, choices) {
+  if (item?.choiceValidation === "ai") return true;
+  return choices
+    .filter((choice) => choice.id !== answer.id)
+    .every((choice) => contextDistractorHasBasis(answer, choice.label));
+}
+
 function buildContextChoices(answer, item) {
   const answerTerm = String(answer.term || "").trim();
   const seenTerms = new Set([answerTerm.toLowerCase()]);
@@ -12750,6 +12810,15 @@ function buildContextChoices(answer, item) {
       if (choices.length >= 4) break;
     }
   }
+  // 根拠を持って選べない4択は出題しない（当てずっぽうを正解として記録しないため）。
+  // 呼び出し側は空配列を受けて通常の単語出題へ切り替える。
+  if (choices.length >= 2 && !contextChoicesHaveBasis(answer, item, choices)) {
+    contextBasisFallbackNote =
+      "この単語は「空所に入らない」と言い切れる誤答を用意できなかったため、" +
+      "根拠のない出題を避けて通常の単語出題にしました。";
+    return [];
+  }
+  contextBasisFallbackNote = "";
   return shuffle(choices);
 }
 
@@ -13051,8 +13120,12 @@ function buildReviewQuiz() {
     // 形式が混在するセッションでは、通常出題の回でも次が例文なら先に用意しておく
     // （そうしないと例文に当たるたびに生成待ちが挟まる）。
     if (reviewSession.mixFormat) prefetchNextContextItem();
-    // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
-    elements.quizFeedback.textContent = choiceCountNote(choices);
+    // 空所補充をやめて通常出題に切り替えた場合は、その理由を先に伝える。
+    // 黙って形式が変わると「なぜ例文が出ないのか」が分からないため。
+    // それ以外は、選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
+    elements.quizFeedback.textContent =
+      contextBasisFallbackNote || choiceCountNote(choices);
+    contextBasisFallbackNote = "";
     return {
       answer,
       choices,
