@@ -4754,7 +4754,7 @@ accurate 正確な"
                 <summary>詳しい説明</summary>
                 <p>追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。新しい個人キーはブラウザの安全な乱数機能で自動発行されます。</p>
                 <ol class="sync-steps">
-                  <li><strong>ホーム画面に追加して使う</strong>：このページを「ホーム画面に追加」し、そのアイコンから開いてください。ブラウザの保存が消えても、開き直せばサーバーから自動で元に戻ります。</li>
+                  <li><strong>ホーム画面に追加して使う</strong>：このページを「ホーム画面に追加」するとワンタップで起動でき、通常のブラウザ利用より端末内データが消えにくくなります。ただし、サイトデータ消去や機種変更後の復元には個人リンクまたはJSONバックアップが必要です。個人リンクは公開せず、自分だけが開ける安全な場所へ保管してください。</li>
                   <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。リンクを開けないときは、下の「<strong>別の端末と同じキーで同期</strong>」にリンクやキーを貼り付けても同じことができます。</li>
                 </ol>
               </details>
@@ -7696,7 +7696,7 @@ async function connectWordsnapSync(options = {}) {
     if (needsPush) {
       await pushWordsnapState({ force: true });
     } else {
-      setSyncStatus("✓ サーバーに保存済み（このリンクをホーム画面に追加すると、機種変更してもデータが残ります）", "live");
+      setSyncStatus("✓ サーバーに保存済み（機種変更に備え、個人リンクまたはJSONを安全に保管してください）", "live");
     }
   } catch (error) {
     if (isStaleSyncError(error)) return; // キー切替で破棄された応答は無視（finallyでbusyのみ解除）
@@ -7975,8 +7975,8 @@ function generatePrivateKey() {
   return `ws_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-// 個人キーをURL(?w=...)に埋め込む。ホーム画面に追加すればこのURLごと保存されるので、
-// ブラウザの保存が消えても、開き直すだけでサーバーからデータを復元できる。
+// 個人キーをURL(?w=...)に埋め込む。個人リンクのコピーと同一端末での再読込に使う。
+// PWA manifest の start_url は静的なので、ホーム画面アイコンだけでキー保持を保証しない。
 function rememberSyncIdInUrl(id) {
   try {
     const url = new URL(window.location.href);
@@ -8271,7 +8271,7 @@ function initWordsnapSync() {
       keyGenerationFailed = true;
     }
   }
-  // 現在の個人キーをURLに反映（ホーム画面追加で消えない保存先になる）。
+  // 現在の個人キーをURLに反映（個人リンクのコピーと同一端末での再読込に使う）。
   // 別リンクの確認待ちの間はURLを書き換えない（開いたリンクのキーを保持して確認に使う）。
   if (syncState.id && syncServerAvailable() && !foreignSyncId) {
     rememberSyncIdInUrl(syncState.id);

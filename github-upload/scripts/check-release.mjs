@@ -296,6 +296,10 @@ assert.match(publicHtml, /外部辞書への通信：/, "external dictionary dat
 assert.match(publicHtml, /例文問題の外部通信：/, "context-question data disclosure is missing");
 assert.match(publicHtml, /削除記録は最長90日残り/,
   "deletion-tombstone retention disclosure is missing");
+assert.match(publicHtml, /サイトデータ消去や機種変更後の復元には個人リンクまたはJSONバックアップが必要/,
+  "PWA recovery disclosure must require an externally retained recovery artifact");
+assert.doesNotMatch(publicHtml, /ホーム画面に追加すると、機種変更してもデータが残ります/,
+  "the app must not claim that a home-screen icon alone survives device migration");
 assert.match(
   publicHtml,
   /showRuntimeStorageWarning\(!localSaved\s*&&\s*!idbSaved\)/,
