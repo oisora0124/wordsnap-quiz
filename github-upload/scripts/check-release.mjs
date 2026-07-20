@@ -407,6 +407,20 @@ const readdedMerge = mergeStates(
 assert.equal(readdedMerge.words.length, 1,
   "a word deliberately re-added after its tombstone must remain available");
 
+const remappedDeletionMerge = mergeStates(
+  mergeStateFixture([mergeWordFixture("old-a", "deck-a", oldAddedAt)], [mergeDeckA]),
+  mergeStateFixture([], [{ id: "other-device-deck", name: "A", updatedAt: 0 }], {
+    "other-device-deck apple": deletedAt,
+  }),
+);
+assert.equal(remappedDeletionMerge.words.length, 0,
+  "a tombstone from a same-name deck with another device id must be remapped before merge");
+
+const idempotentOnce = mergeStates(crossDeckLegacyMerge, crossDeckLegacyMerge);
+const idempotentTwice = mergeStates(idempotentOnce, crossDeckLegacyMerge);
+assert.equal(JSON.stringify(idempotentTwice), JSON.stringify(idempotentOnce),
+  "repeating the same application-state merge must be idempotent");
+
 for (const column of ["key", "state", "rev", "updatedAt"]) {
   assert.match(schema, new RegExp(`\\b${column}\\b`), `D1 schema is missing ${column}`);
 }
