@@ -321,8 +321,10 @@ assert.ok(
 assert.match(publicHtml, /id=["']runtimeStorageWarning["']/, "runtime storage warning is missing");
 assert.match(publicHtml, /外部辞書への通信：/, "external dictionary data disclosure is missing");
 assert.match(publicHtml, /例文問題の外部通信：/, "context-question data disclosure is missing");
-assert.match(publicHtml, /削除記録は最長90日残り/,
+assert.match(publicHtml, /削除記録は最長90日保持/,
   "deletion-tombstone retention disclosure is missing");
+assert.match(publicHtml, /長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません/,
+  "dormant server-row retention limitation is missing");
 assert.match(publicHtml, /サイトデータ消去や機種変更後の復元には個人リンクまたはJSONバックアップが必要/,
   "PWA recovery disclosure must require an externally retained recovery artifact");
 assert.doesNotMatch(publicHtml, /ホーム画面に追加すると、機種変更してもデータが残ります/,
