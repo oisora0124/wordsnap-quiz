@@ -101,7 +101,12 @@ for (const icon of manifest.icons) {
 }
 
 assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v\d+["']/, "versioned cache name is missing");
-assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v5["']/, "service worker cache version must be v5");
+assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v6["']/, "service worker cache version must be v6");
+assert.match(
+  worker,
+  /cache\s*\.add\(CORE_PRECACHE_URL\)[\s\S]*?\.then\(\(\)\s*=>\s*Promise\.allSettled/,
+  "service worker must fetch the core app before accepting optional precache failures",
+);
 assert.doesNotMatch(
   worker,
   /["']\.\/wordsnap-quiz\.html["']/,
@@ -125,6 +130,53 @@ assert.match(
 for (const requiredAsset of ["./", "./wordsnap.webmanifest", "./assets/icon-192.png", "./assets/icon-512.png"]) {
   assert.ok(worker.includes(JSON.stringify(requiredAsset)), `service worker precache is missing ${requiredAsset}`);
 }
+
+function serviceWorkerInstallHarness(failUrl = null) {
+  const handlers = {};
+  const added = [];
+  let skipped = false;
+  const sandbox = {
+    URL,
+    fetch: async () => ({ ok: true, clone() { return this; } }),
+    caches: {
+      open: async () => ({
+        add: async (url) => {
+          added.push(url);
+          if (url === failUrl) throw new Error(`precache failed: ${url}`);
+        },
+        put: async () => {},
+      }),
+      keys: async () => [],
+      delete: async () => true,
+      match: async () => null,
+    },
+    self: {
+      addEventListener(type, handler) { handlers[type] = handler; },
+      skipWaiting: async () => { skipped = true; },
+      clients: { claim: async () => {} },
+      location: { origin: "https://wordbank.pages.dev" },
+      registration: { scope: "https://wordbank.pages.dev/" },
+    },
+  };
+  new Script(worker, { filename: "wordsnap-sw.js" }).runInNewContext(sandbox);
+  let installPromise;
+  handlers.install({ waitUntil(promise) { installPromise = promise; } });
+  return { added, installPromise, wasSkipped: () => skipped };
+}
+
+const failedCoreInstall = serviceWorkerInstallHarness("./");
+await assert.rejects(failedCoreInstall.installPromise, /precache failed/,
+  "a failed core precache must reject service-worker installation");
+assert.equal(failedCoreInstall.wasSkipped(), false,
+  "a failed core precache must not activate the incomplete worker");
+assert.deepEqual(failedCoreInstall.added, ["./"],
+  "optional assets must not be fetched after the core app failed");
+
+const failedOptionalInstall = serviceWorkerInstallHarness("./assets/icon-192.png");
+await assert.doesNotReject(failedOptionalInstall.installPromise,
+  "an optional asset failure must not block an otherwise usable update");
+assert.equal(failedOptionalInstall.wasSkipped(), true,
+  "a worker with the core app cached should be allowed to activate");
 
 for (const column of ["key", "state", "rev", "updatedAt"]) {
   assert.match(schema, new RegExp(`\\b${column}\\b`), `D1 schema is missing ${column}`);
