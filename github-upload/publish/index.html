@@ -5976,6 +5976,7 @@ const DECK_SHARE_MAX_WORDS = 5000;
 // 同期サーバーが応答しない場合にpulling/pushing状態を無期限に残さない。
 // 1万語級の圧縮送受信と低速回線にも余裕を持たせ、60秒で安全に中断して既存の再試行へ戻す。
 const SYNC_REQUEST_TIMEOUT_MS = 60 * 1000;
+const STANDALONE_DOWNLOAD_TIMEOUT_MS = 60 * 1000;
 const OCR_MAX_FILE_BYTES = 40 * 1024 * 1024; // 画像取り込み(OCR/AI): 40MB
 const OCR_MAX_PIXELS = 80 * 1000 * 1000; // 画像取り込み(OCR/AI): 8,000万画素
 // エラーメッセージ中の上限表記は定数から作る（値を変えたら文言も自動で揃う）
@@ -6418,13 +6419,15 @@ function initStepTabs() {
 
 async function downloadStandalone() {
   setStatus("ツールの保存用HTMLを準備しています…");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), STANDALONE_DOWNLOAD_TIMEOUT_MS);
   try {
     // 公開中の index.html はCSSとJavaScriptをすでに内包している。実行後のDOMを
     // 直列化すると入力中のAPIキーや一時表示が混入し得るため、未実行の配布元を取得する。
     const sourceUrl = new URL("index.html", window.location.href);
     sourceUrl.search = "";
     sourceUrl.hash = "";
-    const response = await fetch(sourceUrl, { cache: "no-store" });
+    const response = await fetch(sourceUrl, { cache: "no-store", signal: controller.signal });
     if (!response.ok) throw new Error(`配布元を取得できませんでした（HTTP ${response.status}）。`);
     const html = await response.text();
     if (!/<title>\s*WordBank\s*<\/title>/i.test(html) || !html.includes("function downloadStandalone")) {
@@ -6443,7 +6446,10 @@ async function downloadStandalone() {
     const assetPaths = ["assets/wordsnap-icon-light.png", "assets/wordsnap-icon-dark.png"];
     const embeddedAssets = await Promise.all(
       assetPaths.map(async (path) => {
-        const assetResponse = await fetch(new URL(path, sourceUrl), { cache: "no-store" });
+        const assetResponse = await fetch(new URL(path, sourceUrl), {
+          cache: "no-store",
+          signal: controller.signal,
+        });
         if (!assetResponse.ok) throw new Error(`画像を取得できませんでした（${path}）。`);
         return [path, await blobToDataUrl(await assetResponse.blob())];
       }),
@@ -6462,7 +6468,12 @@ async function downloadStandalone() {
     URL.revokeObjectURL(url);
     setStatus("WordBankをHTMLとして保存しました。現在の単語・成績・個人キー・AIキーはファイルに含まれません。");
   } catch (error) {
-    setStatus(`保存に失敗しました：${error.message || "公開URLから開いてお試しください。"}`);
+    const message = error?.name === "AbortError"
+      ? "通信が60秒以内に完了しませんでした。接続を確認して、もう一度お試しください。"
+      : error?.message || "公開URLから開いてお試しください。";
+    setStatus(`保存に失敗しました：${message}`);
+  } finally {
+    window.clearTimeout(timeout);
   }
 }
 

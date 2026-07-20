@@ -100,6 +100,12 @@ assert.match(
   "sync keys in the page URL must not be sent as referrers",
 );
 assert.match(publicHtml, /function\s+downloadStandalone\s*\(/, "standalone download function is missing");
+assert.match(publicHtml, /const\s+STANDALONE_DOWNLOAD_TIMEOUT_MS\s*=\s*60\s*\*\s*1000/,
+  "standalone download must have a bounded timeout");
+assert.match(publicHtml, /fetch\(sourceUrl,\s*{\s*cache:\s*["']no-store["'],\s*signal:\s*controller\.signal\s*}\)/,
+  "standalone source download must use the timeout signal");
+assert.match(publicHtml, /clearTimeout\(timeout\)[\s\S]*?function\s+storageKeyFor/,
+  "standalone download timeout must be cleared after completion");
 const sampleMatch = publicHtml.match(/const\s+SAMPLE_TEXT\s*=\s*`([\s\S]*?)`;/);
 assert.ok(sampleMatch, "built-in vocabulary sample is missing");
 const sampleRows = sampleMatch[1]
