@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordbank.pages.dev/schemas/lexical-shadow.schema.json",
+  "title": "WordBank lexical sense shadow record",
+  "description": "既存wordを正本に保ったまま語義分割を比較する影データ。利用条件を確認していない外部語彙データは格納しない。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["shadowVersion", "wordId", "lemma", "sense", "approvalStatus"],
+  "properties": {
+    "shadowVersion": { "const": 1 },
+    "wordId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,96}$" },
+    "lemma": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "sense": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["senseId", "glossJa"],
+      "properties": {
+        "senseId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,160}$" },
+        "glossJa": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "glossEn": { "type": "string", "maxLength": 2000 },
+        "partOfSpeech": { "enum": ["n", "v", "adj", "adv", "other", "unknown"] },
+        "cefrBand": { "enum": ["A1", "A2", "B1", "B2", "C1", "C2", "unknown"] },
+        "externalRefs": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "id"],
+            "properties": {
+              "source": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "version": { "type": "string", "maxLength": 80 }
+            }
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sourceType", "sourceId", "licenseStatus"],
+        "properties": {
+          "sourceType": { "enum": ["user", "dictionary", "corpus", "model", "rule"] },
+          "sourceId": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "sourceVersion": { "type": "string", "maxLength": 80 },
+          "licenseStatus": { "enum": ["verified", "user-provided", "not-required"] },
+          "retrievedAt": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "approvalStatus": { "enum": ["draft", "auto-checked", "reviewed", "rejected"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

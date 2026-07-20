@@ -29,13 +29,15 @@
 
 ### Phase 1: 観測可能性
 
-- 現行の正誤履歴を壊さず、追加型の `review_event` 候補スキーマを定義する。
+- 追加型の `review_event` 候補スキーマは `github-upload/schemas/review-event.schema.json` に定義済み。
+- 現行の正誤履歴を壊さず、ランタイム記録・保持期限・削除導線を設計する。
 - `response_time_ms`、出題形式、ヒント、誤答種別は、まず端末内・明示同意で影記録する。
 - 収集目的、保持期間、削除方法を決めるまで外部送信しない。
 
 ### Phase 2: 語義コアの影モデル
 
-- `lemma`、`sense`、`item`、`provenance` を現行 `word` の隣に追加できるスキーマとして設計する。
+- `lemma`、`sense`、`provenance` の影レコードは `github-upload/schemas/lexical-shadow.schema.json` に定義済み。
+- `item` と既存クイズの対応は、影レコードを本番stateへ接続する前に追加設計する。
 - 既存 `word -> meaning` は当面そのまま正本とし、変換結果を影データで比較する。
 - WordNet、JACET等はライセンス、版、ID安定性を確認してから取り込む。
 - 既存JSONを先に書き換えず、コピー→変換→件数・語義差分検証→切替の順にする。

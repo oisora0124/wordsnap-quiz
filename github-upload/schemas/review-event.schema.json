@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordbank.pages.dev/schemas/review-event.schema.json",
+  "title": "WordBank local review event shadow record",
+  "description": "端末内での影評価用。明示同意・保持期限・削除導線を実装するまで同期payloadへ含めない。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventVersion", "eventId", "wordId", "occurredAt", "promptMode", "result"],
+  "properties": {
+    "eventVersion": { "const": 1 },
+    "eventId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,96}$" },
+    "wordId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,96}$" },
+    "occurredAt": { "type": "integer", "minimum": 0 },
+    "promptMode": { "enum": ["meaning-choice", "context-choice"] },
+    "result": { "enum": ["correct", "wrong", "dont-know"] },
+    "responseTimeMs": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+    "choiceCount": { "type": "integer", "minimum": 2, "maximum": 4 },
+    "hintUsed": { "type": "boolean" },
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine"],
+      "properties": {
+        "engine": { "const": "legacy-stage-v1" },
+        "stageBefore": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "stageAfter": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "dueAtBefore": { "type": "integer", "minimum": 0 },
+        "dueAtAfter": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

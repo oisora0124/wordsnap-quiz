@@ -17,8 +17,13 @@ const workerPath = join(publishDir, "wordsnap-sw.js");
 const apiPath = join(projectDir, "functions", "api", "wordsnap-state.js");
 const schemaPath = join(projectDir, "schema.sql");
 const distributionPath = join(repoDir, "DISTRIBUTION.md");
+const reviewEventSchemaPath = join(projectDir, "schemas", "review-event.schema.json");
+const lexicalShadowSchemaPath = join(projectDir, "schemas", "lexical-shadow.schema.json");
 
-for (const path of [publicHtmlPath, rootHtmlPath, manifestPath, workerPath, apiPath, schemaPath, distributionPath]) {
+for (const path of [
+  publicHtmlPath, rootHtmlPath, manifestPath, workerPath, apiPath, schemaPath, distributionPath,
+  reviewEventSchemaPath, lexicalShadowSchemaPath,
+]) {
   assert.ok(existsSync(path), `required file is missing: ${path}`);
 }
 
@@ -28,7 +33,21 @@ const worker = read(workerPath);
 const api = read(apiPath);
 const schema = read(schemaPath);
 const distribution = read(distributionPath);
+const reviewEventSchema = JSON.parse(read(reviewEventSchemaPath));
+const lexicalShadowSchema = JSON.parse(read(lexicalShadowSchemaPath));
 const manifest = JSON.parse(read(manifestPath));
+
+assert.equal(reviewEventSchema.additionalProperties, false,
+  "review-event shadow schema must reject unspecified data collection fields");
+assert.ok(reviewEventSchema.required.includes("result") && reviewEventSchema.required.includes("occurredAt"),
+  "review-event shadow schema is missing its outcome or timestamp");
+assert.equal(lexicalShadowSchema.additionalProperties, false,
+  "lexical shadow schema must reject unspecified fields");
+assert.ok(lexicalShadowSchema.required.includes("approvalStatus"),
+  "lexical shadow records must include an approval state");
+assert.deepEqual(lexicalShadowSchema.properties.provenance.items.properties.licenseStatus.enum,
+  ["verified", "user-provided", "not-required"],
+  "lexical provenance must not accept an unverified license state");
 
 assert.match(distribution, /公開版では自動発行される個人キーに紐づけてWordBankの同期サーバーにも保存/,
   "distribution guide must disclose automatic server sync");
