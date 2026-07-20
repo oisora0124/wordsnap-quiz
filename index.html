@@ -11864,10 +11864,12 @@ function contextGenPrompt(word) {
     "要件:",
     '1. "sentence": その単語をそのままの形で含む自然な英文を1文（10〜20語）。空所補充問題にするので、',
     "   前後の文脈だけで空所に入る語が一つに決まる内容にし、他の難単語は避ける。",
-    '2. "distractors": 空所に入れると誤りになる英単語をちょうど3つ。次の役割を1つずつ割り当てる:',
+    '2. "distractors": 空所に入れると誤りになる英単語をちょうど3つ。難易度を散らし、次の役割を1つずつ割り当てる:',
     "   (a) 出題語と同じ語源の別の品詞・派生形（例: 動詞が出題語なら名詞形や形容詞形）。文法的に空所へ入らない形にする。",
-    "   (b) 出題語と同じ品詞だが、この文脈では意味が明らかに合わない語。",
-    "   (c) 綴りや語形が出題語と紛らわしいが、意味は別物の語。",
+    "   (b) 出題語と同じ品詞だが、この文脈では意味が明らかに合わない語。綴りは出題語と似せない。",
+    "   (c) 出題語と同じ品詞で、意味の分野がまったく異なる平易で一般的な語。綴りは出題語と似せない。",
+    "   ※ 出題語と綴りが似た語は (a) の1つだけにすること。3つとも似せると消去法が働かず、",
+    "     語彙力ではなく引っかけを見抜く問題になってしまう。",
     "",
     "厳守事項:",
     "   - 空所に入れて自然な文になるのは出題語だけにすること。出題語の同義語・言い換えは誤答に絶対に使わない",
@@ -13313,6 +13315,20 @@ function spellingDistance(a, b) {
 // 4択の誤答を選ぶ。意味が答えと重複しないことを保ちつつ、リーディング学習で有効な
 // 「紛らわしい誤答」を優先する: (1)綴りが似た語 (2)答えと同じ品詞の語。該当が足りなければ
 // 残りはランダムで埋める。意味の重複除外は従来どおり（意味が同じ誤答は正解扱いになるため）。
+// 訳が「変える」と「部分的に変える」のように包含関係にあると、どちらも正解に見えて
+// 判断できない。完全一致だけを弾いてもこの型は残るため、包含も同義とみなして誤答から外す。
+// 3文字未満での判定は「する」「な」等が偶然一致して誤って除外しすぎるため行わない。
+function meaningsTooClose(a, b) {
+  const strip = (v) => normalizeMeaning(v).replace(/[（(][^）)]*[）)]/g, "").trim();
+  const x = strip(a);
+  const y = strip(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const shorter = x.length <= y.length ? x : y;
+  const longer = x.length <= y.length ? y : x;
+  return shorter.length >= 3 && longer.includes(shorter);
+}
+
 function pickDistractors(pool, answer, count = 3, excludeMeanings = []) {
   // excludeMeanings: 既に選択肢に入っている意味（AI生成の誤答など）。ここで一緒に除外しないと、
   // 呼び出し側で弾いた分だけ選択肢が減って4択に満たなくなる。
@@ -13332,14 +13348,33 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = []) {
       return { word, score };
     })
     .sort((a, b) => b.score - a.score);
+  // 紛らわしい誤答は1つまでにする。上位スコアだけで3つ埋めると、どれも似た語になって
+  // 消去法が働かず、語彙力ではなく引っかけを見抜く問題になってしまう。
+  // 1つ混ぜる分には「よく似た語との区別」を練習でき、残り2つで難易度が散る。
+  const MAX_CONFUSABLE = 1;
   const picked = [];
-  for (const { word } of ranked) {
-    const key = normalizeMeaning(word.meaning);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    picked.push(word);
-    if (picked.length >= count) break;
-  }
+  const takeFrom = (allowConfusable) => {
+    let confusableUsed = picked.filter(
+      (w) => spellingDistance(answer.term, w.term) > 0 && spellingDistance(answer.term, w.term) <= 2,
+    ).length;
+    for (const { word, score } of ranked) {
+      if (picked.length >= count) return;
+      const key = normalizeMeaning(word.meaning);
+      if (seen.has(key)) continue;
+      // 訳が近すぎる語は「難易度」ではなく「正解が2つ」の問題になるので、
+      // 選択肢が足りなくなる場合でも必ず除外する（allowConfusable でも緩めない）。
+      if (meaningsTooClose(answer.meaning, word.meaning)) continue;
+      if (!allowConfusable && score >= 3) {
+        if (confusableUsed >= MAX_CONFUSABLE) continue;
+        confusableUsed += 1;
+      }
+      seen.add(key);
+      picked.push(word);
+    }
+  };
+  takeFrom(false);
+  // 制限のせいで4択に満たない場合だけ、制限を外して埋める（出題機会は落とさない）
+  if (picked.length < count) takeFrom(true);
   return picked;
 }
 
