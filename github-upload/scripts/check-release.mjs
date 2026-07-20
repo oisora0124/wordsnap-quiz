@@ -71,6 +71,25 @@ const staticIdSet = new Set(staticIds);
 for (const match of staticMarkup.matchAll(/\sfor=(["'])([^"']+)\1/g)) {
   assert.ok(staticIdSet.has(match[2]), `label references a missing control id: ${match[2]}`);
 }
+for (const attribute of ["aria-labelledby", "aria-describedby", "aria-controls"]) {
+  const pattern = new RegExp(`\\s${attribute}=(["'])([^"']+)\\1`, "g");
+  for (const match of staticMarkup.matchAll(pattern)) {
+    for (const id of match[2].trim().split(/\s+/)) {
+      assert.ok(staticIdSet.has(id), `${attribute} references a missing id: ${id}`);
+    }
+  }
+}
+for (const match of staticMarkup.matchAll(/<button\b[^>]*>/gi)) {
+  assert.match(match[0], /\btype=["']button["']/i,
+    "a static button is missing type=button and may submit a future form unexpectedly");
+}
+for (const match of staticMarkup.matchAll(/<img\b[^>]*>/gi)) {
+  assert.match(match[0], /\balt=["'][^"']*["']/i, "a static image is missing alt text");
+}
+for (const match of staticMarkup.matchAll(/<a\b[^>]*\btarget=["']_blank["'][^>]*>/gi)) {
+  assert.match(match[0], /\brel=["'][^"']*\bnoopener\b[^"']*["']/i,
+    "a target=_blank link is missing rel=noopener");
+}
 assert.match(
   publicHtml,
   /<meta\s+name=["']referrer["']\s+content=["']no-referrer["']\s*\/?>/i,
