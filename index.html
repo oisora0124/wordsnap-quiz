@@ -5018,6 +5018,8 @@ accurate 正確な"
 // estimated from word frequency via the Datamuse API and cached locally.
 const Cefr = (() => {
   const CACHE_KEY = "wordsnap-cefr-cache:v1";
+  // CEFRは再取得可能な補助データ。単語本体と同じlocalStorageを無制限に使わない。
+  const CACHE_PERSIST_LIMIT = 1500;
   const LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"];
 
   // Hand-checked levels for common words and the built-in sample, so the
@@ -5062,14 +5064,23 @@ const Cefr = (() => {
 
   function load() {
     try {
-      return JSON.parse(localStorage.getItem(CACHE_KEY)) || {};
+      const stored = JSON.parse(localStorage.getItem(CACHE_KEY));
+      return stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
     } catch {
       return {};
     }
   }
 
   function persist() {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    try {
+      const entries = Object.entries(cache);
+      const persisted = entries.length > CACHE_PERSIST_LIMIT
+        ? Object.fromEntries(entries.slice(-CACHE_PERSIST_LIMIT))
+        : cache;
+      localStorage.setItem(CACHE_KEY, JSON.stringify(persisted));
+    } catch {
+      // 補助キャッシュの容量不足で、CEFR表示や単語本体の保存処理を止めない。
+    }
   }
 
   function key(term) {

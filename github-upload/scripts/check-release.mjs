@@ -171,6 +171,12 @@ assert.equal(cefrSandbox.__cefr.safeCefrLevel('<img src=x onerror=alert(1)>'), n
   "invalid CEFR markup must be rejected");
 assert.equal(cefrSandbox.__cefr.normalizeCefr({ level: 'A1\" onmouseover=alert(1)' }), null,
   "imported CEFR attributes must be rejected");
+assert.match(publicHtml, /const\s+CACHE_PERSIST_LIMIT\s*=\s*1500/,
+  "CEFR persistent cache must have a bounded size");
+assert.match(publicHtml, /Object\.fromEntries\(entries\.slice\(-CACHE_PERSIST_LIMIT\)\)/,
+  "CEFR persistent cache must discard excess old entries");
+assert.match(publicHtml, /function\s+persist\(\)\s*{\s*try\s*{[\s\S]*?localStorage\.setItem\(CACHE_KEY/,
+  "CEFR cache write failures must not stop the app");
 
 // 「この設定で出題」の例文問題は opt-in。旧保存値やシャッフルだけで暗黙に有効化しない。
 assert.match(
