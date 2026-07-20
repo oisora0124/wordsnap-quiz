@@ -30,6 +30,11 @@ const manifest = JSON.parse(read(manifestPath));
 
 assert.equal(rootHtml, publicHtml, "root index.html and publish/index.html must be identical");
 assert.match(publicHtml, /<title>\s*WordBank\s*<\/title>/i, "WordBank title is missing");
+assert.match(
+  publicHtml,
+  /<meta\s+name=["']referrer["']\s+content=["']no-referrer["']\s*\/?>/i,
+  "sync keys in the page URL must not be sent as referrers",
+);
 assert.match(publicHtml, /function\s+downloadStandalone\s*\(/, "standalone download function is missing");
 const inlineScripts = [...publicHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
 assert.ok(inlineScripts.length >= 1, "no inline JavaScript found");
