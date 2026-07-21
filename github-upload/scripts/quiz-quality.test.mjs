@@ -70,8 +70,11 @@ function buildSandbox() {
     extractFunction("spellingDistance"),
     extractFunction("shuffle"),
     extractFunction("pickDistractors"),
+    extractConst("QUIZ_TIME_LIMIT_CHOICES"),
+    extractFunction("normalizeQuizTimeLimit"),
     "globalThis.__q = { appStateRef: () => appState, setWords: (w) => { appState.words = w; }," +
-      " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance };",
+      " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
+      " normalizeQuizTimeLimit };",
   ];
   const sandbox = {};
   new Script(pieces.join("\n\n"), { filename: "quiz-quality-check.js" }).runInNewContext(sandbox);
@@ -161,4 +164,15 @@ test("cloze mode prefers distractors of a different part of speech", () => {
     sameAdj += picked.filter((w) => w.pos.tag === "adj").length;
   }
   assert.equal(sameAdj, 0, "cloze distractors should avoid the answer's part of speech when alternatives exist");
+});
+
+test("quiz time-limit setting is clamped to the allowed choices (invalid -> off)", () => {
+  // 許容値はそのまま、範囲外・不正値・null は 0（オフ）に丸める。
+  for (const ok of [0, 5, 10, 15, 20, 30]) {
+    assert.equal(q.normalizeQuizTimeLimit(ok), ok);
+    assert.equal(q.normalizeQuizTimeLimit(String(ok)), ok, "string form is accepted");
+  }
+  for (const bad of [7, 3, 999, -5, NaN, null, undefined, "abc", ""]) {
+    assert.equal(q.normalizeQuizTimeLimit(bad), 0, `invalid ${String(bad)} should fall back to 0`);
+  }
 });

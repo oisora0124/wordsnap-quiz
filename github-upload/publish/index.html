@@ -3791,6 +3791,52 @@ textarea:focus-visible {
   letter-spacing: -0.03em;
 }
 
+/* 1問あたりの制限時間のカウントダウン（クイズカードのグラデ背景の上に載る） */
+.quiz-timer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.quiz-timer[hidden] {
+  display: none;
+}
+.quiz-timer-track {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+.quiz-timer-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  transition: width 0.12s linear;
+}
+.quiz-timer.is-low .quiz-timer-fill {
+  background: var(--warning);
+}
+.quiz-timer.is-critical .quiz-timer-fill {
+  background: var(--danger);
+}
+.quiz-timer-text {
+  min-width: 2.8em;
+  text-align: right;
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.92);
+}
+.quiz-timer.is-critical .quiz-timer-text {
+  color: var(--danger);
+}
+
 .choices {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4790,6 +4836,10 @@ accurate 正確な"
         <div id="quizCard" class="quiz-card">
           <p class="quiz-label">出題単語</p>
           <h3 id="quizWord">クイズを始めましょう</h3>
+          <div id="quizTimer" class="quiz-timer" hidden aria-hidden="true">
+            <div class="quiz-timer-track"><div id="quizTimerFill" class="quiz-timer-fill"></div></div>
+            <span id="quizTimerText" class="quiz-timer-text"></span>
+          </div>
           <div id="choices" class="choices"></div>
           <button id="dontKnowButton" class="dont-know" type="button" hidden>わからない</button>
           <p id="quizFeedback" class="feedback" role="status" aria-live="polite"></p>
@@ -5156,6 +5206,22 @@ accurate 正確な"
                     <option value="3000">3秒</option>
                     <option value="4000">4秒</option>
                     <option value="5000">5秒</option>
+                  </select>
+                </label>
+              </div>
+              <p class="settings-desc">
+                制限時間をつけると、各問題にカウントダウンが表示されます。時間内に答えないと「わからない」扱いになり、少しあとにまた出題されます。
+              </p>
+              <div class="settings-row">
+                <label class="settings-field">
+                  1問あたりの制限時間
+                  <select id="quizTimeLimitSelect" aria-label="1問あたりの制限時間">
+                    <option value="0">なし</option>
+                    <option value="5">5秒</option>
+                    <option value="10">10秒</option>
+                    <option value="15">15秒</option>
+                    <option value="20">20秒</option>
+                    <option value="30">30秒</option>
                   </select>
                 </label>
               </div>
@@ -6231,6 +6297,10 @@ const elements = {
   keyboardHintsToggle: document.querySelector("#keyboardHintsToggle"),
   autoNextToggle: document.querySelector("#autoNextToggle"),
   autoNextDelaySelect: document.querySelector("#autoNextDelaySelect"),
+  quizTimeLimitSelect: document.querySelector("#quizTimeLimitSelect"),
+  quizTimer: document.querySelector("#quizTimer"),
+  quizTimerFill: document.querySelector("#quizTimerFill"),
+  quizTimerText: document.querySelector("#quizTimerText"),
   autoSpeakToggle: document.querySelector("#autoSpeakToggle"),
   vibrateToggle: document.querySelector("#vibrateToggle"),
   streakBadge: document.querySelector("#streakBadge"),
@@ -6259,6 +6329,15 @@ const KBD_HINTS_KEY = "wordsnap-keyboard-hints";
 const AUTO_NEXT_KEY = "wordsnap-auto-next";
 const AUTO_NEXT_DELAY_KEY = "wordsnap-auto-next-delay";
 const AUTO_SPEAK_KEY = "wordsnap-auto-speak"; // 出題時に発音を自動再生するか
+const QUIZ_TIME_LIMIT_KEY = "wordsnap-quiz-time-limit"; // 1問あたりの制限時間（秒）。0=なし
+// 制限時間の許容値（秒）。0はオフ。設定・保存値をこの集合に丸める。
+const QUIZ_TIME_LIMIT_CHOICES = [0, 5, 10, 15, 20, 30];
+
+// 保存値・入力値を許容集合に丸める純粋関数（不正値は0=オフ）。単体テスト対象。
+function normalizeQuizTimeLimit(value) {
+  const n = Number(value);
+  return QUIZ_TIME_LIMIT_CHOICES.includes(n) ? n : 0;
+}
 const VIBRATE_KEY = "wordsnap-vibrate"; // 正解/不正解の振動フィードバック
 const QUIZ_RESUME_KEY = "wordsnap-quiz-resume:v1"; // 進行中クイズの再開用スナップショット
 const QUIZ_LAST_SETTINGS_KEY = "wordsnap-quiz-last-settings:v1"; // 前回のクイズ設定（単語帳・範囲・シャッフル・例文問題の割合）
@@ -6590,6 +6669,75 @@ function autoSpeakEnabled() {
   return localStorage.getItem(AUTO_SPEAK_KEY) === "1";
 }
 
+// 1問あたりの制限時間（秒）。0=なし（デフォルト）。
+function quizTimeLimitSeconds() {
+  try {
+    return normalizeQuizTimeLimit(localStorage.getItem(QUIZ_TIME_LIMIT_KEY));
+  } catch {
+    return 0;
+  }
+}
+
+// ---------- クイズの制限時間（任意） ----------
+// updateQuizControls() が算出する questionActive（未解答・生成待ちでない・出題中）に
+// 合わせて開始/停止する。同じ問題の再描画では作り直さず、新しい問題で仕切り直す。
+// バックグラウンド放置中に時間切れにならないよう、離席復帰時は shownAt と一緒に取り直す。
+let quizTimerInterval = 0;
+let quizTimerDeadline = 0;
+let quizTimerForQuiz = null; // タイマーが対象にしている currentQuiz 参照
+
+function stopQuizTimer() {
+  if (quizTimerInterval) {
+    window.clearInterval(quizTimerInterval);
+    quizTimerInterval = 0;
+  }
+  quizTimerForQuiz = null;
+  if (elements.quizTimer) {
+    elements.quizTimer.hidden = true;
+    elements.quizTimer.classList.remove("is-low", "is-critical");
+  }
+}
+
+function renderQuizTimerFrame(totalMs) {
+  if (!elements.quizTimer) return;
+  const remaining = Math.max(0, quizTimerDeadline - Date.now());
+  const ratio = totalMs > 0 ? remaining / totalMs : 0;
+  if (elements.quizTimerFill) elements.quizTimerFill.style.width = `${(ratio * 100).toFixed(1)}%`;
+  if (elements.quizTimerText) elements.quizTimerText.textContent = `${Math.ceil(remaining / 1000)}秒`;
+  // 残り時間で色を変える（3秒以下＝赤、6秒以下＝橙）。読みやすさの保険で数字も出す。
+  elements.quizTimer.classList.toggle("is-critical", remaining <= 3000);
+  elements.quizTimer.classList.toggle("is-low", remaining > 3000 && remaining <= 6000);
+  if (remaining <= 0) handleQuizTimeout();
+}
+
+// questionActive を渡して、制限時間ONなら開始/継続、OFFや非アクティブなら停止する。
+function syncQuizTimer(questionActive) {
+  const limit = quizTimeLimitSeconds();
+  if (!limit || !questionActive || !currentQuiz) {
+    stopQuizTimer();
+    return;
+  }
+  // すでにこの問題のタイマーが走っているなら、再描画では作り直さない。
+  if (quizTimerForQuiz === currentQuiz && quizTimerInterval) return;
+  stopQuizTimer();
+  const totalMs = limit * 1000;
+  quizTimerForQuiz = currentQuiz;
+  quizTimerDeadline = Date.now() + totalMs;
+  if (elements.quizTimer) elements.quizTimer.hidden = false;
+  renderQuizTimerFrame(totalMs);
+  quizTimerInterval = window.setInterval(() => renderQuizTimerFrame(totalMs), 100);
+}
+
+function handleQuizTimeout() {
+  stopQuizTimer();
+  if (!currentQuiz || currentQuiz.answered) return;
+  // 時間切れは「わからない」と同じ扱い（採点・SRS更新・再出題）。
+  gradeQuiz(null, true);
+  if (elements.quizFeedback) {
+    elements.quizFeedback.textContent = `⏰ 時間切れ！ ${elements.quizFeedback.textContent}`;
+  }
+}
+
 // 新しい問題が表示された瞬間に出題単語を1回だけ読み上げる。
 // 再描画のたびに鳴らないよう、再生済みフラグを問題オブジェクト自体に立てておく。
 function autoSpeakCurrentQuiz() {
@@ -6627,6 +6775,7 @@ function applyQuizSettings() {
   if (elements.autoNextDelaySelect) elements.autoNextDelaySelect.value = String(autoNextDelay());
   if (elements.autoSpeakToggle) elements.autoSpeakToggle.checked = autoSpeakEnabled();
   if (elements.vibrateToggle) elements.vibrateToggle.checked = vibrationEnabled();
+  if (elements.quizTimeLimitSelect) elements.quizTimeLimitSelect.value = String(quizTimeLimitSeconds());
 }
 
 function reviewLogEnabled() {
@@ -6850,6 +6999,7 @@ function setActiveStep(id, options = {}) {
   // クイズタブを離れたら「自動で次へ進む」タイマーを止める（裏で問題が進むのを防ぐ）
   if (activeStepId === "quiz" && nextId !== "quiz") {
     clearAutoNextTimer();
+    stopQuizTimer(); // クイズタブを離れたらカウントダウンも止める
   }
   for (const tab of elements.stepTabs) {
     const active = tab.dataset.stepTab === nextId;
@@ -9093,11 +9243,17 @@ function initWordsnapSync() {
   // なるのを防ぐ（上限 MAX_TIMED_ANSWER_MS と二段構えの保険）。
   const resetQuizTimerOnResume = () => {
     if (currentQuiz && !currentQuiz.answered) currentQuiz.shownAt = Date.now();
+    // 制限時間つきの問題を離席復帰したら、背面で消化した時間は数えず新しく計り直す。
+    if (activeStepId === "quiz") {
+      stopQuizTimer();
+      updateQuizControls();
+    }
   };
   window.addEventListener("focus", pullIfConnected);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       stopSyncPolling();
+      stopQuizTimer(); // 背面ではカウントダウンを止める（見えない所で時間切れにしない）
       return;
     }
     resetQuizTimerOnResume();
@@ -11657,6 +11813,8 @@ function updateQuizControls() {
   if (elements.exitQuizButton) {
     elements.exitQuizButton.hidden = !(quizStarted && !inReview) || showingResult;
   }
+  // 制限時間: 解答可能な問題が出ている間だけカウントダウンする（dontKnowButtonと同条件）。
+  syncQuizTimer(questionActive && !showingResult);
 }
 
 function renderAccuracy() {
@@ -16865,6 +17023,14 @@ elements.autoNextDelaySelect.addEventListener("change", () => {
 elements.autoSpeakToggle?.addEventListener("change", () => {
   localStorage.setItem(AUTO_SPEAK_KEY, elements.autoSpeakToggle.checked ? "1" : "0");
   applyQuizSettings();
+  playSound("tap");
+});
+elements.quizTimeLimitSelect?.addEventListener("change", () => {
+  localStorage.setItem(QUIZ_TIME_LIMIT_KEY, String(normalizeQuizTimeLimit(elements.quizTimeLimitSelect.value)));
+  applyQuizSettings();
+  // 出題中に変更したら、その場のタイマーを新しい設定で仕切り直す。
+  stopQuizTimer();
+  if (activeStepId === "quiz") updateQuizControls();
   playSound("tap");
 });
 elements.vibrateToggle?.addEventListener("change", () => {
