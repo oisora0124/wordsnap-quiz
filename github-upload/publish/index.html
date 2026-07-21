@@ -717,6 +717,134 @@ h2 {
   font-size: 0.7rem;
 }
 
+/* ---------- 成績（統計）ブロック ---------- */
+/* 既存データ（単語ごとの正誤履歴・学習状態・任意の学習イベント）だけから、
+   依存ゼロのインラインSVGで描く。stateへは一切書き込まない読み取り専用の可視化。 */
+.stats-block {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+}
+.stats-block[hidden] { display: none; }
+.stats-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.stats-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.stats-head .stats-sub {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.stats-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.stats-card {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.stats-card h4 {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+.stats-card .stats-caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+.stats-card svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+.stats-empty {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+/* 定着の内訳（積み上げバー）の凡例 */
+.stats-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.stats-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.stats-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+/* 苦手語ランキング */
+.stats-weak {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+}
+.stats-weak li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 10px;
+}
+.stats-weak .weak-term {
+  font-weight: 650;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stats-weak .weak-meaning {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: -3px;
+}
+.stats-weak .weak-rate {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  color: var(--danger);
+  font-weight: 650;
+}
+.stats-weak .weak-bar {
+  grid-column: 1 / -1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.stats-weak .weak-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--danger);
+}
+
 .hero-card {
   position: relative;
   overflow: hidden;
@@ -4223,6 +4351,14 @@ textarea:focus-visible {
         <p class="streak-note">
           学習の記録は単語ごとに直近50回まで保存されます。それより前の古い履歴は表示されないことがあります。
         </p>
+        <!-- 成績（統計）: 既存データだけから描く読み取り専用の可視化。renderStatsCharts() が中身を差し込む。 -->
+        <div id="statsBlock" class="stats-block" hidden>
+          <div class="stats-head">
+            <h3>成績</h3>
+            <span class="stats-sub">この端末に保存された記録から集計</span>
+          </div>
+          <div id="statsGrid" class="stats-grid"></div>
+        </div>
       </section>
 
       <!-- 【他人の共有リンク対策】URLの ?w= がこの端末の保存済みキーと異なるときだけ表示。
@@ -5984,6 +6120,8 @@ const elements = {
   streakNextMonth: document.querySelector("#streakNextMonth"),
   streakCalendar: document.querySelector("#streakCalendar"),
   streakDayDetail: document.querySelector("#streakDayDetail"),
+  statsBlock: document.querySelector("#statsBlock"),
+  statsGrid: document.querySelector("#statsGrid"),
   resumeQuizButton: document.querySelector("#resumeQuizButton"),
   downloadToolButton: document.querySelector("#downloadToolButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
@@ -14342,6 +14480,220 @@ function renderStreakCalendar() {
   }
   grid.innerHTML = cells.join("");
   renderStreakDayDetail(byDay);
+  renderStatsCharts(byDay);
+}
+
+// ---------- 成績（統計）の可視化 ----------
+// すべて既存データ（学習状態・単語ごとの正誤履歴・任意の学習イベント）から集計する。
+// stateへは書き込まず、外部送信もしない。依存を増やさないため図はインラインSVGで自作する。
+
+// SVGはCSS変数を presentation属性 では受け取れないので、色は style属性経由で渡す。
+function svgFill(cssVar) {
+  return `style="fill:var(${cssVar})"`;
+}
+
+// A) 定着の内訳（習得 / 復習中 / 未着手）を積み上げバーで示す。
+function statsMasteryCard() {
+  const b = learningBuckets(appState.words || []);
+  const total = b.mastered + b.review + b.new;
+  if (total === 0) return "";
+  const parts = [
+    { key: "mastered", label: "習得", value: b.mastered, cssVar: "--success" },
+    { key: "review", label: "復習中", value: b.review, cssVar: "--accent" },
+    { key: "new", label: "未着手", value: b.new, cssVar: "--surface-3" },
+  ];
+  const W = 240;
+  const H = 26;
+  let x = 0;
+  const rects = parts
+    .map((p) => {
+      const w = (p.value / total) * W;
+      const rect =
+        `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(0, w).toFixed(2)}" height="${H}" ${svgFill(p.cssVar)}>` +
+        `<title>${escapeHtml(`${p.label} ${p.value}語`)}</title></rect>`;
+      x += w;
+      return w > 0 ? rect : "";
+    })
+    .join("");
+  const legend = parts
+    .map(
+      (p) =>
+        `<span><i style="background:var(${p.cssVar})"></i>${escapeHtml(p.label)} ${p.value}</span>`,
+    )
+    .join("");
+  const rate = Math.round((b.mastered / total) * 100);
+  return (
+    `<div class="stats-card">` +
+    `<h4>定着の内訳</h4>` +
+    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="習得${b.mastered}語 復習中${b.review}語 未着手${b.new}語">` +
+    `<g>${rects}</g></svg>` +
+    `<div class="stats-legend">${legend}</div>` +
+    `<p class="stats-caption">全${total}語中 ${b.mastered}語（${rate}%）が習得済み</p>` +
+    `</div>`
+  );
+}
+
+// B) 直近14日の日別正答率を列グラフで示す。学習のない日は薄いプレースホルダにする。
+function statsAccuracyCard(byDay) {
+  const days = 14;
+  const cols = [];
+  let hasData = false;
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = localDateString(d);
+    const entry = byDay.get(key);
+    if (entry && entry.answers > 0) {
+      hasData = true;
+      cols.push({ key, rate: entry.correct / entry.answers, answers: entry.answers, day: d.getDate() });
+    } else {
+      cols.push({ key, rate: null, answers: 0, day: d.getDate() });
+    }
+  }
+  if (!hasData) return "";
+  const W = 240;
+  const H = 88;
+  const pad = 4;
+  const slot = (W - pad * 2) / days;
+  const barW = slot * 0.62;
+  const chartH = H - 16; // 下部に日ラベルの余白
+  // 正答率の高低で色を変える（80%以上=緑, 50%以上=標準, 未満=赤系）。
+  const colorFor = (rate) =>
+    rate >= 0.8 ? "--success" : rate >= 0.5 ? "--accent" : "--danger";
+  const bars = cols
+    .map((c, i) => {
+      const cx = pad + slot * i + (slot - barW) / 2;
+      if (c.rate === null) {
+        // 学習なし: 底に薄いドット
+        return `<rect x="${cx.toFixed(2)}" y="${(chartH - 2).toFixed(2)}" width="${barW.toFixed(2)}" height="2" rx="1" ${svgFill("--surface-3")}></rect>`;
+      }
+      const h = Math.max(2, c.rate * chartH);
+      const y = chartH - h;
+      const pct = Math.round(c.rate * 100);
+      return (
+        `<rect x="${cx.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${h.toFixed(2)}" rx="2" ${svgFill(colorFor(c.rate))}>` +
+        `<title>${escapeHtml(`${c.key} 正答率${pct}%（${c.answers}回）`)}</title></rect>`
+      );
+    })
+    .join("");
+  // 目盛りの基準線（50%と100%）
+  const grid =
+    `<line x1="${pad}" y1="0" x2="${W - pad}" y2="0" style="stroke:var(--line);stroke-width:1"/>` +
+    `<line x1="${pad}" y1="${(chartH / 2).toFixed(2)}" x2="${W - pad}" y2="${(chartH / 2).toFixed(2)}" style="stroke:var(--line);stroke-width:1;stroke-dasharray:2 3"/>`;
+  return (
+    `<div class="stats-card">` +
+    `<h4>正答率の推移（14日）</h4>` +
+    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="直近14日の日別正答率">` +
+    `${grid}<g>${bars}</g></svg>` +
+    `<p class="stats-caption">棒の高さ＝その日の正答率。点線は50%。</p>` +
+    `</div>`
+  );
+}
+
+// C) 回答速度の分布（任意の学習イベントが記録されている場合のみ）。
+function statsSpeedCard() {
+  if (!reviewLogEnabled()) return "";
+  const events = retainedReviewEvents().filter(
+    (e) => Number.isFinite(e?.responseTimeMs) && e.result !== "dont-know",
+  );
+  if (events.length < 5) return "";
+  const buckets = [
+    { label: "〜1秒", max: 1000, count: 0 },
+    { label: "1-2秒", max: 2000, count: 0 },
+    { label: "2-3秒", max: 3000, count: 0 },
+    { label: "3-5秒", max: 5000, count: 0 },
+    { label: "5秒〜", max: Infinity, count: 0 },
+  ];
+  for (const e of events) {
+    const ms = e.responseTimeMs;
+    (buckets.find((bk) => ms < bk.max) || buckets[buckets.length - 1]).count += 1;
+  }
+  const maxCount = Math.max(...buckets.map((bk) => bk.count), 1);
+  const W = 240;
+  const H = 96;
+  const pad = 4;
+  const slot = (W - pad * 2) / buckets.length;
+  const barW = slot * 0.6;
+  const chartH = H - 20;
+  const bars = buckets
+    .map((bk, i) => {
+      const cx = pad + slot * i + (slot - barW) / 2;
+      const h = Math.max(1, (bk.count / maxCount) * chartH);
+      const y = chartH - h;
+      // 速いほど緑寄り（定着の目安）。
+      const cssVar = i <= 1 ? "--success" : i <= 3 ? "--accent" : "--warning";
+      const cLabel = `${cx + barW / 2}`;
+      return (
+        `<rect x="${cx.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${h.toFixed(2)}" rx="2" ${svgFill(cssVar)}>` +
+        `<title>${escapeHtml(`${bk.label} ${bk.count}回`)}</title></rect>` +
+        `<text x="${cLabel}" y="${(chartH + 12).toFixed(2)}" text-anchor="middle" style="fill:var(--muted);font-size:8px">${escapeHtml(bk.label)}</text>`
+      );
+    })
+    .join("");
+  return (
+    `<div class="stats-card">` +
+    `<h4>回答速度の分布</h4>` +
+    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="回答速度の分布">${bars}</svg>` +
+    `<p class="stats-caption">正答・誤答を含む直近${events.length}回。速く答えられるほど定着の目安。</p>` +
+    `</div>`
+  );
+}
+
+// D) 苦手語ランキング（正誤履歴が3回以上ある語のうち、正答率の低い順）。
+function statsWeakCard() {
+  const rows = [];
+  for (const word of appState.words || []) {
+    const hist = word.history || [];
+    if (hist.length < 3) continue;
+    const correct = hist.reduce((n, h) => n + (h.correct ? 1 : 0), 0);
+    const rate = correct / hist.length;
+    if (rate >= 1) continue; // 全問正解の語は苦手ではない
+    rows.push({ term: word.term || "", meaning: word.meaning || "", rate, attempts: hist.length });
+  }
+  if (rows.length === 0) return "";
+  rows.sort((a, b) => a.rate - b.rate || b.attempts - a.attempts);
+  const top = rows.slice(0, 8);
+  const items = top
+    .map((r) => {
+      const pct = Math.round(r.rate * 100);
+      return (
+        `<li>` +
+        `<span class="weak-term">${escapeHtml(r.term)}</span>` +
+        `<span class="weak-rate">${pct}%</span>` +
+        `<span class="weak-meaning">${escapeHtml(r.meaning)}（${r.attempts}回）</span>` +
+        `<span class="weak-bar"><i style="width:${pct}%"></i></span>` +
+        `</li>`
+      );
+    })
+    .join("");
+  return (
+    `<div class="stats-card">` +
+    `<h4>苦手な単語</h4>` +
+    `<ul class="stats-weak">${items}</ul>` +
+    `<p class="stats-caption">3回以上答えた語のうち正答率が低い順（最大8語）。</p>` +
+    `</div>`
+  );
+}
+
+function renderStatsCharts(byDay) {
+  const block = elements.statsBlock;
+  const grid = elements.statsGrid;
+  if (!block || !grid) return;
+  const activity = byDay instanceof Map ? byDay : buildDailyActivity();
+  const cards = [
+    statsMasteryCard(),
+    statsAccuracyCard(activity),
+    statsSpeedCard(),
+    statsWeakCard(),
+  ].filter(Boolean);
+  if (cards.length === 0) {
+    // まだ集計できるデータがない（単語ゼロ・履歴なし）ときはブロックごと隠す。
+    block.hidden = true;
+    grid.innerHTML = "";
+    return;
+  }
+  block.hidden = false;
+  grid.innerHTML = cards.join("");
 }
 
 function openStreakPanel() {
