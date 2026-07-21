@@ -50,6 +50,15 @@
 - FSRS候補は同じ回答履歴から期日だけを影計算し、既存の出題順へ反映しない。
 - 期日差、復習量、D7/D30保持率を確認してから段階的に切り替える。
 
+### 復旧（サーバー履歴・記録側は実装済み）
+
+- `migrations/0002_state_revisions.sql` に履歴テーブルを追加（追加型・影運用）。
+- 同期API（`functions/api/wordsnap-state.js`）はPUT成功後に best-effort で履歴を記録し、
+  保持制約（上位5件＋直近7日の日次）を適用する。テーブル不在・履歴失敗でも通常同期は無傷。
+- `GET ?history=1` で一覧、`GET ?revision=N` で過去stateを取得できる（API契約テスト14件）。
+- **未実装**: クライアントの復元UI（履歴一覧→プレビュー→強制pushで復元）、D1のマイグレーション
+  適用（`wrangler d1 migrations apply`）、日次休眠行のサーバー側TTL。
+
 ### Phase 4: 教材QA
 
 - 例文、和訳、誤答候補へ `source`、`confidence`、`approval_status` を付ける。

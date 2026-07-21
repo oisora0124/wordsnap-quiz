@@ -126,6 +126,15 @@ function validStateShape(value) {
 // 保存形式は2通りを受理する（後方互換）:
 //   新: {"__gz":"<base64>"} マーカー → 解凍してJSONパース
 //   旧: プレーンなstate JSONそのまま → そのまま採用
+async function decodeStoredState(storedState) {
+  let state = storedState ? JSON.parse(storedState) : null;
+  if (state && typeof state === "object" && !Array.isArray(state) && typeof state.__gz === "string") {
+    state = JSON.parse(await gunzipBase64ToText(state.__gz));
+  }
+  if (!validStateShape(state)) throw new Error("stored state has an invalid shape");
+  return state;
+}
+
 async function readRow(db, syncId, includeState = true) {
   const row = await db
     .prepare(includeState
@@ -138,11 +147,7 @@ async function readRow(db, syncId, includeState = true) {
   let corrupt = false;
   if (includeState) {
     try {
-      state = row.state ? JSON.parse(row.state) : null;
-      if (state && typeof state === "object" && !Array.isArray(state) && typeof state.__gz === "string") {
-        state = JSON.parse(await gunzipBase64ToText(state.__gz));
-      }
-      if (!validStateShape(state)) throw new Error("stored state has an invalid shape");
+      state = await decodeStoredState(row.state);
     } catch {
       // null（新規キー）と破損行を区別する。破損を空状態として200で返すと、
       // 新しい端末が「リモートは空」と判断して空データを自動送信し、復旧不能になる。
@@ -151,6 +156,90 @@ async function readRow(db, syncId, includeState = true) {
     }
   }
   return { state, rev: Number(row.rev) || 0, updatedAt: Number(row.updatedAt) || 0, corrupt };
+}
+
+// 履歴テーブルは後から追加されるため、未マイグレーション環境でも主同期を止めない。
+// 保存・整理はそれぞれ独立した best-effort とし、履歴側の障害を通常PUTへ伝播させない。
+async function archiveRevision(db, key, rev, storedState, reason) {
+  try {
+    await db
+      .prepare(
+        "INSERT OR IGNORE INTO state_revisions (key, rev, state, created_at, reason) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind(key, rev, storedState, Date.now(), reason)
+      .run();
+  } catch {
+    // 履歴は復元用の補助データであり、主書き込みの成功を取り消してはならない。
+  }
+}
+
+async function pruneRevisions(db, key) {
+  try {
+    const firstDailyUtcDay = Math.floor(Date.now() / 86400000) - 6;
+    await db
+      .prepare(
+        `DELETE FROM state_revisions
+         WHERE key = ? AND rev NOT IN (
+           SELECT rev FROM (
+             SELECT rev FROM state_revisions WHERE key = ? ORDER BY rev DESC LIMIT 5
+           )
+           UNION
+           SELECT MAX(daily_row.rev) AS rev
+           FROM state_revisions AS daily_row
+           INNER JOIN (
+             SELECT CAST(created_at / 86400000 AS INTEGER) AS utc_day, MAX(created_at) AS latest_at
+             FROM state_revisions
+             WHERE key = ? AND CAST(created_at / 86400000 AS INTEGER) >= ?
+             GROUP BY utc_day
+           ) AS daily
+             ON CAST(daily_row.created_at / 86400000 AS INTEGER) = daily.utc_day
+            AND daily_row.created_at = daily.latest_at
+           WHERE daily_row.key = ?
+           GROUP BY daily.utc_day
+         )`,
+      )
+      .bind(key, key, key, firstDailyUtcDay, key)
+      .run();
+  } catch {
+    // 整理に失敗しても同期APIの可用性と、すでにコミット済みの主データを優先する。
+  }
+}
+
+async function listRevisions(db, key) {
+  try {
+    const result = await db
+      .prepare(
+        "SELECT rev, created_at AS createdAt, reason FROM state_revisions WHERE key = ? ORDER BY created_at DESC",
+      )
+      .bind(key)
+      .all();
+    return (result.results || []).map((row) => ({
+      rev: Number(row.rev),
+      createdAt: Number(row.createdAt),
+      reason: row.reason,
+    }));
+  } catch {
+    // テーブル未作成を含む履歴参照失敗は、空の履歴として安全に縮退する。
+    return [];
+  }
+}
+
+async function readRevision(db, key, rev) {
+  try {
+    const row = await db
+      .prepare("SELECT state, rev, created_at FROM state_revisions WHERE key = ? AND rev = ?")
+      .bind(key, rev)
+      .first();
+    if (!row) return null;
+    return {
+      state: await decodeStoredState(row.state),
+      rev: Number(row.rev),
+      updatedAt: Number(row.updatedAt) || Number(row.created_at) || 0,
+    };
+  } catch {
+    // 履歴テーブル不在や破損履歴は主データへ波及させず、存在しない版として扱う。
+    return null;
+  }
 }
 
 export async function onRequest(context) {
@@ -171,6 +260,23 @@ export async function onRequest(context) {
   const db = env.DB;
 
   if (request.method === "GET") {
+    if (url.searchParams.get("history") === "1") {
+      return json({ syncId, revisions: await listRevisions(db, syncId) });
+    }
+    const revisionRaw = url.searchParams.get("revision");
+    if (revisionRaw !== null) {
+      const revision = Number(revisionRaw);
+      const archived = Number.isInteger(revision) && revision > 0
+        ? await readRevision(db, syncId, revision)
+        : null;
+      if (!archived) return json({ error: "revision not found", code: "no_such_revision" }, 404);
+      return json({
+        syncId,
+        state: archived.state,
+        stateRev: archived.rev,
+        updatedAt: archived.updatedAt,
+      });
+    }
     // まずrevisionだけを読む。未変更ポーリングでは巨大stateの解凍が不要。
     const current = await readRow(db, syncId, false);
     const sinceRaw = url.searchParams.get("sinceRev");
@@ -351,6 +457,10 @@ export async function onRequest(context) {
         409,
       );
     }
+    // 主書き込みがRETURNINGで成功確定した後だけ、その同一文字列を復元履歴へ残す。
+    // 履歴の保存・整理はいずれもbest-effortなので、未マイグレーション環境でも200を維持する。
+    await archiveRevision(db, syncId, savedRev, storedJson, "update");
+    await pruneRevisions(db, syncId);
     return json({ ok: true, syncId, stateRev: savedRev, updatedAt: savedUpdatedAt });
   }
 
