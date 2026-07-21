@@ -1,18 +1,20 @@
 {
   // WordBank / Cloudflare Pages + D1 の再現可能な設定（仕様書 §8）。
-  // 実際の database_id はダッシュボードで各自作成し、下のプレースホルダを置き換える。
-  // 本番IDはコミットしない方針（環境ごとに .dev.vars / CI変数などで注入する）。
+  // account_id / database_id はリソース識別子であり秘密情報ではない（APIトークンが無ければ
+  // 何もできない）。コミットしてよい。実際に触れる権限はダッシュボードログイン/APIトークン側。
   "name": "wordbank",
+  "account_id": "04debe2c3aa4222fb8f10c214add6d2e",
   "compatibility_date": "2026-07-01",
   "pages_build_output_dir": "publish",
 
   // D1バインディング名は 'DB'（functions/api/wordsnap-state.js が env.DB を参照）。
   // migrations_dir はこのリポジトリの migrations/。0001=states, 0002=state_revisions。
+  // database_name は未確認のため、authoritative な database_id で固定する。
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "wordbank",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "ea941fb4-1b51-49e6-acd9-12501a4fa653",
       "migrations_dir": "migrations"
     }
   ]

@@ -2,3 +2,5 @@
 _codex-review-prompt.txt
 _grok-review-prompt.txt
 _review-codex*.md
+.wrangler/
+github-upload/.wrangler/
