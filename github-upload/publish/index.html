@@ -846,6 +846,53 @@ h2 {
   border-radius: 3px;
   background: var(--danger);
 }
+/* 出題形式別の正答率 */
+.stats-fmt {
+  display: grid;
+  gap: 10px;
+}
+.stats-fmt .fmt-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 10px;
+}
+.stats-fmt .fmt-label {
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+.stats-fmt .fmt-rate {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--accent);
+}
+.stats-fmt .fmt-bar {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.stats-fmt .fmt-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.stats-fmt .fmt-sub {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.66rem;
+  margin-top: -2px;
+}
+/* 苦手カードの「復習」導線 */
+.stats-weak-action {
+  margin-top: 2px;
+}
+.stats-weak-action button {
+  width: 100%;
+}
 
 .hero-card {
   position: relative;
@@ -2448,6 +2495,40 @@ textarea:focus-visible {
 
 :root[data-kbd-hints="off"] .kbd-hint {
   display: none !important;
+}
+
+/* ---------- ご要望・フィードバックフォーム ---------- */
+.fb-form {
+  display: grid;
+  gap: 10px;
+}
+.fb-field {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.fb-field select,
+.fb-field textarea,
+.fb-field input {
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 0.6rem 0.7rem;
+  font: inherit;
+  width: 100%;
+}
+.fb-field textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.fb-charcount {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 400;
+  text-align: right;
 }
 
 /* ---------- Deck stats (donut) ---------- */
@@ -5115,6 +5196,39 @@ accurate 正確な"
             </div>
           </details>
 
+          <details class="settings-section">
+            <summary>💬 ご要望・フィードバック</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">
+                欲しい機能・不具合・気づいたことを開発者に送れます。内容は<strong>開発者だけが確認します</strong>。
+                あなたの単語データや同期キーは送信しません。連絡先の入力は任意です。
+              </p>
+              <form id="feedbackForm" class="fb-form" novalidate>
+                <label class="fb-field">
+                  種類
+                  <select id="feedbackCategory">
+                    <option value="request">要望・欲しい機能</option>
+                    <option value="bug">不具合・おかしい挙動</option>
+                    <option value="other">その他</option>
+                  </select>
+                </label>
+                <label class="fb-field">
+                  内容
+                  <textarea id="feedbackMessage" maxlength="2000" placeholder="例：発音の音声がほしい／この単語の意味が違う気がする など"></textarea>
+                  <span id="feedbackCharCount" class="fb-charcount">0 / 2000</span>
+                </label>
+                <label class="fb-field">
+                  連絡先（任意・返信が必要なときだけ）
+                  <input id="feedbackContact" type="text" maxlength="200" placeholder="メールアドレスなど（空欄でOK）" autocomplete="off" />
+                </label>
+                <div class="settings-row">
+                  <button id="feedbackSubmit" class="secondary" type="button">送信する</button>
+                </div>
+                <p id="feedbackStatus" class="settings-desc" role="status" aria-live="polite"></p>
+              </form>
+            </div>
+          </details>
+
           <!-- 「全データ削除」は取り込み画面の主導線近くにあると誤タップしやすいため、ここへ移動した -->
           <details class="settings-section">
             <summary>⚠️ 危険な操作</summary>
@@ -6075,6 +6189,13 @@ const elements = {
   reviewLogCount: document.querySelector("#reviewLogCount"),
   reviewLogClearButton: document.querySelector("#reviewLogClearButton"),
   reviewLogExportButton: document.querySelector("#reviewLogExportButton"),
+  feedbackForm: document.querySelector("#feedbackForm"),
+  feedbackCategory: document.querySelector("#feedbackCategory"),
+  feedbackMessage: document.querySelector("#feedbackMessage"),
+  feedbackCharCount: document.querySelector("#feedbackCharCount"),
+  feedbackContact: document.querySelector("#feedbackContact"),
+  feedbackSubmit: document.querySelector("#feedbackSubmit"),
+  feedbackStatus: document.querySelector("#feedbackStatus"),
   syncSwitchBanner: document.querySelector("#syncSwitchBanner"),
   syncSwitchAdoptButton: document.querySelector("#syncSwitchAdoptButton"),
   syncSwitchKeepButton: document.querySelector("#syncSwitchKeepButton"),
@@ -6643,11 +6764,81 @@ function scheduleAutoNextIfNeeded() {
   }, autoNextDelay());
 }
 
+// ---------- ご要望・フィードバック送信 ----------
+// 書き込み専用API /api/feedback へ送るだけ。読み取り経路は持たない。
+// 送るのは 種類・本文・任意の連絡先のみで、単語データや同期キーは一切含めない。
+function updateFeedbackCharCount() {
+  if (!elements.feedbackMessage || !elements.feedbackCharCount) return;
+  const len = elements.feedbackMessage.value.length;
+  elements.feedbackCharCount.textContent = `${len} / 2000`;
+}
+
+async function submitFeedback() {
+  const form = elements.feedbackForm;
+  if (!form) return;
+  const message = (elements.feedbackMessage?.value || "").trim();
+  if (!message) {
+    if (elements.feedbackStatus) elements.feedbackStatus.textContent = "内容を入力してください。";
+    elements.feedbackMessage?.focus();
+    return;
+  }
+  const payload = {
+    category: elements.feedbackCategory?.value || "other",
+    message,
+    contact: (elements.feedbackContact?.value || "").trim(),
+    appVersion: "web",
+  };
+  const button = elements.feedbackSubmit;
+  if (button) button.disabled = true;
+  if (elements.feedbackStatus) elements.feedbackStatus.textContent = "送信中…";
+  try {
+    const response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (response.ok) {
+      form.reset();
+      updateFeedbackCharCount();
+      if (elements.feedbackStatus) {
+        elements.feedbackStatus.textContent = "送信しました。ありがとうございます！";
+      }
+    } else if (response.status === 413) {
+      if (elements.feedbackStatus) elements.feedbackStatus.textContent = "内容が長すぎます。短くして送信してください。";
+    } else if (response.status === 503) {
+      if (elements.feedbackStatus) elements.feedbackStatus.textContent = "いまは受け付けできません。少し時間をおいて試してください。";
+    } else {
+      if (elements.feedbackStatus) elements.feedbackStatus.textContent = "送信できませんでした。時間をおいて試してください。";
+    }
+  } catch {
+    // オフライン等。内容は消さず、再送できるようにする。
+    if (elements.feedbackStatus) {
+      elements.feedbackStatus.textContent = "送信できませんでした（通信エラー）。オンラインで再度お試しください。";
+    }
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function initFeedbackForm() {
+  const form = elements.feedbackForm;
+  if (!form) return;
+  elements.feedbackMessage?.addEventListener("input", updateFeedbackCharCount);
+  updateFeedbackCharCount();
+  elements.feedbackSubmit?.addEventListener("click", submitFeedback);
+  // 連絡先入力欄で Enter を押したときのフォーム送信（ページ再読込）を防ぎ、送信処理へ回す。
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitFeedback();
+  });
+}
+
 function initSettings() {
   initSound();
   applyKeyboardHints(keyboardHintsEnabled());
   applyQuizSettings();
   initReviewLogSettings();
+  initFeedbackForm();
 }
 
 function setActiveStep(id, options = {}) {
@@ -14641,6 +14832,46 @@ function statsSpeedCard() {
   );
 }
 
+// C2) 出題形式別の正答率（学習イベントの promptMode 別）。第二弾。
+// 「意味を選ぶ」と「例文の空所」でどちらが得意/苦手かを比べられる。
+function statsFormatCard() {
+  if (!reviewLogEnabled()) return "";
+  const events = retainedReviewEvents().filter((e) => e.result !== "dont-know");
+  const groups = [
+    { key: "meaning-choice", label: "意味を選ぶ", total: 0, correct: 0 },
+    { key: "context-choice", label: "例文の空所", total: 0, correct: 0 },
+  ];
+  for (const e of events) {
+    const g = groups.find((x) => x.key === e.promptMode);
+    if (!g) continue;
+    g.total += 1;
+    if (e.result === "correct") g.correct += 1;
+  }
+  // どちらの形式にも最低5件たまるまでは出さない（少数で誤解を与えないため）。
+  const shown = groups.filter((g) => g.total >= 5);
+  if (shown.length === 0) return "";
+  const rows = shown
+    .map((g) => {
+      const pct = Math.round((g.correct / g.total) * 100);
+      return (
+        `<div class="fmt-row">` +
+        `<span class="fmt-label">${escapeHtml(g.label)}</span>` +
+        `<span class="fmt-rate">${pct}%</span>` +
+        `<span class="fmt-bar"><i style="width:${pct}%"></i></span>` +
+        `<span class="fmt-sub">${g.correct} / ${g.total}回</span>` +
+        `</div>`
+      );
+    })
+    .join("");
+  return (
+    `<div class="stats-card">` +
+    `<h4>出題形式別の正答率</h4>` +
+    `<div class="stats-fmt">${rows}</div>` +
+    `<p class="stats-caption">「学習の記録」がオンの間の集計。形式ごとの得意・苦手が分かります。</p>` +
+    `</div>`
+  );
+}
+
 // D) 苦手語ランキング（正誤履歴が3回以上ある語のうち、正答率の低い順）。
 function statsWeakCard() {
   const rows = [];
@@ -14668,10 +14899,18 @@ function statsWeakCard() {
       );
     })
     .join("");
+  // 第二弾: 「苦手だけ解く」対象が実際にあるときだけ、その場から復習を始める導線を出す。
+  const difficultCount = difficultQuizWords().length;
+  const action = difficultCount > 0
+    ? `<div class="stats-weak-action">` +
+      `<button type="button" class="secondary" id="statsWeakQuizButton">この苦手な語を復習する（${difficultCount}語）</button>` +
+      `</div>`
+    : "";
   return (
     `<div class="stats-card">` +
     `<h4>苦手な単語</h4>` +
     `<ul class="stats-weak">${items}</ul>` +
+    action +
     `<p class="stats-caption">3回以上答えた語のうち正答率が低い順（最大8語）。</p>` +
     `</div>`
   );
@@ -14685,6 +14924,7 @@ function renderStatsCharts(byDay) {
   const cards = [
     statsMasteryCard(),
     statsAccuracyCard(activity),
+    statsFormatCard(),
     statsSpeedCard(),
     statsWeakCard(),
   ].filter(Boolean);
@@ -16119,6 +16359,14 @@ elements.streakBadge?.addEventListener("click", () => {
   toggleStreakPanel();
 });
 elements.streakPanelClose?.addEventListener("click", closeStreakPanel);
+// 成績の「苦手な語を復習する」導線（カードは再描画で作り直されるため委譲で受ける）。
+elements.statsGrid?.addEventListener("click", (event) => {
+  const button = event.target.closest?.("#statsWeakQuizButton");
+  if (!button) return;
+  closeStreakPanel();
+  setActiveStep("quiz", { sound: false });
+  startDifficultQuiz();
+});
 elements.streakPrevMonth?.addEventListener("click", () => {
   if (!streakCalMonth) return;
   const d = new Date(streakCalMonth.year, streakCalMonth.month - 1, 1);

@@ -6,8 +6,8 @@
   "description": "WordBank — 英単語クイズ。Cloudflare Pages Functions + D1 でサーバー保存。",
   "scripts": {
     "sync:html": "node scripts/sync-html.mjs",
-    "test": "node --test scripts/api-contract.test.mjs scripts/quiz-quality.test.mjs && node scripts/check-release.mjs",
-    "test:api": "node --test scripts/api-contract.test.mjs",
+    "test": "node --test scripts/api-contract.test.mjs scripts/feedback-contract.test.mjs scripts/quiz-quality.test.mjs && node scripts/check-release.mjs",
+    "test:api": "node --test scripts/api-contract.test.mjs scripts/feedback-contract.test.mjs",
     "check": "node scripts/check-release.mjs",
     "test:quiz": "node --test scripts/quiz-quality.test.mjs"
   }
