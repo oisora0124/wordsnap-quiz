@@ -59,7 +59,13 @@
   --success-soft: #e7f7f0;
   --danger: #ef4444;
   --danger-soft: #fdeced;
+  --danger-text: #b91c1c; /* 小さな文字で使う濃い赤（背景 surface-2 で 4.5:1 以上）*/
   --warning: #f59e0b;
+
+  /* 主要ボタン・アクティブタブ用のコントラスト確保トークン（白×accentは4.5:1未満のため分離）*/
+  --action-bg: #4f46e5;
+  --action-fg: #ffffff;
+  --action-hover: #4338ca;
 
   --quiz-grad: linear-gradient(135deg, #0ea5e9 0%, #6366f1 48%, #d946ef 100%);
 
@@ -122,7 +128,13 @@
   --success-soft: rgba(52, 211, 153, 0.16);
   --danger: #f87171;
   --danger-soft: rgba(248, 113, 113, 0.16);
+  --danger-text: #f87171; /* 暗い surface-2 上で 5.6:1 */
   --warning: #fbbf24;
+
+  /* ダークでは白×薄紫が2.98:1なので、濃い前景色を薄紫ボタンに載せる */
+  --action-bg: #818cf8;
+  --action-fg: #0b0f16;
+  --action-hover: #a5b4fc;
 
   --quiz-grad: linear-gradient(135deg, #0ea5e9 0%, #4f46e5 52%, #c026d3 100%);
 
@@ -717,6 +729,12 @@ h2 {
   font-size: 0.7rem;
 }
 
+/* パネル内の小見出し（学習カレンダー / 成績 をそろえる）*/
+.streak-subhead {
+  margin: 6px 0 2px;
+  font-size: 0.95rem;
+}
+
 /* ---------- 成績（統計）ブロック ---------- */
 /* 既存データ（単語ごとの正誤履歴・学習状態・任意の学習イベント）だけから、
    依存ゼロのインラインSVGで描く。stateへは一切書き込まない読み取り専用の可視化。 */
@@ -730,6 +748,7 @@ h2 {
 .stats-block[hidden] { display: none; }
 .stats-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
@@ -766,7 +785,8 @@ h2 {
 .stats-card .stats-caption {
   margin: 0;
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 .stats-card svg {
   width: 100%;
@@ -821,7 +841,7 @@ h2 {
 .stats-weak .weak-meaning {
   grid-column: 1 / -1;
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -830,7 +850,7 @@ h2 {
 .stats-weak .weak-rate {
   font-variant-numeric: tabular-nums;
   font-size: 0.78rem;
-  color: var(--danger);
+  color: var(--danger-text);
   font-weight: 650;
 }
 .stats-weak .weak-bar {
@@ -865,7 +885,7 @@ h2 {
   font-variant-numeric: tabular-nums;
   font-size: 0.8rem;
   font-weight: 650;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .stats-fmt .fmt-bar {
   grid-column: 1 / -1;
@@ -883,7 +903,7 @@ h2 {
 .stats-fmt .fmt-sub {
   grid-column: 1 / -1;
   color: var(--muted);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   margin-top: -2px;
 }
 /* 苦手カードの「復習」導線 */
@@ -964,8 +984,8 @@ button {
   padding: 0.7rem 1.15rem;
   border: 1px solid transparent;
   border-radius: var(--r-md);
-  color: #fff;
-  background: var(--accent);
+  color: var(--action-fg);
+  background: var(--action-bg);
   font-size: 0.92rem;
   font-weight: 650;
   cursor: pointer;
@@ -978,7 +998,7 @@ button {
 }
 
 button:hover {
-  background: var(--accent-strong);
+  background: var(--action-hover);
   transform: translateY(-1px);
 }
 
@@ -1315,13 +1335,13 @@ button.ghost.danger:hover {
 }
 
 .step-tab.active {
-  color: #fff;
-  background: var(--accent);
+  color: var(--action-fg);
+  background: var(--action-bg);
   box-shadow: var(--shadow-sm);
 }
 
 .step-tab.active:hover {
-  background: var(--accent-strong);
+  background: var(--action-hover);
 }
 
 .step-icon {
@@ -1337,8 +1357,8 @@ button.ghost.danger:hover {
 }
 
 .step-tab.active .step-icon {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.18);
+  color: var(--action-fg);
+  background: color-mix(in srgb, var(--action-fg) 18%, transparent);
 }
 
 .step-icon::before,
@@ -1449,7 +1469,7 @@ button.ghost.danger:hover {
 }
 
 .step-tab.active small {
-  color: rgba(255, 255, 255, 0.76);
+  color: color-mix(in srgb, var(--action-fg) 78%, transparent);
 }
 
 .step-tab strong {
@@ -2529,6 +2549,18 @@ textarea:focus-visible {
   font-size: 0.7rem;
   font-weight: 400;
   text-align: right;
+}
+/* 送信結果メッセージ。空でも高さを確保して、表示のたびにレイアウトが跳ねないようにする */
+.fb-status {
+  min-height: 1.4rem;
+}
+/* iOSはフォントが16px未満の入力にフォーカスすると自動ズームするので、狭幅では16pxに上げる */
+@media (max-width: 760px) {
+  .fb-field input,
+  .fb-field textarea,
+  .fb-field select {
+    font-size: 16px;
+  }
 }
 
 /* ---------- Deck stats (donut) ---------- */
@@ -3754,7 +3786,10 @@ textarea:focus-visible {
   overflow: hidden;
   padding: clamp(16px, 3vw, 26px);
   border-radius: var(--r-lg);
-  background: var(--quiz-grad);
+  /* グラデ上に暗いスクリムを重ね、白文字・選択肢のコントラストを確保する（A11Y）*/
+  background:
+    linear-gradient(rgba(5, 8, 20, 0.48), rgba(5, 8, 20, 0.48)),
+    var(--quiz-grad);
   color: #fff;
   box-shadow: var(--shadow-lg);
 }
@@ -3834,7 +3869,39 @@ textarea:focus-visible {
   color: rgba(255, 255, 255, 0.92);
 }
 .quiz-timer.is-critical .quiz-timer-text {
-  color: var(--danger);
+  /* 緊急でも文字は白のまま（暗いスクリム上で赤字は読みにくい）。緊急さはバーの赤で表す */
+  color: #ffffff;
+}
+/* 「動きを減らす」設定では毎秒動くバーを隠し、残り秒の数字だけ見せる */
+@media (prefers-reduced-motion: reduce) {
+  .quiz-timer-track {
+    display: none;
+  }
+  .quiz-timer-text {
+    min-width: 3.4em;
+  }
+}
+
+/* 狭い画面では出題モードのボタンを2列グリッドにして、行幅のばらつきをなくす。
+   主要ボタン（開始/次へ/やめる）と操作ヒントは横いっぱいに置く。 */
+@media (max-width: 480px) {
+  .quiz-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-items: stretch;
+  }
+  .quiz-actions > button {
+    width: 100%;
+    margin: 0;
+  }
+  .quiz-actions > #startQuizButton,
+  .quiz-actions > #nextQuizButton,
+  .quiz-actions > #exitQuizButton,
+  .quiz-actions > #exitReviewButton,
+  .quiz-actions > .kbd-hint {
+    grid-column: 1 / -1;
+  }
 }
 
 .choices {
@@ -3964,6 +4031,17 @@ textarea:focus-visible {
 .choice-button.wrong {
   background: var(--danger);
   border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* 正誤の塗り(緑/赤)の上では白文字がコントラスト不足なので濃い前景にする（A11Y）*/
+.choice-button.correct,
+.choice-button.wrong {
+  color: #0b0f16;
+}
+.choice-button.correct .choice-num,
+.choice-button.wrong .choice-num {
+  background: rgba(0, 0, 0, 0.22);
+  color: #0b0f16;
 }
 
 .dont-know {
@@ -4438,7 +4516,7 @@ textarea:focus-visible {
         </div>
         <div class="hero-side">
           <div class="hero-controls">
-            <button id="streakBadge" class="streak-badge" type="button" hidden aria-label="連続学習日数">
+            <button id="streakBadge" class="streak-badge" type="button" hidden aria-label="連続学習日数" aria-controls="streakPanel" aria-expanded="false">
               <span aria-hidden="true">🔥</span><span id="streakBadgeCount">0</span>
             </button>
             <button id="syncBadge" class="sync-badge" type="button" data-state="idle" title="タップで今すぐ同期">
@@ -4463,10 +4541,11 @@ textarea:focus-visible {
            なってしまうため、既存データを遡って使えるこの形にした。 -->
       <section id="streakPanel" class="streak-panel" aria-labelledby="streakPanelTitle" hidden>
         <div class="streak-panel-head">
-          <h2 id="streakPanelTitle">学習カレンダー</h2>
+          <h2 id="streakPanelTitle">学習の記録</h2>
           <button id="streakPanelClose" class="ghost mini" type="button">閉じる</button>
         </div>
         <div id="streakSummary" class="streak-summary"></div>
+        <h3 class="streak-subhead">学習カレンダー</h3>
         <div class="streak-cal-nav">
           <button id="streakPrevMonth" class="ghost mini" type="button" aria-label="前の月へ">‹</button>
           <span id="streakMonthLabel" class="streak-month-label" aria-live="polite"></span>
@@ -4830,14 +4909,15 @@ accurate 正確な"
             例文問題は初期値では<strong>出しません</strong>。「一部」または「全部」を選んだ場合だけ空所補充を含めます。
             「クイズを始める（おまかせ）」＝覚えていない単語を自動で選んで<strong>エンドレス</strong>に出題。
             「苦手だけ」＝誤答歴があり正答率80%未満の単語、「今日の復習」＝日付が来た単語だけを1周。
+            「やさしい順」＝未着手の単語をCEFRのA1→C2順（未判定は最後）で1周。
           </p>
         </div>
 
         <div id="quizCard" class="quiz-card">
           <p class="quiz-label">出題単語</p>
           <h3 id="quizWord">クイズを始めましょう</h3>
-          <div id="quizTimer" class="quiz-timer" hidden aria-hidden="true">
-            <div class="quiz-timer-track"><div id="quizTimerFill" class="quiz-timer-fill"></div></div>
+          <div id="quizTimer" class="quiz-timer" hidden role="timer" aria-atomic="true" aria-label="残り時間">
+            <div id="quizTimerTrack" class="quiz-timer-track" role="progressbar" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0"><div id="quizTimerFill" class="quiz-timer-fill"></div></div>
             <span id="quizTimerText" class="quiz-timer-text"></span>
           </div>
           <div id="choices" class="choices"></div>
@@ -4845,7 +4925,7 @@ accurate 正確な"
           <p id="quizFeedback" class="feedback" role="status" aria-live="polite"></p>
         </div>
 
-        <div class="actions">
+        <div class="actions quiz-actions">
           <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
           <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
           <button id="easyQuizButton" class="secondary" type="button" title="まだ解いていない単語を、CEFR推定でやさしい順（A1→C2、未判定は最後）に出題します。復習の予定には影響しません。">やさしい順で解く（0語）</button>
@@ -5281,7 +5361,7 @@ accurate 正確な"
                 </label>
                 <label class="fb-field">
                   内容
-                  <textarea id="feedbackMessage" maxlength="2000" placeholder="例：発音の音声がほしい／この単語の意味が違う気がする など"></textarea>
+                  <textarea id="feedbackMessage" maxlength="2000" required aria-describedby="feedbackCharCount feedbackStatus" placeholder="例：発音の音声がほしい／この単語の意味が違う気がする など"></textarea>
                   <span id="feedbackCharCount" class="fb-charcount">0 / 2000</span>
                 </label>
                 <label class="fb-field">
@@ -5289,9 +5369,9 @@ accurate 正確な"
                   <input id="feedbackContact" type="text" maxlength="200" placeholder="メールアドレスなど（空欄でOK）" autocomplete="off" />
                 </label>
                 <div class="settings-row">
-                  <button id="feedbackSubmit" class="secondary" type="button">送信する</button>
+                  <button id="feedbackSubmit" type="button">送信する</button>
                 </div>
-                <p id="feedbackStatus" class="settings-desc" role="status" aria-live="polite"></p>
+                <p id="feedbackStatus" class="settings-desc fb-status" role="status" aria-live="polite"></p>
               </form>
             </div>
           </details>
@@ -6301,6 +6381,7 @@ const elements = {
   autoNextDelaySelect: document.querySelector("#autoNextDelaySelect"),
   quizTimeLimitSelect: document.querySelector("#quizTimeLimitSelect"),
   quizTimer: document.querySelector("#quizTimer"),
+  quizTimerTrack: document.querySelector("#quizTimerTrack"),
   quizTimerFill: document.querySelector("#quizTimerFill"),
   quizTimerText: document.querySelector("#quizTimerText"),
   autoSpeakToggle: document.querySelector("#autoSpeakToggle"),
@@ -6700,12 +6781,19 @@ function stopQuizTimer() {
   }
 }
 
+let quizTimerLastSec = -1;
 function renderQuizTimerFrame(totalMs) {
   if (!elements.quizTimer) return;
   const remaining = Math.max(0, quizTimerDeadline - Date.now());
   const ratio = totalMs > 0 ? remaining / totalMs : 0;
   if (elements.quizTimerFill) elements.quizTimerFill.style.width = `${(ratio * 100).toFixed(1)}%`;
-  if (elements.quizTimerText) elements.quizTimerText.textContent = `${Math.ceil(remaining / 1000)}秒`;
+  const sec = Math.ceil(remaining / 1000);
+  if (sec !== quizTimerLastSec) {
+    quizTimerLastSec = sec;
+    if (elements.quizTimerText) elements.quizTimerText.textContent = `${sec}秒`;
+    // progressbar は秒が変わった時だけ更新（読み上げ環境への負荷を避ける）
+    elements.quizTimerTrack?.setAttribute("aria-valuenow", String(sec));
+  }
   // 残り時間で色を変える（3秒以下＝赤、6秒以下＝橙）。読みやすさの保険で数字も出す。
   elements.quizTimer.classList.toggle("is-critical", remaining <= 3000);
   elements.quizTimer.classList.toggle("is-low", remaining > 3000 && remaining <= 6000);
@@ -6727,6 +6815,8 @@ function syncQuizTimer(questionActive) {
   const totalMs = limit * 1000;
   quizTimerForQuiz = currentQuiz;
   quizTimerDeadline = Date.now() + totalMs;
+  quizTimerLastSec = -1; // 新しい問題で秒表示を必ず1回更新させる
+  elements.quizTimerTrack?.setAttribute("aria-valuemax", String(limit));
   if (elements.quizTimer) elements.quizTimer.hidden = false;
   renderQuizTimerFrame(totalMs);
   quizTimerInterval = window.setInterval(() => renderQuizTimerFrame(totalMs), 100);
@@ -6932,9 +7022,11 @@ async function submitFeedback() {
   const message = (elements.feedbackMessage?.value || "").trim();
   if (!message) {
     if (elements.feedbackStatus) elements.feedbackStatus.textContent = "内容を入力してください。";
+    elements.feedbackMessage?.setAttribute("aria-invalid", "true");
     elements.feedbackMessage?.focus();
     return;
   }
+  elements.feedbackMessage?.removeAttribute("aria-invalid");
   const payload = {
     category: elements.feedbackCategory?.value || "other",
     message,
@@ -6942,7 +7034,11 @@ async function submitFeedback() {
     appVersion: "web",
   };
   const button = elements.feedbackSubmit;
-  if (button) button.disabled = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "送信中…";
+  }
+  form.setAttribute("aria-busy", "true");
   if (elements.feedbackStatus) elements.feedbackStatus.textContent = "送信中…";
   try {
     const response = await fetch("/api/feedback", {
@@ -6969,14 +7065,22 @@ async function submitFeedback() {
       elements.feedbackStatus.textContent = "送信できませんでした（通信エラー）。オンラインで再度お試しください。";
     }
   } finally {
-    if (button) button.disabled = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = "送信する";
+    }
+    form.removeAttribute("aria-busy");
   }
 }
 
 function initFeedbackForm() {
   const form = elements.feedbackForm;
   if (!form) return;
-  elements.feedbackMessage?.addEventListener("input", updateFeedbackCharCount);
+  elements.feedbackMessage?.addEventListener("input", () => {
+    updateFeedbackCharCount();
+    // 入力が始まったら invalid 表示を解除する（送信前の空エラーを引きずらない）
+    elements.feedbackMessage.removeAttribute("aria-invalid");
+  });
   updateFeedbackCharCount();
   elements.feedbackSubmit?.addEventListener("click", submitFeedback);
   // 連絡先入力欄で Enter を押したときのフォーム送信（ページ再読込）を防ぎ、送信処理へ回す。
@@ -7031,7 +7135,7 @@ function setActiveStep(id, options = {}) {
   // タブ列を画面上部までスクロールして新しいステップを見えるようにする。
   if (options.scroll) {
     const nav = elements.stepTabs[0]?.closest(".step-tabs");
-    nav?.scrollIntoView({ behavior: "smooth", block: "start" });
+    nav?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
   }
 }
 
@@ -7313,6 +7417,15 @@ function localDateString(date = new Date()) {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+// 「動きを減らす」設定のときはスクロールのアニメーションもやめる（A11Y）。
+function prefersReducedMotion() {
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
 }
 
 // 連続学習日数の形を正規化する。count と last（YYYY-MM-DD）が揃っていなければ未学習扱い。
@@ -11484,7 +11597,7 @@ function jumpToSavedWordNumber() {
   savedListVisibleCount = Math.min(total, savedListWindowStart + SAVED_LIST_PAGE_SIZE);
   renderSavedWords();
   const row = elements.savedList.querySelector(`[data-saved-index="${requested}"]`);
-  row?.scrollIntoView({ behavior: "smooth", block: "center" });
+  row?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "center" });
   row?.classList.add("is-jump-target");
   window.setTimeout(() => row?.classList.remove("is-jump-target"), 1200);
   setStatus(`${requested}番を表示しました（${savedListWindowStart + 1}〜${savedListVisibleCount}番）。`);
@@ -11994,7 +12107,7 @@ function resumeSavedReview() {
   currentQuiz = null;
   persistReviewProgress();
   renderQuiz();
-  elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  elements.quizWord.closest(".panel").scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
   // renderQuiz() の中で「全単語ブロック中」等により即座に endReview されると reviewSession は
   // null になっている。その場合は endReview 側のメッセージを優先し、ここでは上書きしない。
   if (reviewSession) setStatus(`前回の続きから再開しました（残り${remaining}語）。`);
@@ -12048,7 +12161,7 @@ function startReview(ids, options = {}) {
   // scrollIntoView は非表示パネルでは効かないため、切替を先に行う。
   setActiveStep("quiz", { sound: false });
   renderQuiz();
-  elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  elements.quizWord.closest(".panel").scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
   // renderQuiz() の中で「選んだ単語が全部ブロック中」等により即座に endReview されると
   // reviewSession は null になっている。その場合は endReview 側のメッセージを優先する。
   if (reviewSession) setStatus(`${valid.length}語の${label}を開始しました。`);
@@ -14749,6 +14862,9 @@ function renderStreakBadge() {
   badge.title = isToday
     ? `${streak.count}日連続で学習中！`
     : "今日クイズに答えると連続記録が続きます";
+  // 読み上げには「◯日連続」と、開いて学習の記録を見られることを伝える（固定ラベルで数を潰さない）
+  const expanded = elements.streakPanel && !elements.streakPanel.hidden;
+  badge.setAttribute("aria-label", `${streak.count}日連続。学習の記録を${expanded ? "閉じる" : "開く"}`);
 }
 
 // ---------- 学習カレンダー ----------
@@ -15175,12 +15291,20 @@ function openStreakPanel() {
   streakCalMonth = { year: now.getFullYear(), month: now.getMonth() };
   streakCalSelected = localDateString();
   panel.hidden = false;
+  elements.streakBadge?.setAttribute("aria-expanded", "true");
+  renderStreakBadge(); // ラベルを「閉じる」に更新
   renderStreakCalendar();
-  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  panel.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "nearest" });
 }
 
 function closeStreakPanel() {
   if (elements.streakPanel) elements.streakPanel.hidden = true;
+  if (elements.streakBadge) {
+    elements.streakBadge.setAttribute("aria-expanded", "false");
+    renderStreakBadge(); // ラベルを「開く」に戻す
+    // 非表示コントロールにフォーカスが残らないよう、開いたバッジへ戻す
+    if (!elements.streakBadge.hidden) elements.streakBadge.focus();
+  }
 }
 
 function toggleStreakPanel() {
@@ -16521,7 +16645,7 @@ elements.startQuizButton.addEventListener("click", () => {
   playSound(currentQuiz ? "next" : "wrong");
   renderQuiz();
   // 設定欄が消えたぶん、問題カードを画面の上に持ってくる
-  elements.quizWord.closest(".panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  elements.quizWord.closest(".panel").scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
 });
 
 // 通常クイズを途中でやめて、設定欄に戻る
