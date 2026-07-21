@@ -1358,6 +1358,7 @@ button.ghost.danger:hover {
 
 .step-tab.active .step-icon {
   color: var(--action-fg);
+  background: rgba(127, 127, 127, 0.22); /* color-mix 非対応ブラウザ向けフォールバック */
   background: color-mix(in srgb, var(--action-fg) 18%, transparent);
 }
 
@@ -1469,7 +1470,8 @@ button.ghost.danger:hover {
 }
 
 .step-tab.active small {
-  color: color-mix(in srgb, var(--action-fg) 78%, transparent);
+  color: var(--action-fg); /* color-mix 非対応ブラウザ向けフォールバック（不透明）*/
+  color: color-mix(in srgb, var(--action-fg) 80%, transparent);
 }
 
 .step-tab strong {
@@ -2065,9 +2067,9 @@ textarea:focus-visible {
 }
 
 .deck-tab.active {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
+  color: var(--action-fg);
+  background: var(--action-bg);
+  border-color: var(--action-bg);
 }
 
 .deck-tab.active:hover {
@@ -3232,8 +3234,8 @@ textarea:focus-visible {
 }
 
 .mini-button.info:hover {
-  color: #fff;
-  background: var(--accent);
+  color: var(--action-fg);
+  background: var(--action-bg);
 }
 
 /* ---------- Saved items ---------- */
@@ -3468,9 +3470,9 @@ textarea:focus-visible {
 }
 
 .enrich-chip[aria-pressed="true"] {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
+  color: var(--action-fg);
+  background: var(--action-bg);
+  border-color: var(--action-bg);
 }
 
 .enrich-chip[aria-pressed="true"]:hover {
@@ -3604,8 +3606,8 @@ textarea:focus-visible {
 }
 
 .enrich-link:hover {
-  background: var(--accent);
-  color: #fff;
+  background: var(--action-bg);
+  color: var(--action-fg);
   transform: translateY(-1px);
 }
 
@@ -4040,7 +4042,8 @@ textarea:focus-visible {
 }
 .choice-button.correct .choice-num,
 .choice-button.wrong .choice-num {
-  background: rgba(0, 0, 0, 0.22);
+  /* 緑/赤どちらの塗りの上でも4.5:1を満たすよう、明るいチップ＋濃い数字にする */
+  background: rgba(255, 255, 255, 0.75);
   color: #0b0f16;
 }
 
@@ -4917,7 +4920,7 @@ accurate 正確な"
           <p class="quiz-label">出題単語</p>
           <h3 id="quizWord">クイズを始めましょう</h3>
           <div id="quizTimer" class="quiz-timer" hidden role="timer" aria-atomic="true" aria-label="残り時間">
-            <div id="quizTimerTrack" class="quiz-timer-track" role="progressbar" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0"><div id="quizTimerFill" class="quiz-timer-fill"></div></div>
+            <div id="quizTimerTrack" class="quiz-timer-track" role="progressbar" aria-label="残り時間（秒）" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0"><div id="quizTimerFill" class="quiz-timer-fill"></div></div>
             <span id="quizTimerText" class="quiz-timer-text"></span>
           </div>
           <div id="choices" class="choices"></div>
@@ -6793,6 +6796,7 @@ function renderQuizTimerFrame(totalMs) {
     if (elements.quizTimerText) elements.quizTimerText.textContent = `${sec}秒`;
     // progressbar は秒が変わった時だけ更新（読み上げ環境への負荷を避ける）
     elements.quizTimerTrack?.setAttribute("aria-valuenow", String(sec));
+    elements.quizTimerTrack?.setAttribute("aria-valuetext", `${sec}秒`);
   }
   // 残り時間で色を変える（3秒以下＝赤、6秒以下＝橙）。読みやすさの保険で数字も出す。
   elements.quizTimer.classList.toggle("is-critical", remaining <= 3000);
