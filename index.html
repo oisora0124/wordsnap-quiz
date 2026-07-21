@@ -6431,11 +6431,11 @@ function recordReviewEvent(details) {
     }
     const scheduler = { engine: "legacy-stage-v1" };
     for (const key of ["stageBefore", "stageAfter"]) {
-      const value = Number(details.scheduler?.[key]);
+      const value = details.scheduler?.[key];
       if (Number.isInteger(value) && value >= 0 && value <= 7) scheduler[key] = value;
     }
     for (const key of ["dueAtBefore", "dueAtAfter"]) {
-      const value = Number(details.scheduler?.[key]);
+      const value = details.scheduler?.[key];
       if (Number.isInteger(value) && value >= 0) scheduler[key] = value;
     }
     event.scheduler = scheduler;
