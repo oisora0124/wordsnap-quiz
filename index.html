@@ -4835,6 +4835,19 @@ accurate 正確な"
                   </p>
                 </div>
               </details>
+              <details class="sync-fix">
+                <summary>🕘 過去の状態から復元</summary>
+                <div class="sync-fix-body">
+                  <p>
+                    サーバーに保存された過去の状態へ戻せます。今の状態は自動で「元に戻す」へ退避されます。
+                  </p>
+                  <div class="sync-fix-actions">
+                    <button id="restoreHistoryLoadButton" class="secondary" type="button">履歴を読み込む</button>
+                  </div>
+                  <div id="restoreHistoryList"></div>
+                  <p id="restoreHistoryStatus" class="sync-fix-hint" aria-live="polite"></p>
+                </div>
+              </details>
             </div>
           </details>
 
@@ -5920,6 +5933,9 @@ const elements = {
   syncNewKeyButton: document.querySelector("#syncNewKeyButton"),
   syncForcePushButton: document.querySelector("#syncForcePushButton"),
   syncForcePullButton: document.querySelector("#syncForcePullButton"),
+  restoreHistoryLoadButton: document.querySelector("#restoreHistoryLoadButton"),
+  restoreHistoryList: document.querySelector("#restoreHistoryList"),
+  restoreHistoryStatus: document.querySelector("#restoreHistoryStatus"),
   syncBadge: document.querySelector("#syncBadge"),
   syncBadgeText: document.querySelector("#syncBadge .sync-badge-text"),
   syncStatus: document.querySelector("#syncStatus"),
@@ -7169,6 +7185,19 @@ function validSyncGetResponse(data, requestedSinceRev, expectedSyncId = "") {
   );
 }
 
+function validSyncHistoryResponse(data, expectedSyncId = "") {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  if (expectedSyncId && cleanSyncId(data.syncId) !== cleanSyncId(expectedSyncId)) return false;
+  if (!Array.isArray(data.revisions)) return false;
+  return data.revisions.every((entry) => (
+    entry &&
+    typeof entry === "object" &&
+    !Array.isArray(entry) &&
+    Number.isInteger(Number(entry.rev)) &&
+    Number(entry.rev) > 0
+  ));
+}
+
 function validSyncPutResponse(data, expectedSyncId = "") {
   if (!data || typeof data !== "object" || Array.isArray(data) || data.ok !== true) return false;
   if (expectedSyncId && cleanSyncId(data.syncId) !== cleanSyncId(expectedSyncId)) return false;
@@ -7197,7 +7226,11 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     let endpoint = syncEndpoint();
     // 定期ポーリングでは既知revisionを渡す。対応サーバーは未変更時に巨大なstate本体を
     // 返さずメタデータだけ返せる。旧サーバーは未知queryを無視するため後方互換。
-    if (method === "GET" && Number.isFinite(Number(requestOptions.sinceRev))) {
+    if (method === "GET" && requestOptions.history === true) {
+      endpoint += "&history=1";
+    } else if (method === "GET" && Number.isInteger(Number(requestOptions.revision)) && Number(requestOptions.revision) > 0) {
+      endpoint += `&revision=${encodeURIComponent(String(Number(requestOptions.revision)))}`;
+    } else if (method === "GET" && Number.isFinite(Number(requestOptions.sinceRev))) {
       endpoint += `&sinceRev=${encodeURIComponent(String(Number(requestOptions.sinceRev)))}`;
     }
     response = await fetch(endpoint, options);
@@ -7222,7 +7255,10 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     error.data = data;
     throw error;
   }
-  if (method === "GET" && !validSyncGetResponse(data, requestOptions.sinceRev, syncState.id)) {
+  const validGet = requestOptions.history === true
+    ? validSyncHistoryResponse(data, syncState.id)
+    : validSyncGetResponse(data, requestOptions.sinceRev, syncState.id);
+  if (method === "GET" && !validGet) {
     const error = new Error("同期サーバーの応答を安全に確認できないため、自動処理を中止しました。");
     error.noRetry = true;
     throw error;
@@ -7345,6 +7381,10 @@ function setSyncBusy(busy) {
   if (elements.syncConnectButton) elements.syncConnectButton.disabled = busy;
   if (elements.syncJoinButton) elements.syncJoinButton.disabled = busy;
   if (elements.syncPullButton) elements.syncPullButton.disabled = busy || !syncState.id;
+  if (elements.restoreHistoryLoadButton) elements.restoreHistoryLoadButton.disabled = busy;
+  elements.restoreHistoryList?.querySelectorAll("[data-restore-rev]").forEach((button) => {
+    button.disabled = busy;
+  });
   updateSyncBadge();
 }
 
@@ -8039,6 +8079,101 @@ async function forcePullReplace() {
   }
 }
 
+function setRestoreHistoryStatus(message) {
+  if (elements.restoreHistoryStatus) elements.restoreHistoryStatus.textContent = message;
+}
+
+async function loadRestoreHistory() {
+  if (!syncState.id || !syncServerAvailable()) {
+    const message = "サーバー保存が使えない状態です（https のリンクから開いてください）。";
+    setRestoreHistoryStatus(message);
+    setSyncStatus(message, "error");
+    return;
+  }
+  setSyncBusy(true);
+  setRestoreHistoryStatus("履歴を読み込んでいます…");
+  try {
+    const data = await syncRequest("GET", null, { history: true });
+    const revisions = data.revisions;
+    if (!revisions.length) {
+      elements.restoreHistoryList.innerHTML = "";
+      setRestoreHistoryStatus("履歴がありません");
+      return;
+    }
+    elements.restoreHistoryList.innerHTML = revisions.map((entry) => {
+      const rev = Number(entry.rev);
+      const date = new Date(entry.createdAt);
+      const createdAt = Number.isNaN(date.getTime()) ? "日時不明" : date.toLocaleString();
+      const reason = entry.reason || "—";
+      return `<div class="sync-fix-actions"><span>rev ${escapeHtml(rev)} / ${escapeHtml(createdAt)} / ${escapeHtml(reason)}</span><button class="secondary" type="button" data-restore-rev="${escapeHtml(rev)}">この版に戻す</button></div>`;
+    }).join("");
+    setRestoreHistoryStatus(`${revisions.length}件の履歴を読み込みました。`);
+  } catch (error) {
+    if (isStaleSyncError(error)) return;
+    const message = error.message || "履歴の読み込みに失敗しました。";
+    setRestoreHistoryStatus(message);
+    setSyncStatus(message, "error");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function restoreFromRevision(rev) {
+  if (!syncState.id || !syncServerAvailable()) {
+    const message = "サーバー保存が使えない状態です（https のリンクから開いてください）。";
+    setRestoreHistoryStatus(message);
+    setSyncStatus(message, "error");
+    return;
+  }
+  if (!Number.isInteger(rev) || rev <= 0) {
+    setSyncStatus("復元する版を確認できませんでした。履歴を読み直してください。", "error");
+    return;
+  }
+  const button = elements.restoreHistoryList?.querySelector(`[data-restore-rev="${rev}"]`);
+  const warning = "この版で今の単語をすべて置き換えます。今の状態は『元に戻す』へ退避されます。もう一度押すと確定";
+  if (!armDangerButton(button, warning)) {
+    setRestoreHistoryStatus(warning);
+    setSyncStatus(warning);
+    return;
+  }
+  setSyncBusy(true);
+  setRestoreHistoryStatus(`rev ${rev} を復元しています…`);
+  setSyncStatus(`rev ${rev} を復元しています…`);
+  bumpSyncRequestGen();
+  window.clearTimeout(syncState.pushTimer);
+  syncState.pushTimer = 0;
+  syncState.pushQueued = false;
+  try {
+    const remote = await syncRequest("GET", null, { revision: rev });
+    const localSnapshot = snapshotState();
+    offerUndo(localSnapshot);
+    syncState.connected = true;
+    syncState.applyingRemote = true;
+    try {
+      appState = normalizeState(remote.state);
+      currentQuiz = null;
+      selectedIds.clear();
+      persistAppState();
+    } finally {
+      syncState.applyingRemote = false;
+    }
+    renderAll();
+    const result = await syncPutState(null);
+    syncState.rev = Number(result.stateRev) || syncState.rev;
+    const message = `✓ 選んだ過去の版に戻しました（${appState.words.length}語）。取り消しは『元に戻す』。`;
+    setRestoreHistoryStatus(message);
+    setSyncStatus(message, "live");
+  } catch (error) {
+    if (isStaleSyncError(error)) return;
+    syncState.connected = false;
+    const message = error.message || "過去の版への復元に失敗しました。";
+    setRestoreHistoryStatus(message);
+    setSyncStatus(message, "error");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
 // Web Cryptoの安全な乱数から240ビットの個人キーを発行する。
 // これがその人専用のサーバー保管場所の名前になる＝他人と混ざらない。
 // 暗号学的乱数が使えない環境では、Math.random()へフォールバックせず安全に失敗する。
@@ -8391,6 +8526,12 @@ function initWordsnapSync() {
   });
   elements.syncForcePushButton?.addEventListener("click", () => forcePushOverwrite());
   elements.syncForcePullButton?.addEventListener("click", () => forcePullReplace());
+  elements.restoreHistoryLoadButton?.addEventListener("click", () => loadRestoreHistory());
+  elements.restoreHistoryList?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-restore-rev]");
+    if (!button || !elements.restoreHistoryList.contains(button)) return;
+    restoreFromRevision(Number(button.dataset.restoreRev));
+  });
   // 【別の端末と同じキーで同期】貼り付けたキー/リンクへ、URLバナーと同じ安全経路
   // （adoptForeignSyncId：push無しでpull→本人が選んだときだけ合流）で切り替える。
   elements.syncJoinButton?.addEventListener("click", () => {
