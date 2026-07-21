@@ -746,6 +746,8 @@ h2 {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  /* 各カードは中身の高さに収める（背の高いカードに引き伸ばされて余白が空くのを防ぐ） */
+  align-items: start;
 }
 .stats-card {
   border: 1px solid var(--line);
