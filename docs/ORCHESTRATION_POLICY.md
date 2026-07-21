@@ -50,7 +50,17 @@ ESCALATE_IF:
 - 教材生成は、生成より先に複数正解、品詞衝突、語義不一致をルールで検査する。
 - 外部モデルへ学習履歴を送る場合は、目的、同意、匿名化、保持条件を先に定義する。
 
+## 実行基盤
+
+方針を「回る仕組み」にした実体は [orchestration/](orchestration/) にある。
+
+- 憲法ファイル（[product](orchestration/product_constitution.md) /
+  [lexical](orchestration/lexical_constitution.md) /
+  [review_checklists](orchestration/review_checklists.md)）を委任時の `SOURCE_OF_TRUTH` / `ONLY_REVIEW_FOR` に使う。
+- ルーターとログ: `node tools/route.mjs decide|record|stats`。判定は決定論で、実績は
+  `orchestration/routing-log.jsonl` に追記する。
+
 ## 実績記録
 
-大きなタスクだけ、モード、使用モデル、テスト結果、再実行回数、残存リスクをコミットまたは
-作業報告へ残す。トークンの厳密な取得手段がない場合は推測値を記録しない。
+大きなタスクだけ、モード、使用モデル、テスト結果、再実行回数、残存リスクを `route.mjs record`
+またはコミット/作業報告へ残す。トークンの厳密な取得手段がない場合は推測値を記録しない。
