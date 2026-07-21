@@ -72,9 +72,11 @@ function buildSandbox() {
     extractFunction("pickDistractors"),
     extractConst("QUIZ_TIME_LIMIT_CHOICES"),
     extractFunction("normalizeQuizTimeLimit"),
+    extractConst("CEFR_ORDER"),
+    extractFunction("cefrRankOfLevel"),
     "globalThis.__q = { appStateRef: () => appState, setWords: (w) => { appState.words = w; }," +
       " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
-      " normalizeQuizTimeLimit };",
+      " normalizeQuizTimeLimit, cefrRankOfLevel };",
   ];
   const sandbox = {};
   new Script(pieces.join("\n\n"), { filename: "quiz-quality-check.js" }).runInNewContext(sandbox);
@@ -175,4 +177,20 @@ test("quiz time-limit setting is clamped to the allowed choices (invalid -> off)
   for (const bad of [7, 3, 999, -5, NaN, null, undefined, "abc", ""]) {
     assert.equal(q.normalizeQuizTimeLimit(bad), 0, `invalid ${String(bad)} should fall back to 0`);
   }
+});
+
+test("CEFR easy-first order ranks A1<A2<...<C2, unknown/invalid last", () => {
+  // A1→C2 が昇順、未判定・不明・null はすべて最後（=6）に回る。
+  assert.equal(q.cefrRankOfLevel("A1"), 0);
+  assert.equal(q.cefrRankOfLevel("A2"), 1);
+  assert.equal(q.cefrRankOfLevel("C2"), 5);
+  assert.ok(q.cefrRankOfLevel("A1") < q.cefrRankOfLevel("B1"));
+  assert.ok(q.cefrRankOfLevel("B2") < q.cefrRankOfLevel("C1"));
+  for (const unknown of [null, undefined, "", "Z9", "a1"]) {
+    assert.equal(q.cefrRankOfLevel(unknown), 6, `${String(unknown)} should sort last`);
+  }
+  // 実際に並べ替えると A1..C2..未判定 の順になる。
+  const levels = ["C1", null, "A1", "B1", "A2", "C2", "B2"];
+  const sorted = levels.slice().sort((a, b) => q.cefrRankOfLevel(a) - q.cefrRankOfLevel(b));
+  assert.deepEqual(sorted, ["A1", "A2", "B1", "B2", "C1", "C2", null]);
 });

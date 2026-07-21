@@ -30,7 +30,6 @@ const MAX_RAW_BODY = 16_000;
 const MAX_MESSAGE = 2000;
 const MAX_CONTACT = 200;
 const MAX_APP_VERSION = 40;
-const MAX_USER_AGENT = 300;
 const CATEGORIES = new Set(["request", "bug", "other"]);
 
 function json(body, status = 200, extraHeaders = {}) {
@@ -41,7 +40,7 @@ function json(body, status = 200, extraHeaders = {}) {
 }
 
 // 制御文字を除いた文字列を最大長で切り詰めて返す。タブ(0x09)・改行(0x0A)・復帰(0x0D)
-// は本文の体裁として許可し、それ以外の C0 制御文字と DEL(0x7F) を落とす。
+// は本文の体裁として許可し、それ以外の C0 制御文字・DEL(0x7F)・C1 制御文字(0x80-0x9F)を落とす。
 // 正規表現リテラルに生の制御文字を書くとソースが壊れるため、コードポイントで判定する。
 function cleanText(value, maxLength) {
   if (typeof value !== "string") return "";
@@ -49,10 +48,50 @@ function cleanText(value, maxLength) {
   for (const ch of value) {
     const code = ch.codePointAt(0);
     if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) continue;
-    if (code === 0x7f) continue;
+    if (code >= 0x7f && code <= 0x9f) continue; // DEL と C1 制御文字
     out += ch;
   }
   return out.slice(0, maxLength);
+}
+
+// body をストリームで読み、上限バイトを超えた時点で打ち切る（Content-Length 詐称・
+// chunked 送信でも request.text() で全量をバッファせずに済ませる DoS 対策）。
+async function readBodyCapped(request, maxBytes) {
+  if (!request.body) {
+    const text = await request.text();
+    if (text.length > maxBytes) {
+      const error = new Error("payload too large");
+      error.tooLarge = true;
+      throw error;
+    }
+    return text;
+  }
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+        // 中断失敗は無視（例外で処理は打ち切られる）
+      }
+      const error = new Error("payload too large");
+      error.tooLarge = true;
+      throw error;
+    }
+    chunks.push(value);
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
 }
 
 export async function onRequest(context) {
@@ -75,12 +114,10 @@ export async function onRequest(context) {
 
   let raw;
   try {
-    raw = await request.text();
-  } catch {
+    raw = await readBodyCapped(request, MAX_RAW_BODY);
+  } catch (error) {
+    if (error && error.tooLarge) return json({ error: "payload too large" }, 413);
     return json({ error: "invalid body" }, 400);
-  }
-  if (raw.length > MAX_RAW_BODY) {
-    return json({ error: "payload too large" }, 413);
   }
 
   let payload;
@@ -101,8 +138,9 @@ export async function onRequest(context) {
   const category = CATEGORIES.has(rawCategory) ? rawCategory : "other";
   const contact = cleanText(payload.contact, MAX_CONTACT).trim();
   const appVersion = cleanText(payload.appVersion, MAX_APP_VERSION).trim();
-  // UA はクライアントの申告ではなくリクエストヘッダから取る（詐称を保存しない）。
-  const userAgent = cleanText(request.headers.get("user-agent") || "", MAX_USER_AGENT);
+  // プライバシー優先: User-Agent は保存しない（開示を増やさず、最小データに徹する）。
+  // 列はスキーマ安定のため残し、常に空文字を入れる。
+  const userAgent = "";
 
   try {
     await env.DB.prepare(

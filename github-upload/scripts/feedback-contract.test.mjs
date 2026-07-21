@@ -112,6 +112,21 @@ test("control characters (e.g. bell 0x07) are stripped from the message", async 
   assert.ok(!db.inserted[0].message.includes(bell));
 });
 
+test("DEL (0x7F) and C1 controls (0x80-0x9F) are stripped", async () => {
+  const db = new FakeD1();
+  const del = String.fromCharCode(0x7f);
+  const nel = String.fromCharCode(0x85); // C1: Next Line
+  const c1b = String.fromCharCode(0x9f); // C1 上限
+  await post(db, { message: `a${del}b${nel}c${c1b}d` });
+  assert.equal(db.inserted[0].message, "abcd");
+});
+
+test("user_agent is never stored (privacy: empty even when UA header is sent)", async () => {
+  const db = new FakeD1();
+  await post(db, { message: "hi" }, { headers: { "user-agent": "Mozilla/5.0 SpyBot" } });
+  assert.equal(db.inserted[0].user_agent, "");
+});
+
 test("newlines and tabs survive in the message body", async () => {
   const db = new FakeD1();
   await post(db, { message: "行1\n行2\tタブ" });
@@ -122,6 +137,27 @@ test("oversized body is rejected before parsing (413)", async () => {
   const db = new FakeD1();
   const huge = JSON.stringify({ message: "x".repeat(20000) });
   const { response } = await post(db, huge);
+  assert.equal(response.status, 413);
+  assert.equal(db.inserted.length, 0);
+});
+
+test("oversized body without Content-Length is still capped via streaming (413)", async () => {
+  const db = new FakeD1();
+  const big = "x".repeat(20000);
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(big));
+      controller.close();
+    },
+  });
+  // ストリームbodyは Content-Length を持たない＝readBodyCapped の逐次打ち切りだけが頼り。
+  const request = new Request(API_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: stream,
+    duplex: "half",
+  });
+  const response = await onRequest({ request, env: { DB: db } });
   assert.equal(response.status, 413);
   assert.equal(db.inserted.length, 0);
 });

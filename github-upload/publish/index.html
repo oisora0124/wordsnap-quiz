@@ -4848,6 +4848,7 @@ accurate 正確な"
         <div class="actions">
           <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
           <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
+          <button id="easyQuizButton" class="secondary" type="button" title="まだ解いていない単語を、CEFR推定でやさしい順（A1→C2、未判定は最後）に出題します。復習の予定には影響しません。">やさしい順で解く（0語）</button>
           <button id="contextQuizButton" class="secondary" type="button" title="例文の空所に入る英単語を4択から選ぶ問題。例文と選択肢はその場で自動生成します（設定で作り方を変更・停止できます）">例文で解く（0語）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
           <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
@@ -6216,6 +6217,7 @@ const elements = {
   quizFeedback: document.querySelector("#quizFeedback"),
   startQuizButton: document.querySelector("#startQuizButton"),
   difficultQuizButton: document.querySelector("#difficultQuizButton"),
+  easyQuizButton: document.querySelector("#easyQuizButton"),
   contextQuizButton: document.querySelector("#contextQuizButton"),
   contextGenModeSelect: document.querySelector("#contextGenModeSelect"),
   contextGenHint: document.querySelector("#contextGenHint"),
@@ -6711,9 +6713,11 @@ function renderQuizTimerFrame(totalMs) {
 }
 
 // questionActive を渡して、制限時間ONなら開始/継続、OFFや非アクティブなら停止する。
+// クイズタブを見ている前面時だけ動かす（裏で非同期にrenderQuizが走っても、見えない問題を
+// 時間切れにしない）。activeStepId/document.hidden のガードが High 指摘の中核。
 function syncQuizTimer(questionActive) {
   const limit = quizTimeLimitSeconds();
-  if (!limit || !questionActive || !currentQuiz) {
+  if (!limit || !questionActive || !currentQuiz || activeStepId !== "quiz" || document.hidden) {
     stopQuizTimer();
     return;
   }
@@ -7000,6 +7004,11 @@ function setActiveStep(id, options = {}) {
   if (activeStepId === "quiz" && nextId !== "quiz") {
     clearAutoNextTimer();
     stopQuizTimer(); // クイズタブを離れたらカウントダウンも止める
+  }
+  // クイズタブへ戻ってきたら、離れていた時間を回答時間に数えないよう計測を今から取り直す。
+  // 制限時間つきのカウントダウンも、この後の renderQuiz→syncQuizTimer で新しく仕切り直す。
+  if (nextId === "quiz" && activeStepId !== "quiz") {
+    if (currentQuiz && !currentQuiz.answered) currentQuiz.shownAt = Date.now();
   }
   for (const tab of elements.stepTabs) {
     const active = tab.dataset.stepTab === nextId;
@@ -9535,6 +9544,25 @@ function cefrMatches(word, level) {
   return stored === level;
 }
 
+// ---------- やさしい順（CEFR易→難）の並べ替え ----------
+// CEFRは推定値で未判定も多いので、あくまで「未着手の語をどの順で導入するか」だけに使い、
+// SRSの復習スケジュール（今日の復習・苦手だけ）には一切影響させない。
+const CEFR_ORDER = ["A1", "A2", "B1", "B2", "C1", "C2"];
+
+// レベル文字列→順位。未判定/不明は最後（=CEFR_ORDER.length）に回す純粋関数。単体テスト対象。
+function cefrRankOfLevel(level) {
+  const index = CEFR_ORDER.indexOf(level);
+  return index === -1 ? CEFR_ORDER.length : index;
+}
+
+function wordCefrLevel(word) {
+  return word.cefr?.level || window.Cefr?.peek?.(word.term)?.level || null;
+}
+
+function cefrRank(word) {
+  return cefrRankOfLevel(wordCefrLevel(word));
+}
+
 function renderQuizScope() {
   if (!elements.quizScope) return;
   const deckId = elements.quizDeckSelect?.value || "all";
@@ -11698,6 +11726,11 @@ function renderQuiz() {
     elements.difficultQuizButton.textContent = `苦手だけ解く（${count}語）`;
     elements.difficultQuizButton.disabled = count === 0;
   }
+  if (elements.easyQuizButton) {
+    const count = easyQuizWords().length;
+    elements.easyQuizButton.textContent = `やさしい順で解く（${count}語）`;
+    elements.easyQuizButton.disabled = count === 0;
+  }
   if (elements.contextQuizButton) {
     const count = contextEligibleWords().length;
     elements.contextQuizButton.textContent = `例文で解く（${count}語）`;
@@ -11802,6 +11835,7 @@ function updateQuizControls() {
   if (elements.quizSetup) elements.quizSetup.hidden = quizActive || showingResult;
   elements.startQuizButton.hidden = quizActive || showingResult;
   if (elements.difficultQuizButton) elements.difficultQuizButton.hidden = quizActive || showingResult;
+  if (elements.easyQuizButton) elements.easyQuizButton.hidden = quizActive || showingResult;
   if (elements.contextQuizButton) elements.contextQuizButton.hidden = quizActive || showingResult;
   if (elements.generalReviewButton) elements.generalReviewButton.hidden = quizActive || showingResult;
   // 生成待ち中は「次の問題」を出さない。押しても同じ語のまま pending に戻るだけで、
@@ -12003,6 +12037,7 @@ function startReview(ids, options = {}) {
     // 形式が変わらず、再開しても同じ出題になる（乱数を都度引くと再描画で入れ替わる）。
     formatSeed: Math.random().toString(36).slice(2, 10),
     missedIds: [], // このセッション中に一度でも間違えた単語ID（完走時のサマリ用）
+    easyOrder: Boolean(options.easyOrder), // やさしい順モード（進捗欄に現在レベルを表示）
   };
   reviewResult = null; // 新しいセッションを始めたら前回の結果表示は消す
   quizEmptyReason = "";
@@ -12056,6 +12091,32 @@ function startDifficultQuiz() {
     return;
   }
   startReview(words.map((word) => word.id), { order: "priority", label: "苦手復習" });
+}
+
+// やさしい順モードの対象：出題範囲のうち本当に未着手の語だけ。
+// learning.status === "new" だけだと、旧データで挑戦履歴があるのに status が new のまま
+// 残っている語を拾ってしまう。学習画面の「未着手」カウント（learningBuckets）と同じ判定に
+// そろえる：習得済みでなく、正誤の記録が0で、一度も着手していない。
+function easyQuizWords(words = quizSelectedDeckWords()) {
+  return words.filter((word) => {
+    if (word.learning?.status === "mastered") return false;
+    return word.stats.correct + word.stats.wrong === 0 && !word.learning?.firstAttempted;
+  });
+}
+
+// CEFR易→難で並べる。同レベル内は元の保存順を保つ（Array.sortは安定ソート）。
+function easyOrderedWords() {
+  return easyQuizWords().slice().sort((a, b) => cefrRank(a) - cefrRank(b));
+}
+
+function startEasyQuiz() {
+  const words = easyOrderedWords();
+  if (words.length === 0) {
+    setStatus("やさしい順で出せる未着手の単語がありません（未着手の語を保存すると使えます）。");
+    return;
+  }
+  // shuffle:false で上で作った易→難の並びをそのまま出題順にする。
+  startReview(words.map((word) => word.id), { shuffle: false, label: "やさしい順", easyOrder: true });
 }
 
 function startGeneralReview() {
@@ -14321,8 +14382,19 @@ function buildReviewQuiz() {
   return null;
 }
 
+// 復習セッションの進捗テキスト。やさしい順モードでは、いま出している語のCEFRレベルを添える。
+function reviewScopeText() {
+  let text = `${reviewSession.label} 残り ${reviewSession.queue.length}/${reviewSession.total}`;
+  if (reviewSession.easyOrder) {
+    const frontWord = appState.words.find((word) => word.id === reviewSession.queue[0]);
+    const level = frontWord ? wordCefrLevel(frontWord) : null;
+    text += ` ・ 現在 ${level || "未判定"}`;
+  }
+  return text;
+}
+
 function renderReviewQuiz() {
-  elements.quizScope.textContent = `${reviewSession.label} 残り ${reviewSession.queue.length}/${reviewSession.total}`;
+  elements.quizScope.textContent = reviewScopeText();
 
   if (reviewSession.queue.length === 0) {
     elements.quizWord.textContent = "復習完了！";
@@ -15219,7 +15291,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
         ? "正解！すべてクリアしました。「次の問題」で結果を表示します。"
         : "正解！「次の問題」で続けます。"
       : `正解は「${currentQuiz.answer.meaning}」。あとでもう一度出します。`;
-    elements.quizScope.textContent = `${reviewSession.label} 残り ${remaining}/${reviewSession.total}`;
+    elements.quizScope.textContent = reviewScopeText();
     renderQuizProgress();
     persistReviewProgress(); // 問題が進むたびに再開用スナップショットを更新する
     persistAppState();
@@ -16498,6 +16570,7 @@ elements.nextQuizButton.addEventListener("click", () => {
 
 elements.generalReviewButton.addEventListener("click", startGeneralReview);
 elements.difficultQuizButton?.addEventListener("click", startDifficultQuiz);
+elements.easyQuizButton?.addEventListener("click", startEasyQuiz);
 elements.contextQuizButton?.addEventListener("click", startContextQuiz);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
