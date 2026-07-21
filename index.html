@@ -11463,14 +11463,22 @@ function renderSavedWords() {
   }
 
   if (words.length === 0) {
+    // 一度も保存していない初回は、取り込み画面への導線を出す（候補リストの空状態と同じ流儀）。
+    if (!needle && !favoritesOnly && appState.words.length === 0) {
+      elements.savedList.className = "word-list empty empty-guide";
+      elements.savedList.innerHTML =
+        "<p>保存済みの単語はまだありません。</p>" +
+        "<p>Step 1 で単語を取り込むと、ここに一覧が表示され、クイズに出せるようになります。</p>" +
+        '<button type="button" class="secondary" data-goto-step="import">単語を取り込む</button>';
+      renderSelection();
+      return;
+    }
     elements.savedList.className = "word-list empty";
     elements.savedList.textContent = needle
       ? `「${wordSearchQuery.trim()}」に一致する単語はありません。`
       : favoritesOnly
         ? "お気に入り（★）の単語はまだありません。単語の★を押すと登録できます。"
-        : appState.words.length === 0
-          ? "保存済みの単語はまだありません。"
-          : "この単語帳にはまだ単語がありません。";
+        : "この単語帳にはまだ単語がありません。";
     renderSelection();
     return;
   }
@@ -15119,11 +15127,17 @@ function statsAccuracyCard(byDay) {
   const grid =
     `<line x1="${pad}" y1="0" x2="${W - pad}" y2="0" style="stroke:var(--line);stroke-width:1"/>` +
     `<line x1="${pad}" y1="${(chartH / 2).toFixed(2)}" x2="${W - pad}" y2="${(chartH / 2).toFixed(2)}" style="stroke:var(--line);stroke-width:1;stroke-dasharray:2 3"/>`;
+  // 読み上げ用: 図は装飾扱い(aria-hidden)にし、日ごとの実データをテキストで列挙する。
+  const srItems = cols
+    .filter((c) => c.rate !== null)
+    .map((c) => `<li>${escapeHtml(`${c.key}：正答率${Math.round(c.rate * 100)}%（${c.answers}回）`)}</li>`)
+    .join("");
   return (
     `<div class="stats-card">` +
     `<h4>正答率の推移（14日）</h4>` +
-    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="直近14日の日別正答率">` +
+    `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">` +
     `${grid}<g>${bars}</g></svg>` +
+    `<ul class="sr-only">${srItems}</ul>` +
     `<p class="stats-caption">棒の高さ＝その日の正答率。点線は50%。</p>` +
     `</div>`
   );
@@ -15169,10 +15183,15 @@ function statsSpeedCard() {
       );
     })
     .join("");
+  // 読み上げ用: 図は装飾扱いにし、区間ごとの件数をテキストで列挙する。
+  const srItems = buckets
+    .map((bk) => `<li>${escapeHtml(`${bk.label}：${bk.count}回`)}</li>`)
+    .join("");
   return (
     `<div class="stats-card">` +
     `<h4>回答速度の分布</h4>` +
-    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="回答速度の分布">${bars}</svg>` +
+    `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>` +
+    `<ul class="sr-only">${srItems}</ul>` +
     `<p class="stats-caption">正答・誤答を含む直近${events.length}回。速く答えられるほど定着の目安。</p>` +
     `</div>`
   );
