@@ -5351,8 +5351,8 @@ accurate 正確な"
               <p class="settings-desc">
                 忘却曲線に沿った標準の間隔（1→3→7→14…日）を、その単語の正答率・全体の直近正答率・
                 回答の速さに応じて0.5〜1.6倍に伸縮します。よく覚えている語は間隔が伸び、
-                忘れかけている語は早めに戻ってきます。オフに戻すと従来の固定間隔に即時復帰します
-                （保存データは変わりません）。
+                忘れかけている語は早めに戻ってきます。オフに戻すと、それ以降の解答は従来の
+                固定間隔で予定されます（すでに決まっている復習日はそのまま残ります）。
               </p>
               <label class="settings-check">
                 <input id="autoSpeakToggle" type="checkbox" />
@@ -5990,9 +5990,12 @@ function adaptiveSrsEnabled() {
 
 // その単語の履歴正答率→係数。3回未満は情報不足として中立(1.0)。段階関数＝決定論でテスト可能。
 function wordAccuracyFactor(history) {
-  const entries = Array.isArray(history) ? history : [];
+  // 壊れた履歴（correctが真偽値でない・日付が読めない）は数えず、中立側へ倒す（F5）。
+  const entries = (Array.isArray(history) ? history : []).filter(
+    (h) => h && typeof h.correct === "boolean" && Number.isFinite(Date.parse(h.at)),
+  );
   if (entries.length < 3) return 1.0;
-  const correct = entries.reduce((n, h) => n + (h && h.correct ? 1 : 0), 0);
+  const correct = entries.reduce((n, h) => n + (h.correct ? 1 : 0), 0);
   const acc = correct / entries.length;
   if (acc >= 0.9) return 1.2;
   if (acc >= 0.8) return 1.1;
@@ -6007,8 +6010,9 @@ function personalAccuracyFactor(words) {
   const entries = [];
   for (const word of words || []) {
     for (const h of word.history || []) {
-      const t = Date.parse(h && h.at);
-      if (Number.isFinite(t)) entries.push({ t, correct: Boolean(h.correct) });
+      if (!h || typeof h.correct !== "boolean") continue; // 不正データは数えない（F5）
+      const t = Date.parse(h.at);
+      if (Number.isFinite(t)) entries.push({ t, correct: h.correct });
     }
   }
   if (entries.length < 20) return 1.0;
@@ -6024,13 +6028,20 @@ function personalAccuracyFactor(words) {
 
 // 3係数を合成し、上下限（0.5〜1.6倍）で丸める。
 function adaptiveSrsMultiplier({ wordFactor, personalFactor, fastCorrect }) {
+  // 有限の正数だけを係数として受け付け、それ以外は中立(1)に落とす（F6）。
+  const wf = Number.isFinite(wordFactor) && wordFactor > 0 ? wordFactor : 1;
+  const pf = Number.isFinite(personalFactor) && personalFactor > 0 ? personalFactor : 1;
   const speedFactor = fastCorrect ? 1.1 : 1.0;
-  const raw = (Number(wordFactor) || 1) * (Number(personalFactor) || 1) * speedFactor;
-  return Math.min(ADAPTIVE_MAX_MULTIPLIER, Math.max(ADAPTIVE_MIN_MULTIPLIER, raw));
+  return Math.min(ADAPTIVE_MAX_MULTIPLIER, Math.max(ADAPTIVE_MIN_MULTIPLIER, wf * pf * speedFactor));
 }
 
 // 全語の履歴を走査するpersonalAccuracyFactorは大きな単語帳だと重いので、60秒キャッシュする。
 let personalFactorCache = { at: 0, value: 1 };
+// 単語帳が丸ごと入れ替わる操作（JSON置換・同期マージ・同期先切替・復元）と
+// トグルON時は、前のデータで計算した係数を持ち越さないよう明示的に破棄する（F2）。
+function invalidatePersonalFactorCache() {
+  personalFactorCache = { at: 0, value: 1 };
+}
 function personalAccuracyFactorCached() {
   const now = Date.now();
   if (now - personalFactorCache.at < 60000) return personalFactorCache.value;
@@ -10135,6 +10146,7 @@ function applyMergedRemoteState(remoteState, suppliedOptions) {
   if (changed) {
     syncState.applyingRemote = true;
     appState = merged;
+    invalidatePersonalFactorCache();
     // 表示済みの問題は同期差分の反映をまたいでも保持する。
     // ここで currentQuiz を破棄すると renderAll() -> renderQuiz() が同じ問題の
     // 選択肢を作り直し、ユーザーが選ぶ前に並び順が変わってしまう。
@@ -10455,6 +10467,7 @@ async function forcePullReplace() {
     // applyingRemote 中の persist は再プッシュしない（サーバー内容をそのまま採用するため）
     syncState.applyingRemote = true;
     appState = normalizeState(remote.state || defaultState());
+    invalidatePersonalFactorCache();
     currentQuiz = null;
     selectedIds.clear();
     persistAppState();
@@ -10546,6 +10559,7 @@ async function restoreFromRevision(rev) {
     syncState.applyingRemote = true;
     try {
       appState = normalizeState(remote.state);
+      invalidatePersonalFactorCache();
       currentQuiz = null;
       selectedIds.clear();
       persistAppState();
@@ -10755,6 +10769,7 @@ async function adoptForeignSyncId(newId) {
     // applyingRemote 中の persist は再pushしない（切り替え先の内容をそのまま採用するため）
     syncState.applyingRemote = true;
     appState = normalizeState(remote.state || defaultState());
+    invalidatePersonalFactorCache();
     currentQuiz = null;
     selectedIds.clear();
     persistAppState();
@@ -16332,7 +16347,8 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
     responseMs < FAST_ANSWER_MS;
   const srsMultiplier = adaptiveSrsEnabled()
     ? adaptiveSrsMultiplier({
-        wordFactor: wordAccuracyFactor(word.history),
+        // 今回の解答は fastCorrect が既に担うので、単語係数は解答前の履歴で計算する（F4）。
+        wordFactor: wordAccuracyFactor(options.historyBeforeAnswer || word.history),
         personalFactor: personalAccuracyFactorCached(),
         fastCorrect,
       })
@@ -17045,6 +17061,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
   currentQuiz.answered = true;
   updateStreakOnAnswer();
   word.stats[isCorrect ? "correct" : "wrong"] += 1;
+  const historyBeforeAnswer = word.history.slice(); // 個人適応SRSの係数計算用（今回の解答を含めない）
   word.history.push({ at: new Date().toISOString(), correct: isCorrect });
   if (word.history.length > 50) word.history = word.history.slice(-50);
   // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
@@ -17067,6 +17084,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
   applyLearningResult(word, isCorrect, Boolean(currentQuiz.srsDueAtStart), answeredAt, {
     responseMs,
     skipSpeedGate,
+    historyBeforeAnswer,
   });
   recordReviewEvent({
     wordId: currentQuiz.answer.id,
@@ -18802,6 +18820,7 @@ elements.importConfirmButton?.addEventListener("click", () => {
   const snapshot = snapshotState();
   const previousWords = appState.words;
   appState = normalizeState(pendingImport);
+  invalidatePersonalFactorCache();
   // 【復活防止】置き換えで消えた単語（置換前にあり置換後に無い）へ削除の記録（墓標）を付ける。
   // これが無いと、次の同期マージで他端末側に残っている同じ単語が復活してしまう。
   // 同じ単語が置換後にも存在すればキーが一致して墓標は付かない＝再インポートしても冪等。
@@ -18918,6 +18937,7 @@ elements.quizTimeLimitSelect?.addEventListener("change", () => {
 });
 
 elements.adaptiveSrsToggle?.addEventListener("change", () => {
+  invalidatePersonalFactorCache(); // 切替時は必ず作り直す
   try {
     if (elements.adaptiveSrsToggle.checked) localStorage.setItem(ADAPTIVE_SRS_KEY, "1");
     else localStorage.removeItem(ADAPTIVE_SRS_KEY);

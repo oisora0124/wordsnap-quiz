@@ -306,12 +306,13 @@ new Script(
     "const SLOW_ANSWER_MS = 5000;\n" +
     "const MAX_TIMED_ANSWER_MS = 60000;\n" +
     // 個人適応SRSは既定OFF。OFF時に従来の間隔・判定と完全一致することを、
-    // この回帰検査がそのまま保証し続ける（スタブは常に1＝無効）。
+    // この回帰検査がそのまま保証し続ける。係数関数のスタブは「呼ばれたら例外」にして、
+    // OFF経路が履歴走査へ一切入らないことも同時に証明する。
     "const FAST_ANSWER_MS = 3000;\n" +
     "const adaptiveSrsEnabled = () => false;\n" +
-    "const adaptiveSrsMultiplier = () => 1;\n" +
-    "const wordAccuracyFactor = () => 1;\n" +
-    "const personalAccuracyFactorCached = () => 1;\n" +
+    "const adaptiveSrsMultiplier = () => { throw new Error('adaptive multiplier must not run while OFF'); };\n" +
+    "const wordAccuracyFactor = () => { throw new Error('word factor must not run while OFF'); };\n" +
+    "const personalAccuracyFactorCached = () => { throw new Error('personal factor must not run while OFF'); };\n" +
     "const appState = { quizCounter: 10 };\n" +
     "Math.random = () => 0.5;\n" +
     `${publicHtml.slice(learningStart, learningEnd)}\n` +

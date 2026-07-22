@@ -224,6 +224,11 @@ test("adaptive SRS: combined multiplier is clamped to [0.5, 1.6]", () => {
   // 代表的な組み合わせ: 1.2 * 1.1 * 1.1 = 1.452（丸めなし領域）
   const v = q.adaptiveSrsMultiplier({ wordFactor: 1.2, personalFactor: 1.1, fastCorrect: true });
   assert.ok(Math.abs(v - 1.452) < 1e-9);
+  // 不正な係数（0・負・無限大・NaN・未指定）は中立(1)として扱う
+  for (const bad of [0, -1, Infinity, NaN, undefined, null, "x"]) {
+    assert.equal(q.adaptiveSrsMultiplier({ wordFactor: bad, personalFactor: bad, fastCorrect: false }), 1.0,
+      `invalid factor ${String(bad)} must fall back to neutral`);
+  }
 });
 
 test("adaptive SRS: multiplier=1 keeps legacy intervals exactly; scaling shifts them", () => {
@@ -239,6 +244,77 @@ test("adaptive SRS: multiplier=1 keeps legacy intervals exactly; scaling shifts 
   // 不正値は1として扱う
   assert.equal(q.srsIntervalMs(3, NaN), 7 * q.SRS_DAY_MS);
   assert.equal(q.srsIntervalMs(3, 0), 7 * q.SRS_DAY_MS);
+});
+
+// 学習スケジューラ本体（scheduleReview〜applyLearningResult）を、切替可能な
+// 個人適応フラグ付きで丸ごと実行するサンドボックス。係数は固定スタブにして
+// 「倍率の通り道」だけを検証する（係数関数自体の検証は上の純関数テストが担う）。
+function buildLearningSandbox() {
+  const start = html.indexOf("function scheduleReview(");
+  const end = html.indexOf("\nfunction shuffle(", start);
+  if (start < 0 || end <= start) throw new Error("learning scheduler source not found");
+  const pieces = [
+    "const SRS_DAY_MS = 86400000;",
+    "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];",
+    "const SLOW_ANSWER_MS = 5000;",
+    "const MAX_TIMED_ANSWER_MS = 60000;",
+    "const FAST_ANSWER_MS = 3000;",
+    "let __adaptive = false;",
+    "const adaptiveSrsEnabled = () => __adaptive;",
+    "const wordAccuracyFactor = () => 1.2;",
+    "const personalAccuracyFactorCached = () => 1.1;",
+    "const adaptiveSrsMultiplier = ({ wordFactor, personalFactor, fastCorrect }) =>" +
+      " Math.min(1.6, Math.max(0.5, wordFactor * personalFactor * (fastCorrect ? 1.1 : 1)));",
+    "const appState = { quizCounter: 10 };",
+    "Math.random = () => 0.5;",
+    html.slice(start, end),
+    "globalThis.__l = { applyLearningResult, setAdaptive: (v) => { __adaptive = v; } };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "adaptive-learning-check.js" }).runInNewContext(sandbox);
+  return sandbox.__l;
+}
+
+test("adaptive SRS ON/OFF: only nextReviewAt scales; status/stage/streak are identical", () => {
+  const L = buildLearningSandbox();
+  const NOW = 1_700_000_000_000;
+  const freshLearning = (over = {}) => ({
+    status: "new", firstAttempted: false, reviewAt: 0, blockedUntil: 0,
+    correctStreak: 0, srsStage: 0, nextReviewAt: 0, srsUpdatedAt: 0, lastSrsResult: "", ...over,
+  });
+  // シナリオ: [説明, learning初期値, isCorrect, srsDueAtStart, options, 前進(倍率が効く)か]
+  const scenarios = [
+    ["未開始の速い正解", freshLearning(), true, false, { responseMs: 1000 }, true],
+    ["期限到来の速い正解", freshLearning({ srsStage: 2, nextReviewAt: NOW - 1000, status: "review" }), true, true, { responseMs: 1000 }, true],
+    ["期限前の正解(前進なし)", freshLearning({ srsStage: 2, nextReviewAt: NOW + 9e9, status: "review", correctStreak: 1 }), true, false, { responseMs: 1000 }, false],
+    ["遅い正解(固定1日)", freshLearning({ srsStage: 2, nextReviewAt: NOW - 1000, status: "review" }), true, true, { responseMs: 9000 }, false],
+    ["誤答(固定1日・2段階降格)", freshLearning({ srsStage: 5, nextReviewAt: NOW - 1000, status: "review" }), false, true, { responseMs: 1000 }, false],
+    ["習得済みの前進", freshLearning({ status: "mastered", srsStage: 3, nextReviewAt: NOW - 1000, correctStreak: 2 }), true, true, { responseMs: 1000 }, true],
+  ];
+  const MULT = 1.2 * 1.1 * 1.1; // スタブ係数×速い正解
+  for (const [label, base, isCorrect, dueAtStart, options, advances] of scenarios) {
+    const run = (adaptive) => {
+      L.setAdaptive(adaptive);
+      const word = { learning: structuredClone(base), history: [] };
+      L.applyLearningResult(word, isCorrect, dueAtStart, NOW, { ...options });
+      return word.learning;
+    };
+    const off = run(false);
+    const on = run(true);
+    // 保護フィールド: 倍率が何であれ一致しなければならない
+    for (const key of ["status", "srsStage", "correctStreak", "reviewAt", "firstAttempted", "lastSrsResult", "blockedUntil"]) {
+      assert.deepEqual(on[key], off[key], `${label}: ${key} must not differ by adaptive mode`);
+    }
+    if (advances) {
+      // 前進シナリオだけ、期日がちょうど倍率分だけ伸びる（jitterは0.5固定=1.0）
+      const offDelta = off.nextReviewAt - NOW;
+      const onDelta = on.nextReviewAt - NOW;
+      assert.ok(offDelta > 0, `${label}: legacy must schedule a future review`);
+      assert.equal(onDelta, Math.round(offDelta * MULT), `${label}: adaptive must scale interval by the multiplier`);
+    } else {
+      assert.equal(on.nextReviewAt, off.nextReviewAt, `${label}: non-advance paths must not scale`);
+    }
+  }
 });
 
 test("built-in sample word sets are well-formed (format, no dups, expected size)", () => {
