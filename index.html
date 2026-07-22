@@ -2068,18 +2068,41 @@ textarea:focus-visible {
   font-weight: 650;
 }
 
-/* サンプル単語集のタブ型チップ（deck-tab と同じ見た目言語） */
+/* サンプル単語集：折りたたみ＋タブ型チップ（deck-tab と同じ見た目言語） */
+.sample-details {
+  margin-top: var(--space-2);
+}
+.sample-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none; /* 既定の▶マーカーを消してチップに見せる */
+}
+.sample-details > summary::-webkit-details-marker {
+  display: none;
+}
+.sample-details > summary:hover {
+  border-color: var(--action-bg);
+}
+.sample-details[open] > summary {
+  color: var(--action-fg);
+  background: var(--action-bg);
+  border-color: var(--action-bg);
+}
 .sample-chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
   margin-top: var(--space-2);
-}
-.sample-chips-label {
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 650;
 }
 .sample-chip {
   white-space: nowrap;
@@ -4716,15 +4739,18 @@ accurate 正確な"
           </label>
         </div>
         <!-- サンプル単語集：タブ型チップ。押すと下の入力欄の末尾に追記される -->
-        <div class="sample-chips" role="group" aria-label="サンプル単語集を追加">
-          <span class="sample-chips-label">サンプル:</span>
-          <button class="sample-chip" type="button" data-sample="jhs100">中学基礎300</button>
-          <button class="sample-chip" type="button" data-sample="exam300">大学受験標準300</button>
-          <button class="sample-chip" type="button" data-sample="eiken100">英検準1級300</button>
-          <button class="sample-chip" type="button" data-sample="soukei100">早慶レベル300</button>
-          <button class="sample-chip" type="button" data-sample="toeic100">TOEIC頻出300</button>
-          <button class="sample-chip" type="button" data-sample="ielts100">IELTS頻出300</button>
-        </div>
+        <!-- 折りたたみ：普段は1行だけ。開くとレベル別のチップが現れる -->
+        <details class="sample-details">
+          <summary>📚 サンプル単語帳を追加</summary>
+          <div class="sample-chips" role="group" aria-label="サンプル単語集を追加">
+            <button class="sample-chip" type="button" data-sample="jhs100">中学基礎300</button>
+            <button class="sample-chip" type="button" data-sample="exam300">大学受験標準300</button>
+            <button class="sample-chip" type="button" data-sample="eiken100">英検準1級300</button>
+            <button class="sample-chip" type="button" data-sample="soukei100">早慶レベル300</button>
+            <button class="sample-chip" type="button" data-sample="toeic100">TOEIC頻出300</button>
+            <button class="sample-chip" type="button" data-sample="ielts100">IELTS頻出300</button>
+          </div>
+        </details>
         <p id="status" class="status" role="status">単語と訳を貼り付けるか、写真を端末内OCRで読み取れます（1行に「英単語 意味」）。</p>
         <!-- 変換結果が「すべて保存済み」だったときだけ表示する導線。次の変換操作で自動的に消える。 -->
         <div id="importAllSavedActions" class="actions" hidden>
