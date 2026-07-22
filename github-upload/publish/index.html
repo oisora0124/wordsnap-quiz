@@ -11261,9 +11261,25 @@ function setActiveDeck(id) {
   saveState();
 }
 
+function validateDeckName(value, currentDeckId = null) {
+  const name = String(value || "").replace(/\s+/g, " ").trim();
+  if (!name) return { error: "単語帳の名前を入力してください。" };
+  if (name.length > 80) return { error: "単語帳の名前は80文字以内にしてください。" };
+  const duplicate = appState.decks.some(
+    (deck) => deck.id !== currentDeckId && deck.name.trim().toLowerCase() === name.toLowerCase(),
+  );
+  if (duplicate) return { error: `単語帳「${name}」はすでにあります。別の名前を入力してください。` };
+  return { name };
+}
+
 function addDeck() {
-  const name = (window.prompt("新しい単語帳の名前を入力してください。") || "").trim();
-  if (!name) return;
+  const input = window.prompt("新しい単語帳の名前を入力してください。");
+  if (input === null) return;
+  const { name, error } = validateDeckName(input);
+  if (error) {
+    setStatus(error);
+    return;
+  }
   const deck = { id: createId(), name, updatedAt: Date.now() };
   appState.decks.push(deck);
   appState.activeDeckId = deck.id;
@@ -11275,11 +11291,21 @@ function addDeck() {
 function renameDeck() {
   const deck = appState.decks.find((item) => item.id === appState.activeDeckId);
   if (!deck) return;
-  const name = (window.prompt("単語帳の名前を変更します。", deck.name) || "").trim();
-  if (!name) return;
+  const input = window.prompt("単語帳の名前を変更します。", deck.name);
+  if (input === null) return;
+  if (input === deck.name) {
+    setStatus("単語帳の名前は変更されていません。");
+    return;
+  }
+  const { name, error } = validateDeckName(input, deck.id);
+  if (error) {
+    setStatus(error);
+    return;
+  }
   deck.name = name;
   deck.updatedAt = Date.now(); // 改名時刻を記録（同期時に新しい名前が勝つ）
   saveState();
+  setStatus(`単語帳の名前を「${name}」に変更しました。`);
 }
 
 function deleteDeck(button) {
@@ -13398,7 +13424,9 @@ function renderTrash() {
 }
 
 function restoreTrashWord(trashId) {
-  const item = (appState.trash || []).find((entry) => entry.id === trashId);
+  const trash = appState.trash || [];
+  const removedIndex = trash.findIndex((entry) => entry.id === trashId);
+  const item = trash[removedIndex];
   if (!item) return;
   const word = normalizeWord(item.word);
   const deckIds = new Set(appState.decks.map((deck) => deck.id));
@@ -13430,11 +13458,22 @@ function restoreTrashWord(trashId) {
   selectedIds.delete(word.id);
   saveState();
   setStatus(`「${word.term}」を単語帳「${deckName(word.deckId)}」に戻しました。`);
+  focusTrashActionAfterRemoval(removedIndex, "restore");
+}
+
+function focusTrashActionAfterRemoval(removedIndex, action) {
+  const rows = [...elements.trashList.querySelectorAll(".trash-item")];
+  const row = rows[Math.min(Math.max(0, removedIndex), rows.length - 1)];
+  const selector = action === "purge" ? "[data-purge-trash]" : "[data-restore-trash]";
+  const target = row?.querySelector(selector) || elements.trashToggleButton;
+  target?.focus({ preventScroll: true });
 }
 
 // 削除済みから1件だけ完全に削除する（復元不可。削除の記録は残すので同期で復活しない）
 function permanentlyDeleteTrash(trashId, button) {
-  const item = (appState.trash || []).find((entry) => entry.id === trashId);
+  const trash = appState.trash || [];
+  const removedIndex = trash.findIndex((entry) => entry.id === trashId);
+  const item = trash[removedIndex];
   if (!item) return;
   const term = item.word?.term || "この単語";
   // window.confirm はiOSのホーム画面起動で固まるため、2段階タップで確定する
@@ -13445,6 +13484,7 @@ function permanentlyDeleteTrash(trashId, button) {
   appState.trash = (appState.trash || []).filter((entry) => entry.id !== trashId);
   saveState();
   setStatus(`「${term}」を完全に削除しました。`);
+  focusTrashActionAfterRemoval(removedIndex, "purge");
 }
 
 // 削除済みをすべて完全に削除する（復元不可）
@@ -18916,8 +18956,13 @@ function parseDeckSharePayload(raw) {
 }
 
 elements.exportButton.addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(appState, null, 2)], { type: "application/json" });
-  downloadBlob(blob, "wordsnap-quiz-data.json");
+  try {
+    const blob = new Blob([JSON.stringify(appState, null, 2)], { type: "application/json" });
+    downloadBlob(blob, "wordsnap-quiz-data.json");
+    setStatus("JSONバックアップを書き出しました。安全な場所に保管してください。");
+  } catch {
+    setStatus("JSONバックアップを書き出せませんでした。空き容量を確認して、もう一度お試しください。");
+  }
 });
 
 elements.importDeckShareInput?.addEventListener("change", async () => {
@@ -18993,6 +19038,11 @@ elements.importJsonInput.addEventListener("change", async () => {
       return;
     }
     const imported = JSON.parse(await file.text());
+    if (imported?.kind === "wordbank-deck") {
+      hideImportConfirmBar();
+      setStatus("これは共有単語帳のJSONです。隣の「共有単語帳を追加」から読み込んでください。");
+      return;
+    }
     if (!imported || !Array.isArray(imported.words)) throw new Error("Invalid data");
     if (imported.words.length > IMPORT_MAX_WORDS) {
       hideImportConfirmBar();
