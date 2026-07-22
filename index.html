@@ -3408,6 +3408,8 @@ textarea:focus-visible {
 }
 
 .speak-button {
+  min-width: 2.25rem;
+  min-height: 2.25rem;
   padding: 0.2rem 0.45rem;
   color: var(--accent-text);
   background: var(--accent-soft);
@@ -3420,6 +3422,12 @@ textarea:focus-visible {
 .speak-button:hover {
   color: #fff;
   background: var(--accent);
+}
+
+.speak-button.is-speaking {
+  color: var(--action-fg);
+  background: var(--action-bg);
+  border-color: var(--action-bg);
 }
 
 .saved-meaning {
@@ -4560,9 +4568,9 @@ textarea:focus-visible {
               <span class="theme-toggle-icon" aria-hidden="true"></span>
               <span class="theme-toggle-text">ダーク</span>
             </button>
-            <button id="downloadToolButton" class="tool-button" type="button">
+            <button id="downloadToolButton" class="tool-button" type="button" aria-label="オフライン用HTMLを保存" title="オフライン用HTMLを保存">
               <span class="tool-icon download-icon" aria-hidden="true"></span>
-              <span>ツールを保存</span>
+              <span>HTMLを保存</span>
             </button>
           </div>
         </div>
@@ -5060,6 +5068,8 @@ accurate 正確な"
             autocomplete="off"
             placeholder="単語・意味で検索（例: apple / りんご）"
             aria-label="保存した単語を、単語と意味の両方から検索"
+            aria-keyshortcuts="Control+K Meta+K Escape"
+            title="Ctrl/⌘+Kで検索へ移動、Escでクリア"
           />
           <span id="wordSearchCount" class="word-search-count" hidden></span>
           <button id="wordSearchClear" class="word-search-clear" type="button" aria-label="検索をクリア" hidden>×</button>
@@ -13856,7 +13866,13 @@ function updateResumeButton() {
   if (!button) return;
   const saved = !reviewSession && !quizStarted ? readSavedReviewProgress() : null;
   button.hidden = !saved;
-  if (saved) button.textContent = `▶ 前回の続きから（残り${saved.queue.length}語）`;
+  if (saved) {
+    const label = String(saved.label || "クイズ").replace(/\s+/g, " ").trim();
+    button.textContent = `▶ ${label}を再開（残り${saved.queue.length}語）`;
+    button.title = `前回中断した${label}を続きから再開します。`;
+  } else {
+    button.removeAttribute("title");
+  }
 }
 
 // 保存済みスナップショットから reviewSession を復元して再開する
@@ -17659,16 +17675,74 @@ function backfillSavedPos() {
   scheduleIdleTask(runBatch);
 }
 
-function speakWord(term) {
+let activeSpeechButton = null;
+let activeSpeechUtterance = null;
+
+function resetSpeechButton(button, term) {
+  if (!button) return;
+  button.classList.remove("is-speaking");
+  button.setAttribute("aria-label", `${term} の発音を聞く`);
+  button.title = "発音を聞く";
+  if (activeSpeechButton === button) activeSpeechButton = null;
+}
+
+function speakWord(term, button = null) {
   if (!("speechSynthesis" in window)) {
     setStatus("この端末は音声読み上げに対応していません。");
-    return;
+    return false;
+  }
+  const spokenTerm = String(term || "").trim();
+  if (!spokenTerm) {
+    setStatus("発音する単語が見つかりませんでした。");
+    return false;
+  }
+
+  if (activeSpeechButton) {
+    resetSpeechButton(activeSpeechButton, activeSpeechButton.dataset.speechTerm || "単語");
   }
   window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(term);
+  const utterance = new SpeechSynthesisUtterance(spokenTerm);
+  activeSpeechUtterance = utterance;
   utterance.lang = "en-US";
   utterance.rate = 0.95;
-  window.speechSynthesis.speak(utterance);
+  if (button) {
+    activeSpeechButton = button;
+    button.dataset.speechTerm = spokenTerm;
+    button.classList.add("is-speaking");
+    button.setAttribute("aria-label", `${spokenTerm} の発音を再生中`);
+    button.title = "発音を再生中";
+  }
+  utterance.onstart = () => {
+    if (button && activeSpeechUtterance === utterance) {
+      setStatus(`「${spokenTerm}」の発音を再生しています。`);
+    }
+  };
+  utterance.onend = () => {
+    if (activeSpeechUtterance !== utterance) return;
+    activeSpeechUtterance = null;
+    resetSpeechButton(button, spokenTerm);
+    if (button) setStatus(`「${spokenTerm}」の発音を再生しました。`);
+  };
+  utterance.onerror = (event) => {
+    if (activeSpeechUtterance !== utterance) return;
+    activeSpeechUtterance = null;
+    resetSpeechButton(button, spokenTerm);
+    if (event.error === "canceled" || event.error === "interrupted") return;
+    if (button) {
+      setStatus("発音を再生できませんでした。端末の音声設定を確認して、もう一度お試しください。");
+    }
+  };
+  try {
+    window.speechSynthesis.speak(utterance);
+    return true;
+  } catch {
+    if (activeSpeechUtterance === utterance) activeSpeechUtterance = null;
+    resetSpeechButton(button, spokenTerm);
+    if (button) {
+      setStatus("発音を再生できませんでした。端末の音声設定を確認して、もう一度お試しください。");
+    }
+    return false;
+  }
 }
 
 function historyMarkup(word) {
@@ -18410,7 +18484,7 @@ elements.savedList.addEventListener("click", async (event) => {
   const speakButton = event.target.closest("[data-speak-word]");
   if (speakButton) {
     const word = appState.words.find((item) => item.id === speakButton.dataset.speakWord);
-    if (word) speakWord(word.term);
+    if (word) speakWord(word.term, speakButton);
     return;
   }
 
@@ -18525,6 +18599,19 @@ elements.choices.addEventListener("keydown", (event) => {
 
 // キーボード操作: 1〜4で解答、N/Enterで次の問題、0で「わからない」。
 document.addEventListener("keydown", (event) => {
+  const key = event.key.toLowerCase();
+  // 保存一覧では Ctrl/⌘+K でどこからでも検索へ移動できるようにする。
+  if (
+    activeStepId === "library" &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    key === "k"
+  ) {
+    event.preventDefault();
+    elements.wordSearchInput?.focus();
+    elements.wordSearchInput?.select();
+    return;
+  }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const target = event.target;
   const tag = (target.tagName || "").toLowerCase();
@@ -18542,7 +18629,6 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
-  const key = event.key.toLowerCase();
   if ((key === "n" || event.key === "Enter") && !elements.nextQuizButton.hidden) {
     elements.nextQuizButton.click();
     event.preventDefault();
@@ -18715,11 +18801,21 @@ elements.wordSearchInput?.addEventListener("input", () => {
   wordSearchQuery = elements.wordSearchInput.value;
   renderSavedWords();
 });
-elements.wordSearchClear?.addEventListener("click", () => {
+function clearWordSearch({ focus = true } = {}) {
   wordSearchQuery = "";
   elements.wordSearchInput.value = "";
   renderSavedWords();
-  elements.wordSearchInput.focus();
+  if (focus) elements.wordSearchInput.focus();
+}
+elements.wordSearchClear?.addEventListener("click", () => clearWordSearch());
+elements.wordSearchInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  if (elements.wordSearchInput.value || wordSearchQuery) {
+    clearWordSearch();
+  } else {
+    elements.wordSearchInput.blur();
+  }
 });
 
 // 並び替え（追加順・正答率が低い順・間違えた回数が多い順）
@@ -19212,7 +19308,7 @@ elements.vibrateToggle?.addEventListener("change", () => {
   if (elements.vibrateToggle.checked) vibrateFeedback(15); // ONにした瞬間に体感できるよう1回だけ振動
   playSound("tap");
 });
-// 配布元HTMLを安全に再取得できる http/https 版だけ「ツールを保存」を表示する。
+// 配布元HTMLを安全に再取得できる http/https 版だけ「HTMLを保存」を表示する。
 // file:// で開いた保存版は fetch できないため、失敗するボタンを出さない。
 if (location.protocol === "http:" || location.protocol === "https:") {
   elements.downloadToolButton.addEventListener("click", downloadStandalone);
