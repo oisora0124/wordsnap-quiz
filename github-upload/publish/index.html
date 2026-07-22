@@ -16710,8 +16710,10 @@ function renderStreakCalendar() {
   }
   const monthRate = monthAnswers ? Math.round((monthCorrect / monthAnswers) * 100) : 0;
   if (elements.streakSummary) {
+    const goal = dailyGoalWords();
     const stats = [
       ["現在の連続", `${streak.count}日`],
+      ...(goal ? [["今日の目標", `${todayAnswerCount()}/${goal}語`]] : []),
       // 保存済みの記録と履歴からの再計算の大きい方。移行前のデータでも履歴があれば拾える。
       ["連続の最高記録", `${Math.max(streak.best, longestStreakFromDays(byDay.keys()))}日`],
       ["この月の学習日", `${monthDays}日`],
@@ -17158,6 +17160,9 @@ function gradeQuiz(choiceId, dontKnow = false) {
   updateStreakOnAnswer();
   word.stats[isCorrect ? "correct" : "wrong"] += 1;
   const historyBeforeAnswer = word.history.slice(); // 個人適応SRSの係数計算用（今回の解答を含めない）
+  // デイリーゴールの当日カウントは履歴push前に確定させる。push後に日付跨ぎで
+  // 再集計されると今回の解答が二重に数えられるため。
+  bumpTodayAnswerCount();
   word.history.push({ at: new Date().toISOString(), correct: isCorrect });
   if (word.history.length > 50) word.history = word.history.slice(-50);
   // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
@@ -17182,8 +17187,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
     skipSpeedGate,
     historyBeforeAnswer,
   });
-  // デイリーゴール（復習セッションの解答も1問と数える）とセッション集計
-  bumpTodayAnswerCount();
+  // セッション集計（復習セッションの解答はデイリーゴールにのみ計上済み）
   if (!reviewSession) {
     quizSessionStats.answered += 1;
     if (isCorrect) quizSessionStats.correct += 1;
