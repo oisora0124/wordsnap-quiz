@@ -4865,7 +4865,7 @@ accurate 正確な"
             <h2 id="candidateTitle">保存前に確認</h2>
           </div>
           <div class="pill-group">
-            <span id="candidateCount" class="pill">0 candidates</span>
+            <span id="candidateCount" class="pill" aria-live="polite" aria-atomic="true">候補 0件</span>
             <button id="saveParsedButton" class="secondary" type="button" disabled>候補を保存</button>
           </div>
         </div>
@@ -5120,10 +5120,10 @@ accurate 正確な"
             <summary>📖 ツールの使い方</summary>
             <div class="settings-section-body">
               <ol class="usage-steps">
-                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。※写真からの読み取り(OCR)は精度が低く非推奨です。</li>
+                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。写真からの読み取り（OCR）は写真の鮮明さやレイアウトで結果が変わるため、取り込み後に「確認」で直してください。</li>
                 <li><strong>確認</strong>：取り込んだ候補をチェックして「保存」。保存先の単語帳も選べます。</li>
                 <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
-                <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲削除。</li>
+                <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲選択し、選んだ単語をまとめて出題・削除できます。</li>
                 <li><strong>設定</strong>：「JSONバックアップ」から単語・成績・単語帳を書き出せます。</li>
                 <li><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
               </ol>
@@ -13235,6 +13235,7 @@ function appendSavedWordRows(words, startIndex) {
     row.dataset.wordId = word.id;
     row.dataset.savedIndex = String(index + 1);
     const safeTerm = escapeHtml(word.term);
+    const favoriteAction = word.favorite ? "お気に入りから外す" : "お気に入りに追加";
     row.innerHTML = `
       <div class="saved-row">
         <div class="saved-head">
@@ -13242,7 +13243,7 @@ function appendSavedWordRows(words, startIndex) {
             selectedIds.has(word.id) ? " checked" : ""
           } aria-label="${safeTerm} を選択" />
           <span class="saved-index">${index + 1}</span>
-          <button class="favorite-button${word.favorite ? " is-favorite" : ""}" type="button" data-favorite-word="${word.id}" aria-pressed="${word.favorite}" aria-label="${safeTerm} をお気に入りに追加/解除" title="お気に入りに追加/解除">★</button>
+          <button class="favorite-button${word.favorite ? " is-favorite" : ""}" type="button" data-favorite-word="${word.id}" aria-pressed="${word.favorite}" aria-label="${safeTerm} を${favoriteAction}" title="${favoriteAction}">★</button>
           <strong>${safeTerm}</strong>
           ${posBadgeMarkup(word)}
           <button class="speak-button" type="button" data-speak-word="${word.id}" aria-label="${safeTerm} の発音を聞く" title="発音を聞く">🔊</button>
@@ -18249,10 +18250,17 @@ elements.candidateList.addEventListener("input", (event) => {
 });
 
 elements.candidateList.addEventListener("click", (event) => {
-  const index = event.target.dataset.remove;
-  if (index === undefined) return;
-  candidates.splice(Number(index), 1);
+  const removeButton = event.target.closest("[data-remove]");
+  if (!removeButton) return;
+  const index = Number(removeButton.dataset.remove);
+  candidates.splice(index, 1);
   renderCandidates();
+  // 再描画後も操作位置を見失わないよう、次の候補（末尾なら1つ前）へフォーカスを移す。
+  const nextIndex = Math.min(index, candidates.length - 1);
+  const nextTarget = nextIndex >= 0
+    ? elements.candidateList.querySelector(`[data-index="${nextIndex}"][data-field="term"]`)
+    : elements.candidateList.querySelector('[data-goto-step="import"]');
+  nextTarget?.focus();
 });
 
 elements.saveParsedButton.addEventListener("click", () => {
@@ -18643,6 +18651,15 @@ elements.savedNumberJump?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
   jumpToSavedWordNumber();
+});
+
+// 番号範囲を入力してEnterでも「選択に追加」を実行できるようにする。
+[elements.rangeSelectFrom, elements.rangeSelectTo].forEach((input) => {
+  input?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    elements.rangeSelectButton?.click();
+  });
 });
 
 // お気に入り（★）だけ表示の切り替え
