@@ -3510,6 +3510,11 @@ textarea:focus-visible {
   background: var(--accent-strong);
 }
 
+.enrich-chip:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
 .enrich-results {
   display: grid;
   gap: 8px;
@@ -4103,6 +4108,13 @@ textarea:focus-visible {
   min-height: 1.2rem;
   margin: 12px 0 0;
   color: rgba(255, 255, 255, 0.92);
+}
+
+.quiz-next-hint {
+  margin: 6px 0 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.82rem;
+  font-weight: 650;
 }
 
 /* ---------- JSON import label as button ---------- */
@@ -4977,6 +4989,7 @@ accurate 正確な"
           <div id="choices" class="choices"></div>
           <button id="dontKnowButton" class="dont-know" type="button" hidden>わからない</button>
           <p id="quizFeedback" class="feedback" role="status" aria-live="polite"></p>
+          <p id="quizNextHint" class="quiz-next-hint" hidden></p>
         </div>
 
         <div class="actions quiz-actions">
@@ -8012,6 +8025,7 @@ const elements = {
   quizWord: document.querySelector("#quizWord"),
   choices: document.querySelector("#choices"),
   quizFeedback: document.querySelector("#quizFeedback"),
+  quizNextHint: document.querySelector("#quizNextHint"),
   startQuizButton: document.querySelector("#startQuizButton"),
   difficultQuizButton: document.querySelector("#difficultQuizButton"),
   easyQuizButton: document.querySelector("#easyQuizButton"),
@@ -11068,10 +11082,21 @@ function initWordsnapSync() {
   });
   elements.syncCopyLinkButton?.addEventListener("click", async () => {
     rememberSyncIdInUrl(syncState.id);
+    const button = elements.syncCopyLinkButton;
+    const showCopyResult = (label) => {
+      window.clearTimeout(Number(button.dataset.copyLabelTimer || 0));
+      button.textContent = label;
+      button.dataset.copyLabelTimer = String(window.setTimeout(() => {
+        if (button.isConnected) button.textContent = "個人リンクをコピー";
+        delete button.dataset.copyLabelTimer;
+      }, 2200));
+    };
     try {
       await navigator.clipboard.writeText(window.location.href);
+      showCopyResult("✓ コピーしました");
       setSyncStatus("✓ 個人リンクをコピーしました。別の端末でこのリンクを開くと、データを引き継げます。", "live");
     } catch {
+      showCopyResult("コピーできませんでした");
       setSyncStatus("コピーできませんでした。アドレスバーのURLを手動でコピーしてください。", "error");
     }
   });
@@ -13747,6 +13772,15 @@ function updateQuizControls() {
   // 押した回数だけ解決コールバックが積み上がる（進んだように見えて進まない）。
   elements.nextQuizButton.hidden =
     !quizActive || showingResult || currentQuiz?.contextPending === true;
+  if (elements.quizNextHint) {
+    const canAdvance = !elements.nextQuizButton.hidden && currentQuiz?.answered;
+    elements.quizNextHint.hidden = !canAdvance;
+    if (canAdvance) {
+      elements.quizNextHint.textContent = autoNextEnabled()
+        ? `${autoNextDelay() / 1000}秒後に自動で進みます（「次の問題」またはNキーですぐ進めます）。`
+        : `「次の問題」またはNキーで進みます。`;
+    }
+  }
   elements.dontKnowButton.hidden = !questionActive || showingResult;
   elements.exitReviewButton.hidden = !inReview;
   if (elements.exitQuizButton) {
@@ -17976,19 +18010,23 @@ async function handleEnrichChip(chip) {
   const item = chip.closest(".saved-item");
   const results = item.querySelector(".enrich-results");
   const pressed = chip.getAttribute("aria-pressed") === "true";
+  const retrying = chip.dataset.enrichError === "1";
 
-  if (pressed) {
+  if (pressed && !retrying) {
     chip.setAttribute("aria-pressed", "false");
     results.querySelector(`[data-section="${type}"]`)?.remove();
     return;
   }
 
+  delete chip.dataset.enrichError;
   chip.setAttribute("aria-pressed", "true");
   let section = results.querySelector(`[data-section="${type}"]`);
   if (!section) {
     section = document.createElement("div");
     section.className = "enrich-section";
     section.dataset.section = type;
+    section.setAttribute("role", "region");
+    section.setAttribute("aria-label", `${enrichLabel(type)}の補完結果`);
     results.append(section);
     sortEnrichSections(results);
   }
@@ -18000,16 +18038,36 @@ async function handleEnrichChip(chip) {
     return;
   }
 
+  const label = enrichLabel(type);
+  section.setAttribute("aria-busy", "true");
+  chip.disabled = true;
+  chip.textContent = `${label} 読込中…`;
+  chip.setAttribute("aria-label", `${label}を読み込んでいます`);
   section.innerHTML = enrichSectionShell(type, `<p class="enrich-loading">読み込み中…</p>`);
-  // 類義語は見出し語の品詞（あれば）と一致するものを優先して取得する
-  const data = await window.Enrich.fetch(type, word.term, word.pos?.tag || null);
-  if (data && !window.Enrich.isEmpty(type, data)) {
-    word.enrich[type] = data;
-    // enrichは端末ローカルの再取得可能キャッシュで同期payloadから除外済み。
-    persistAppState({ sync: false });
+  try {
+    // 類義語は見出し語の品詞（あれば）と一致するものを優先して取得する
+    const data = await window.Enrich.fetch(type, word.term, word.pos?.tag || null);
+    if (data && !window.Enrich.isEmpty(type, data)) {
+      word.enrich[type] = data;
+      // enrichは端末ローカルの再取得可能キャッシュで同期payloadから除外済み。
+      persistAppState({ sync: false });
+    }
+    if (chip.getAttribute("aria-pressed") !== "true") return;
+    section.innerHTML = enrichSectionShell(type, enrichBody(type, data, word.term));
+  } catch {
+    if (chip.getAttribute("aria-pressed") === "true") {
+      chip.dataset.enrichError = "1";
+      section.innerHTML = enrichSectionShell(
+        type,
+        enrichEmpty(`読み込めませんでした。通信状態を確認して、「${label}」をもう一度押してください。`),
+      );
+    }
+  } finally {
+    section.setAttribute("aria-busy", "false");
+    chip.disabled = false;
+    chip.textContent = label;
+    chip.removeAttribute("aria-label");
   }
-  if (chip.getAttribute("aria-pressed") !== "true") return;
-  section.innerHTML = enrichSectionShell(type, enrichBody(type, data, word.term));
 }
 
 // 表示済みの例文・語源・類義語のうち和訳が未取得のものを裏側でまとめて翻訳し、
@@ -18525,10 +18583,16 @@ elements.savedList.addEventListener("click", async (event) => {
 
   const detailButton = event.target.closest("[data-toggle-detail]");
   if (detailButton) {
-    const detail = detailButton.closest(".saved-item").querySelector(".saved-detail");
+    const item = detailButton.closest(".saved-item");
+    const detail = item.querySelector(".saved-detail");
+    const word = appState.words.find((entry) => entry.id === detailButton.dataset.toggleDetail);
     detail.hidden = !detail.hidden;
     detailButton.setAttribute("aria-expanded", String(!detail.hidden));
     detailButton.textContent = detail.hidden ? "詳しく" : "閉じる";
+    detailButton.setAttribute(
+      "aria-label",
+      `${word?.term || "単語"} の詳細を${detail.hidden ? "表示" : "閉じる"}`,
+    );
     return;
   }
 
