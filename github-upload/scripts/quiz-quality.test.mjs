@@ -74,6 +74,8 @@ function buildSandbox() {
     extractFunction("normalizeQuizTimeLimit"),
     extractConst("CEFR_ORDER"),
     extractFunction("cefrRankOfLevel"),
+    extractConst("DAILY_GOAL_CHOICES"),
+    extractFunction("normalizeDailyGoal"),
     // 個人適応SRSの純関数群。スカラー定数は括弧を含まず extractConst が使えないため、
     // HTMLから正規表現で値を取り出して同じ値を注入する（乖離したらここで気づける）。
     `const SRS_DAY_MS = ${html.match(/const SRS_DAY_MS = ([^;]+);/)[1]};`,
@@ -86,7 +88,7 @@ function buildSandbox() {
     extractFunction("srsIntervalMs"),
     "globalThis.__q = { appStateRef: () => appState, setWords: (w) => { appState.words = w; }," +
       " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
-      " normalizeQuizTimeLimit, cefrRankOfLevel," +
+      " normalizeQuizTimeLimit, cefrRankOfLevel, normalizeDailyGoal," +
       " wordAccuracyFactor, personalAccuracyFactor, adaptiveSrsMultiplier, srsIntervalMs, SRS_INTERVAL_DAYS, SRS_DAY_MS };",
   ];
   const sandbox = {};
@@ -296,11 +298,16 @@ test("adaptive SRS ON/OFF: only nextReviewAt scales; status/stage/streak are ide
     const run = (adaptive) => {
       L.setAdaptive(adaptive);
       const word = { learning: structuredClone(base), history: [] };
-      L.applyLearningResult(word, isCorrect, dueAtStart, NOW, { ...options });
-      return word.learning;
+      const res = L.applyLearningResult(word, isCorrect, dueAtStart, NOW, { ...options });
+      return { learning: word.learning, res };
     };
-    const off = run(false);
-    const on = run(true);
+    const offRun = run(false);
+    const onRun = run(true);
+    const off = offRun.learning;
+    const on = onRun.learning;
+    // 戻り値の advanced フラグは前進シナリオと一致し、ON/OFFで変わらない
+    assert.equal(offRun.res.advanced, advances, `${label}: advanced flag (OFF)`);
+    assert.equal(onRun.res.advanced, advances, `${label}: advanced flag (ON)`);
     // 保護フィールド: 倍率が何であれ一致しなければならない
     for (const key of ["status", "srsStage", "correctStreak", "reviewAt", "firstAttempted", "lastSrsResult", "blockedUntil"]) {
       assert.deepEqual(on[key], off[key], `${label}: ${key} must not differ by adaptive mode`);
@@ -344,6 +351,16 @@ test("built-in sample word sets are well-formed (format, no dups, expected size)
       assert.ok(!seen.has(m[1]), `${name}: duplicate word "${m[1]}"`);
       seen.add(m[1]);
     }
+  }
+});
+
+test("daily goal setting is clamped to the allowed choices (invalid -> off)", () => {
+  for (const ok of [0, 10, 20, 30, 50]) {
+    assert.equal(q.normalizeDailyGoal(ok), ok);
+    assert.equal(q.normalizeDailyGoal(String(ok)), ok);
+  }
+  for (const bad of [5, 15, -10, 999, NaN, null, undefined, "abc", ""]) {
+    assert.equal(q.normalizeDailyGoal(bad), 0, `invalid ${String(bad)} should fall back to 0`);
   }
 });
 

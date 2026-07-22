@@ -4889,6 +4889,7 @@ accurate 正確な"
             <span id="quizScope" class="pill subtle">出題: すべて</span>
             <span id="quizLearningProgress" class="pill subtle">習得済み 0 / 復習中 0 / 未着手 0</span>
             <span id="quizProgress" class="pill subtle" hidden></span>
+            <span id="quizDailyGoal" class="pill subtle" hidden></span>
             <span id="accuracy" class="pill">正答率 0%</span>
           </div>
         </div>
@@ -5353,6 +5354,21 @@ accurate 正確な"
                 回答の速さに応じて0.5〜1.6倍に伸縮します。よく覚えている語は間隔が伸び、
                 忘れかけている語は早めに戻ってきます。オフに戻すと、それ以降の解答は従来の
                 固定間隔で予定されます（すでに決まっている復習日はそのまま残ります）。
+              </p>
+              <div class="settings-row">
+                <label class="settings-field">
+                  1日の目標回答数
+                  <select id="dailyGoalSelect" aria-label="1日の目標回答数">
+                    <option value="0">なし</option>
+                    <option value="10">10語</option>
+                    <option value="20">20語</option>
+                    <option value="30">30語</option>
+                    <option value="50">50語</option>
+                  </select>
+                </label>
+              </div>
+              <p class="settings-desc">
+                目標を設定すると、クイズ画面に「🎯 今日 n/目標」が表示され、達成した日はお知らせします。
               </p>
               <label class="settings-check">
                 <input id="autoSpeakToggle" type="checkbox" />
@@ -6033,6 +6049,40 @@ function adaptiveSrsMultiplier({ wordFactor, personalFactor, fastCorrect }) {
   const pf = Number.isFinite(personalFactor) && personalFactor > 0 ? personalFactor : 1;
   const speedFactor = fastCorrect ? 1.1 : 1.0;
   return Math.min(ADAPTIVE_MAX_MULTIPLIER, Math.max(ADAPTIVE_MIN_MULTIPLIER, wf * pf * speedFactor));
+}
+
+// ---------- デイリーゴール（任意・端末内のみ） ----------
+// 「今日◯語」の目標。回答数は既存の word.history から当日分を数えるだけで、
+// 保存データ・同期には一切触れない（モチベーション系はすべて表示のみ）。
+const DAILY_GOAL_KEY = "wordsnap-daily-goal";
+const DAILY_GOAL_DONE_KEY = "wordsnap-daily-goal-done"; // 達成のお祝いを1日1回にする
+const DAILY_GOAL_CHOICES = [0, 10, 20, 30, 50];
+
+function normalizeDailyGoal(value) {
+  const n = Number(value);
+  return DAILY_GOAL_CHOICES.includes(n) ? n : 0;
+}
+
+function dailyGoalWords() {
+  try {
+    return normalizeDailyGoal(localStorage.getItem(DAILY_GOAL_KEY));
+  } catch {
+    return 0;
+  }
+}
+
+// 当日の回答数。初回だけ履歴を集計し、以後は解答のたびに+1する（大きな単語帳でも軽い）。
+let dailyCountCache = { day: "", count: 0 };
+function todayAnswerCount() {
+  const today = localDateString();
+  if (dailyCountCache.day === today) return dailyCountCache.count;
+  const byDay = buildDailyActivity();
+  dailyCountCache = { day: today, count: byDay.get(today)?.answers || 0 };
+  return dailyCountCache.count;
+}
+function bumpTodayAnswerCount() {
+  todayAnswerCount(); // 日付が変わっていたら作り直す
+  dailyCountCache.count += 1;
 }
 
 // 全語の履歴を走査するpersonalAccuracyFactorは大きな単語帳だと重いので、60秒キャッシュする。
@@ -8031,6 +8081,8 @@ const elements = {
   autoNextDelaySelect: document.querySelector("#autoNextDelaySelect"),
   quizTimeLimitSelect: document.querySelector("#quizTimeLimitSelect"),
   adaptiveSrsToggle: document.querySelector("#adaptiveSrsToggle"),
+  dailyGoalSelect: document.querySelector("#dailyGoalSelect"),
+  quizDailyGoal: document.querySelector("#quizDailyGoal"),
   quizTimer: document.querySelector("#quizTimer"),
   quizTimerTrack: document.querySelector("#quizTimerTrack"),
   quizTimerFill: document.querySelector("#quizTimerFill"),
@@ -8523,6 +8575,7 @@ function applyQuizSettings() {
   if (elements.vibrateToggle) elements.vibrateToggle.checked = vibrationEnabled();
   if (elements.quizTimeLimitSelect) elements.quizTimeLimitSelect.value = String(quizTimeLimitSeconds());
   if (elements.adaptiveSrsToggle) elements.adaptiveSrsToggle.checked = adaptiveSrsEnabled();
+  if (elements.dailyGoalSelect) elements.dailyGoalSelect.value = String(dailyGoalWords());
 }
 
 function reviewLogEnabled() {
@@ -13492,6 +13545,7 @@ function renderQuizProgress() {
 function renderQuiz() {
   renderAccuracy();
   renderQuizProgress();
+  renderDailyGoalChip();
   renderQuizScope();
   renderQuizLearningProgress();
   updateResumeButton();
@@ -16353,10 +16407,12 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
         fastCorrect,
       })
     : 1;
+  let srsAdvanced = false; // 段階が前進したか（適応SRSの見える化に使う）
   const advanceSrs = () => {
     const nextStage = Math.min(SRS_INTERVAL_DAYS.length - 1, currentStage + 1);
     learning.srsStage = nextStage;
     learning.nextReviewAt = now + srsIntervalMs(nextStage, srsMultiplier);
+    srsAdvanced = true;
   };
   const bumpStreak = () =>
     (learning.correctStreak = Math.max(0, Math.floor(Number(learning.correctStreak) || 0)) + 1);
@@ -16401,6 +16457,8 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
     learning.correctStreak = 0;
     scheduleReview(word);
   }
+  // 呼び出し側（フィードバック表示）向けの読み取り専用情報。学習状態そのものは上で更新済み。
+  return { advanced: srsAdvanced, multiplier: srsMultiplier, nextReviewAt: learning.nextReviewAt };
 }
 
 function shuffle(items) {
@@ -17031,6 +17089,44 @@ function updateStreakOnAnswer() {
   renderStreakBadge();
 }
 
+// 適応SRSがONで段階が前進したときだけ、次の復習時期と調整の向きを1行で伝える。
+// 裏で黙って間隔が変わるより、理由が見えたほうが納得感と有能感につながる。
+function adaptiveScheduleNote(srsInfo) {
+  if (!adaptiveSrsEnabled() || !srsInfo || !srsInfo.advanced) return "";
+  const days = Math.max(1, Math.round((srsInfo.nextReviewAt - Date.now()) / SRS_DAY_MS));
+  const tone =
+    srsInfo.multiplier > 1.05 ? "・好調のため延長" : srsInfo.multiplier < 0.95 ? "・定着優先で短縮" : "";
+  return ` 📈次の復習は約${days}日後${tone}`;
+}
+
+// デイリーゴール達成を1日1回だけ祝う（音＋ステータス表示のみ・保存データ不変）。
+function maybeCelebrateDailyGoal() {
+  const goal = dailyGoalWords();
+  if (!goal || todayAnswerCount() < goal) return;
+  const today = localDateString();
+  try {
+    if (localStorage.getItem(DAILY_GOAL_DONE_KEY) === today) return;
+    localStorage.setItem(DAILY_GOAL_DONE_KEY, today);
+  } catch {
+    return;
+  }
+  playSound("success");
+  setStatus(`🎯 今日の目標 ${goal}語を達成しました！この調子！`);
+}
+
+function renderDailyGoalChip() {
+  const chip = elements.quizDailyGoal;
+  if (!chip) return;
+  const goal = dailyGoalWords();
+  if (!goal) {
+    chip.hidden = true;
+    return;
+  }
+  const count = todayAnswerCount();
+  chip.hidden = false;
+  chip.textContent = count >= goal ? `🎯 今日 ${count}/${goal}語 達成！` : `🎯 今日 ${count}/${goal}語`;
+}
+
 function gradeQuiz(choiceId, dontKnow = false) {
   if (!currentQuiz || currentQuiz.answered) return;
   // 生成側の全経路で防いでいるが、古い画面状態や将来の呼び出し追加があっても
@@ -17081,11 +17177,19 @@ function gradeQuiz(choiceId, dontKnow = false) {
 
   // 範囲クイズ・総復習でも通常クイズと同じ判定で学習状態（習得/復習）を更新する
   appState.quizCounter += 1;
-  applyLearningResult(word, isCorrect, Boolean(currentQuiz.srsDueAtStart), answeredAt, {
+  const srsInfo = applyLearningResult(word, isCorrect, Boolean(currentQuiz.srsDueAtStart), answeredAt, {
     responseMs,
     skipSpeedGate,
     historyBeforeAnswer,
   });
+  // デイリーゴール（復習セッションの解答も1問と数える）とセッション集計
+  bumpTodayAnswerCount();
+  if (!reviewSession) {
+    quizSessionStats.answered += 1;
+    if (isCorrect) quizSessionStats.correct += 1;
+  }
+  renderDailyGoalChip();
+  maybeCelebrateDailyGoal();
   recordReviewEvent({
     wordId: currentQuiz.answer.id,
     promptMode: currentQuiz.context ? "context-choice" : "meaning-choice",
@@ -17114,6 +17218,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
         ? "正解！すべてクリアしました。「次の問題」で結果を表示します。"
         : "正解！「次の問題」で続けます。"
       : `正解は「${currentQuiz.answer.meaning}」。あとでもう一度出します。`;
+    elements.quizFeedback.textContent += adaptiveScheduleNote(srsInfo);
     elements.quizScope.textContent = reviewScopeText();
     renderQuizProgress();
     persistReviewProgress(); // 問題が進むたびに再開用スナップショットを更新する
@@ -17133,6 +17238,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
     : dontKnow
       ? `正解は「${currentQuiz.answer.meaning}」です。2〜3問後にもう一度出します。`
       : `惜しい。正解は「${currentQuiz.answer.meaning}」。2〜3問後にもう一度出します。`;
+  elements.quizFeedback.textContent += adaptiveScheduleNote(srsInfo);
   persistAppState();
   renderAccuracy();
   updateSavedWordRow(word);
@@ -18338,12 +18444,16 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// エンドレスクイズのセッション集計（表示のみ・保存しない）
+let quizSessionStats = { answered: 0, correct: 0 };
+
 elements.startQuizButton.addEventListener("click", () => {
   clearAutoNextTimer();
   clearSavedReviewProgress(); // 再開せず別のクイズを始めたら、前回の続きは破棄する
   reviewResult = null; // 完走サマリが残っていたら消して通常クイズへ
   quizEmptyReason = "";
   quizStarted = true;
+  quizSessionStats = { answered: 0, correct: 0 };
   normalQuizQuestionNumber = 0; // 「◯問目」を1から数え直す（buildQuiz内で+1される）
   currentQuiz = availableQuizWords().length > 0 ? buildQuiz() : null;
   playSound(currentQuiz ? "next" : "wrong");
@@ -18360,7 +18470,16 @@ elements.exitQuizButton?.addEventListener("click", () => {
   quizEmptyReason = "";
   normalQuizQuestionNumber = 0;
   renderQuiz();
-  setStatus("クイズをやめました。設定を変えて再開できます。");
+  // 今回のセッションの成果をひとこと添えて終える（何も解いていなければ従来どおり）
+  if (quizSessionStats.answered > 0) {
+    const rate = Math.round((quizSessionStats.correct / quizSessionStats.answered) * 100);
+    setStatus(
+      `クイズ終了：${quizSessionStats.answered}問中 ${quizSessionStats.correct}問正解（正答率${rate}%）。おつかれさまでした！`,
+    );
+  } else {
+    setStatus("クイズをやめました。設定を変えて再開できます。");
+  }
+  quizSessionStats = { answered: 0, correct: 0 };
 });
 
 elements.dontKnowButton.addEventListener("click", () => {
@@ -18945,6 +19064,17 @@ elements.adaptiveSrsToggle?.addEventListener("change", () => {
     elements.adaptiveSrsToggle.checked = adaptiveSrsEnabled();
   }
   applyQuizSettings();
+  playSound("tap");
+});
+
+elements.dailyGoalSelect?.addEventListener("change", () => {
+  try {
+    localStorage.setItem(DAILY_GOAL_KEY, String(normalizeDailyGoal(elements.dailyGoalSelect.value)));
+  } catch {
+    // 保存できない環境ではその場限りで動く
+  }
+  applyQuizSettings();
+  renderDailyGoalChip();
   playSound("tap");
 });
 elements.vibrateToggle?.addEventListener("change", () => {
