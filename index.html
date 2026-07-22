@@ -5360,15 +5360,15 @@ accurate 正確な"
                   1日の目標回答数
                   <select id="dailyGoalSelect" aria-label="1日の目標回答数">
                     <option value="0">なし</option>
-                    <option value="10">10語</option>
-                    <option value="20">20語</option>
-                    <option value="30">30語</option>
-                    <option value="50">50語</option>
+                    <option value="10">10問</option>
+                    <option value="20">20問</option>
+                    <option value="30">30問</option>
+                    <option value="50">50問</option>
                   </select>
                 </label>
               </div>
               <p class="settings-desc">
-                目標を設定すると、クイズ画面に「🎯 今日 n/目標」が表示され、達成した日はお知らせします。
+                目標を設定すると、クイズ画面に「🎯 今日 n/目標問」が表示され、達成した日はお知らせします。
               </p>
               <label class="settings-check">
                 <input id="autoSpeakToggle" type="checkbox" />
@@ -6052,7 +6052,7 @@ function adaptiveSrsMultiplier({ wordFactor, personalFactor, fastCorrect }) {
 }
 
 // ---------- デイリーゴール（任意・端末内のみ） ----------
-// 「今日◯語」の目標。回答数は既存の word.history から当日分を数えるだけで、
+// 「今日◯問」の目標。回答数は既存の word.history から当日分を数えるだけで、
 // 保存データ・同期には一切触れない（モチベーション系はすべて表示のみ）。
 const DAILY_GOAL_KEY = "wordsnap-daily-goal";
 const DAILY_GOAL_DONE_KEY = "wordsnap-daily-goal-done"; // 達成のお祝いを1日1回にする
@@ -11084,6 +11084,10 @@ function initWordsnapSync() {
     }
   };
   window.addEventListener("focus", pullIfConnected);
+  // 別アプリや別ウィンドウへ移っただけでは document.hidden にならない環境があるため、
+  // ウィンドウのフォーカス中だけ制限時間を進める。戻ったら回答時間と一緒に仕切り直す。
+  window.addEventListener("blur", stopQuizTimer);
+  window.addEventListener("focus", resetQuizTimerOnResume);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       stopSyncPolling();
@@ -14123,15 +14127,16 @@ function dropWordFromReviewSession(id) {
   persistReviewProgress(); // 再開用スナップショットも削除後の姿に合わせる
 }
 
-// 復習セッションを完走したときのサマリ文言（例:「8問中6問正解。間違えた2語はまた出題されます。」）。
+// 復習セッションを完走したときのサマリ文言。誤答語も正解するまで出題済みなので、
+// 単純な正答数ではなく「間違えずに正解した語」と「復習してクリアした語」を分けて伝える。
 // missedIds はセッション中に一度でも間違えた単語の数＝キューを空にするまでに複数回出た語の数。
 function buildReviewSummaryMessage(session) {
   const total = session.total || 0;
   const missed = (session.missedIds || []).length;
   const correct = Math.max(0, total - missed);
   return missed === 0
-    ? `${total}問中${correct}問正解！全問クリアしました。`
-    : `${total}問中${correct}問正解。間違えた${missed}語はまた出題されます。`;
+    ? `全${total}語を間違えずにクリアしました！`
+    : `${total}語中${correct}語を間違えずに正解。間違えた${missed}語も復習してクリアしました。`;
 }
 
 // 完走した復習セッションから、クイズカード内の結果表示用データを組み立てる
@@ -14164,7 +14169,9 @@ function renderReviewResult() {
 
   const score = document.createElement("p");
   score.className = "review-result-score";
-  score.textContent = `${result.label}：${result.total}問中${correct}問正解`;
+  score.textContent = result.missedCount === 0
+    ? `${result.label}：全${result.total}語を間違えずにクリア`
+    : `${result.label}：${result.total}語中${correct}語を間違えずに正解`;
   box.append(score);
 
   if (result.missedWords.length > 0) {
@@ -16713,7 +16720,7 @@ function renderStreakCalendar() {
     const goal = dailyGoalWords();
     const stats = [
       ["現在の連続", `${streak.count}日`],
-      ...(goal ? [["今日の目標", `${todayAnswerCount()}/${goal}語`]] : []),
+      ...(goal ? [["今日の目標", `${todayAnswerCount()}/${goal}問`]] : []),
       // 保存済みの記録と履歴からの再計算の大きい方。移行前のデータでも履歴があれば拾える。
       ["連続の最高記録", `${Math.max(streak.best, longestStreakFromDays(byDay.keys()))}日`],
       ["この月の学習日", `${monthDays}日`],
@@ -17113,7 +17120,7 @@ function maybeCelebrateDailyGoal() {
     return;
   }
   playSound("success");
-  setStatus(`🎯 今日の目標 ${goal}語を達成しました！この調子！`);
+  setStatus(`🎯 今日の目標 ${goal}問を達成しました！この調子！`);
 }
 
 function renderDailyGoalChip() {
@@ -17126,7 +17133,7 @@ function renderDailyGoalChip() {
   }
   const count = todayAnswerCount();
   chip.hidden = false;
-  chip.textContent = count >= goal ? `🎯 今日 ${count}/${goal}語 達成！` : `🎯 今日 ${count}/${goal}語`;
+  chip.textContent = count >= goal ? `🎯 今日 ${count}/${goal}問 達成！` : `🎯 今日 ${count}/${goal}問`;
 }
 
 function gradeQuiz(choiceId, dontKnow = false) {
@@ -18478,7 +18485,7 @@ elements.exitQuizButton?.addEventListener("click", () => {
   if (quizSessionStats.answered > 0) {
     const rate = Math.round((quizSessionStats.correct / quizSessionStats.answered) * 100);
     const goal = dailyGoalWords();
-    const goalNote = goal ? ` 今日 ${todayAnswerCount()}/${goal}語。` : "";
+    const goalNote = goal ? ` 今日 ${todayAnswerCount()}/${goal}問。` : "";
     setStatus(
       `クイズ終了：${quizSessionStats.answered}問中 ${quizSessionStats.correct}問正解（正答率${rate}%）。${goalNote}おつかれさまでした！`,
     );
