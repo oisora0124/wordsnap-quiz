@@ -3507,7 +3507,8 @@ textarea:focus-visible {
 }
 
 .enrich-chip[aria-pressed="true"]:hover {
-  background: var(--accent-strong);
+  color: var(--action-fg);
+  background: var(--action-bg);
 }
 
 .enrich-chip:disabled {
@@ -3560,6 +3561,14 @@ textarea:focus-visible {
 
 .example-list li {
   margin-bottom: 0.35rem;
+}
+
+.example-speak-button {
+  min-width: 1.9rem;
+  min-height: 1.9rem;
+  margin-left: 0.35rem;
+  padding: 0.15rem 0.35rem;
+  vertical-align: middle;
 }
 
 /* 例文・定義・語源の和訳行 */
@@ -4598,10 +4607,10 @@ textarea:focus-visible {
         </div>
         <div id="streakSummary" class="streak-summary"></div>
         <h3 class="streak-subhead">学習カレンダー</h3>
-        <div class="streak-cal-nav">
-          <button id="streakPrevMonth" class="ghost mini" type="button" aria-label="前の月へ">‹</button>
+        <div class="streak-cal-nav" role="group" aria-label="表示する月を移動">
+          <button id="streakPrevMonth" class="ghost mini" type="button" aria-label="前の月へ" aria-keyshortcuts="ArrowLeft">‹</button>
           <span id="streakMonthLabel" class="streak-month-label" aria-live="polite"></span>
-          <button id="streakNextMonth" class="ghost mini" type="button" aria-label="次の月へ">›</button>
+          <button id="streakNextMonth" class="ghost mini" type="button" aria-label="次の月へ" aria-keyshortcuts="ArrowRight">›</button>
         </div>
         <div class="streak-cal-weekdays" aria-hidden="true">
           <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
@@ -4963,9 +4972,9 @@ accurate 正確な"
           </div>
           <div id="quizRangeRow" class="quiz-range-row" hidden>
             <span class="quiz-range-label">番号</span>
-            <input id="quizRangeFrom" type="number" min="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
+            <input id="quizRangeFrom" type="number" min="1" step="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
             <span aria-hidden="true">〜</span>
-            <input id="quizRangeTo" type="number" min="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
+            <input id="quizRangeTo" type="number" min="1" step="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
             <span class="quiz-range-hint">空欄なら全部</span>
             <span class="quiz-range-hint quiz-range-note">※番号は選択した単語帳・CEFR条件での追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
           </div>
@@ -14100,6 +14109,34 @@ function updateQuizDeckCount() {
   if (!elements.quizDeckCount) return;
   const n = quizSelectedDeckWords().length;
   elements.quizDeckCount.textContent = n ? `出題対象: ${n}語` : "対象なし";
+  for (const input of [elements.quizRangeFrom, elements.quizRangeTo]) {
+    if (input) input.max = String(Math.max(1, n));
+  }
+}
+
+function validatedQuizRangeValue(input, label, total) {
+  if (!input) return { valid: true, value: null };
+  input.setCustomValidity("");
+  const raw = input.value.trim();
+  if (!raw) return { valid: true, value: null };
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    const message = `${label}番号は1以上の整数で入力してください。`;
+    input.setCustomValidity(message);
+    setStatus(message);
+    input.reportValidity?.();
+    input.focus();
+    return { valid: false, value: null };
+  }
+  if (value > total) {
+    const message = `${label}番号は単語数（${total}語）以内で入力してください。`;
+    input.setCustomValidity(message);
+    setStatus(message);
+    input.reportValidity?.();
+    input.focus();
+    return { valid: false, value: null };
+  }
+  return { valid: true, value };
 }
 
 // 選んだ単語帳・番号の範囲でクイズ（出題セッション）を開始する
@@ -14112,15 +14149,22 @@ function startQuizFromRange() {
   }
   // 「範囲」を開いているときだけ番号で絞り込む。閉じている＝全範囲。
   const useRange = elements.quizRangeRow && !elements.quizRangeRow.hidden;
-  let from = useRange ? parseInt(elements.quizRangeFrom.value, 10) : NaN;
-  let to = useRange ? parseInt(elements.quizRangeTo.value, 10) : NaN;
-  if (Number.isNaN(from)) from = 1;
-  if (Number.isNaN(to)) to = total;
-  if (from > to) [from, to] = [to, from];
-  from = Math.max(1, from);
-  to = Math.min(total, to);
-  if (from > total) {
-    setStatus(`範囲が単語数（${total}語）を超えています。`);
+  const fromResult = useRange
+    ? validatedQuizRangeValue(elements.quizRangeFrom, "開始", total)
+    : { valid: true, value: null };
+  if (!fromResult.valid) return;
+  const toResult = useRange
+    ? validatedQuizRangeValue(elements.quizRangeTo, "終了", total)
+    : { valid: true, value: null };
+  if (!toResult.valid) return;
+  const from = fromResult.value ?? 1;
+  const to = toResult.value ?? total;
+  if (from > to) {
+    const message = "開始番号は終了番号以下で入力してください。";
+    elements.quizRangeFrom?.setCustomValidity(message);
+    setStatus(message);
+    elements.quizRangeFrom?.reportValidity?.();
+    elements.quizRangeFrom?.focus();
     return;
   }
   const selected = words.slice(from - 1, to);
@@ -17714,20 +17758,22 @@ let activeSpeechUtterance = null;
 
 function resetSpeechButton(button, term) {
   if (!button) return;
+  const isExample = button.hasAttribute("data-speak-example");
   button.classList.remove("is-speaking");
-  button.setAttribute("aria-label", `${term} の発音を聞く`);
-  button.title = "発音を聞く";
+  button.setAttribute("aria-label", isExample ? "例文を読み上げる" : `${term} の発音を聞く`);
+  button.title = isExample ? "例文を読み上げる" : "発音を聞く";
   if (activeSpeechButton === button) activeSpeechButton = null;
 }
 
 function speakWord(term, button = null) {
+  const isExample = button?.hasAttribute("data-speak-example") || false;
   if (!("speechSynthesis" in window)) {
     setStatus("この端末は音声読み上げに対応していません。");
     return false;
   }
   const spokenTerm = String(term || "").trim();
   if (!spokenTerm) {
-    setStatus("発音する単語が見つかりませんでした。");
+    setStatus(isExample ? "読み上げる例文が見つかりませんでした。" : "発音する単語が見つかりませんでした。");
     return false;
   }
 
@@ -17743,19 +17789,19 @@ function speakWord(term, button = null) {
     activeSpeechButton = button;
     button.dataset.speechTerm = spokenTerm;
     button.classList.add("is-speaking");
-    button.setAttribute("aria-label", `${spokenTerm} の発音を再生中`);
-    button.title = "発音を再生中";
+    button.setAttribute("aria-label", isExample ? "例文を読み上げ中" : `${spokenTerm} の発音を再生中`);
+    button.title = isExample ? "例文を読み上げ中" : "発音を再生中";
   }
   utterance.onstart = () => {
     if (button && activeSpeechUtterance === utterance) {
-      setStatus(`「${spokenTerm}」の発音を再生しています。`);
+      setStatus(isExample ? "例文を読み上げています。" : `「${spokenTerm}」の発音を再生しています。`);
     }
   };
   utterance.onend = () => {
     if (activeSpeechUtterance !== utterance) return;
     activeSpeechUtterance = null;
     resetSpeechButton(button, spokenTerm);
-    if (button) setStatus(`「${spokenTerm}」の発音を再生しました。`);
+    if (button) setStatus(isExample ? "例文を読み上げました。" : `「${spokenTerm}」の発音を再生しました。`);
   };
   utterance.onerror = (event) => {
     if (activeSpeechUtterance !== utterance) return;
@@ -17966,7 +18012,12 @@ function enrichBody(type, data, term) {
     let html = "";
     if (norm.examples.length) {
       html += `<ul class="enrich-list example-list">${norm.examples
-        .map((example) => `<li>${escapeHtml(example.en)}${jaLine(example.ja)}</li>`)
+        .map(
+          (example) =>
+            `<li>${escapeHtml(example.en)}` +
+            `<button class="speak-button example-speak-button" type="button" data-speak-example="${escapeHtml(example.en)}" aria-label="例文を読み上げる" title="例文を読み上げる">🔊</button>` +
+            `${jaLine(example.ja)}</li>`,
+        )
         .join("")}</ul>`;
     }
     if (norm.definitions.length) {
@@ -18539,10 +18590,14 @@ elements.savedList.addEventListener("click", async (event) => {
     return;
   }
 
-  const speakButton = event.target.closest("[data-speak-word]");
+  const speakButton = event.target.closest("[data-speak-word], [data-speak-example]");
   if (speakButton) {
-    const word = appState.words.find((item) => item.id === speakButton.dataset.speakWord);
-    if (word) speakWord(word.term, speakButton);
+    if (speakButton.dataset.speakExample) {
+      speakWord(speakButton.dataset.speakExample, speakButton);
+    } else {
+      const word = appState.words.find((item) => item.id === speakButton.dataset.speakWord);
+      if (word) speakWord(word.term, speakButton);
+    }
     return;
   }
 
@@ -18805,21 +18860,23 @@ elements.statsGrid?.addEventListener("click", (event) => {
   setActiveStep("quiz", { sound: false });
   startDifficultQuiz();
 });
-elements.streakPrevMonth?.addEventListener("click", () => {
+function moveStreakCalendarMonth(offset) {
   if (!streakCalMonth) return;
-  const d = new Date(streakCalMonth.year, streakCalMonth.month - 1, 1);
-  streakCalMonth = { year: d.getFullYear(), month: d.getMonth() };
-  renderStreakCalendar();
-});
-elements.streakNextMonth?.addEventListener("click", () => {
-  if (!streakCalMonth) return;
-  const d = new Date(streakCalMonth.year, streakCalMonth.month + 1, 1);
+  const d = new Date(streakCalMonth.year, streakCalMonth.month + offset, 1);
   const now = new Date();
   // 未来には進めない（記録が存在しないため）
   if (d.getFullYear() > now.getFullYear() ||
       (d.getFullYear() === now.getFullYear() && d.getMonth() > now.getMonth())) return;
   streakCalMonth = { year: d.getFullYear(), month: d.getMonth() };
+  streakCalSelected = "";
   renderStreakCalendar();
+}
+elements.streakPrevMonth?.addEventListener("click", () => moveStreakCalendarMonth(-1));
+elements.streakNextMonth?.addEventListener("click", () => moveStreakCalendarMonth(1));
+document.querySelector(".streak-cal-nav")?.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  moveStreakCalendarMonth(event.key === "ArrowLeft" ? -1 : 1);
 });
 elements.streakCalendar?.addEventListener("click", (event) => {
   const cell = event.target.closest("[data-day]");
@@ -18858,6 +18915,14 @@ elements.quizRangeToggle?.addEventListener("click", () => {
     if (elements.quizRangeFrom) elements.quizRangeFrom.value = "";
     if (elements.quizRangeTo) elements.quizRangeTo.value = "";
   }
+});
+[elements.quizRangeFrom, elements.quizRangeTo].forEach((input) => {
+  input?.addEventListener("input", () => input.setCustomValidity(""));
+  input?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    elements.quizRangeStartButton?.click();
+  });
 });
 
 // 検索ボックス：単語・意味の両方向から絞り込み
