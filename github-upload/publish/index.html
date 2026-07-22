@@ -1955,6 +1955,12 @@ button.ghost.danger:hover {
   font-weight: 700;
 }
 
+.field-help {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 textarea {
   width: 100%;
   min-height: 180px;
@@ -3527,6 +3533,7 @@ textarea:focus-visible {
 }
 
 .enrich-section {
+  min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -3560,7 +3567,10 @@ textarea:focus-visible {
 }
 
 .example-list li {
+  min-width: 0;
   margin-bottom: 0.35rem;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .example-speak-button {
@@ -4760,11 +4770,13 @@ textarea:focus-visible {
           <span>単語リスト（1行に「単語 意味」）</span>
           <textarea
             id="ocrText"
+            aria-describedby="importFormatHint"
             placeholder="例:
 abandon 捨てる
 ability 能力
 accurate 正確な"
           ></textarea>
+          <small id="importFormatHint" class="field-help">単語と意味の区切りには、半角・全角スペースまたはタブを使えます。</small>
         </label>
 
         <div class="actions">
@@ -13343,6 +13355,7 @@ function renderSavedWords() {
 // 保存一覧の行を既存DOMの末尾へ追加する。「さらに表示」では先頭ページを作り直さないため、
 // 開いている詳細、checkbox、フォーカス、スクロール位置が維持される。
 function appendSavedWordRows(words, startIndex) {
+  let firstRow = null;
   words.forEach((word, offset) => {
     const index = startIndex + offset;
     const attempts = word.stats.correct + word.stats.wrong;
@@ -13385,8 +13398,10 @@ function appendSavedWordRows(words, startIndex) {
         <div class="enrich-results"></div>
       </div>
     `;
+    if (!firstRow) firstRow = row;
     elements.savedList.append(row);
   });
+  return firstRow;
 }
 
 function updateSavedListMore(total, shown) {
@@ -13412,14 +13427,15 @@ function appendNextSavedWordsPage() {
   invalidateLibraryMetadataWork();
   const end = Math.min(words.length, start + SAVED_LIST_PAGE_SIZE);
   elements.savedList.querySelector(".word-list-more")?.remove();
-  appendSavedWordRows(words.slice(start, end), start);
+  const firstNewRow = appendSavedWordRows(words.slice(start, end), start);
   savedListVisibleCount = end;
-  const nextButton = updateSavedListMore(words.length, end);
+  updateSavedListMore(words.length, end);
   renderSelection();
   scheduleLibraryMetadataBackfill();
-  // 押した「さらに表示」の代わりに、同じ役割の次ボタンへフォーカスを引き継ぐ。
-  // 最終ページでは新しい行の末尾にフォーカスを強制せず、読み位置とスクロールを維持する。
-  nextButton?.focus({ preventScroll: true });
+  // 押したボタンがあった位置に追加された先頭行へフォーカスを引き継ぐ。
+  // preventScroll で読み位置を保ちつつ、画面外の次ボタンへフォーカスだけ飛ぶのを防ぐ。
+  firstNewRow?.querySelector("input, button, select")?.focus({ preventScroll: true });
+  setStatus(`${start + 1}〜${end}番を追加表示しました（全${words.length}件）。`);
 }
 
 // 指定番号を含む100件だけを描画する。#9900でも先頭から9900行をDOM化しないため、
