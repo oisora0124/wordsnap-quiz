@@ -2068,6 +2068,35 @@ textarea:focus-visible {
   font-weight: 650;
 }
 
+/* サンプル単語集のタブ型チップ（deck-tab と同じ見た目言語） */
+.sample-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-top: var(--space-2);
+}
+.sample-chips-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+.sample-chip {
+  white-space: nowrap;
+  padding: 0.35rem 0.7rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+.sample-chip:hover {
+  color: var(--action-fg);
+  background: var(--action-bg);
+  border-color: var(--action-bg);
+}
+
 .deck-tab:hover {
   color: var(--ink);
   background: var(--surface-3);
@@ -4682,20 +4711,19 @@ accurate 正確な"
         <div class="actions">
           <button id="parseButton" type="button">単語リストに変換</button>
           <label class="deck-pick">
-            サンプル
-            <select id="sampleSelect" aria-label="追加するサンプル単語集">
-              <option value="exam300">大学受験標準300</option>
-              <option value="jhs100">中学基礎100</option>
-              <option value="eiken100">英検2級レベル100</option>
-              <option value="toeic100">TOEIC頻出100</option>
-              <option value="daily100">日常英会話100</option>
-            </select>
-          </label>
-          <button id="sampleButton" class="ghost" type="button">サンプルを追加</button>
-          <label class="deck-pick">
             保存先
             <select id="saveDeckSelect" aria-label="保存先の単語帳"></select>
           </label>
+        </div>
+        <!-- サンプル単語集：タブ型チップ。押すと下の入力欄の末尾に追記される -->
+        <div class="sample-chips" role="group" aria-label="サンプル単語集を追加">
+          <span class="sample-chips-label">サンプル:</span>
+          <button class="sample-chip" type="button" data-sample="jhs100">中学基礎100</button>
+          <button class="sample-chip" type="button" data-sample="exam300">大学受験標準300</button>
+          <button class="sample-chip" type="button" data-sample="eiken100">英検準1級100</button>
+          <button class="sample-chip" type="button" data-sample="soukei100">早慶レベル100</button>
+          <button class="sample-chip" type="button" data-sample="toeic100">TOEIC頻出100</button>
+          <button class="sample-chip" type="button" data-sample="ielts100">IELTS頻出100</button>
         </div>
         <p id="status" class="status" role="status">単語と訳を貼り付けるか、写真を端末内OCRで読み取れます（1行に「英単語 意味」）。</p>
         <!-- 変換結果が「すべて保存済み」だったときだけ表示する導線。次の変換操作で自動的に消える。 -->
@@ -6319,107 +6347,209 @@ rich 裕福な
 strong 強い
 tired 疲れた`;
 
-// 英検2級前後（高校〜社会一般の頻出語）
-const SAMPLE_TEXT_EIKEN = `agriculture 農業
-ancient 古代の
-announce 発表する
-anxiety 不安
-appetite 食欲
-architecture 建築
-article 記事
-astronaut 宇宙飛行士
-atmosphere 大気
-audience 聴衆
-behavior ふるまい
-biology 生物学
-blame 非難する
-boil 沸騰させる
-breathe 呼吸する
-celebrate 祝う
-ceremony 式典
-charity 慈善団体
-chemistry 化学
-climate 気候
-colleague 同僚
-complain 不平を言う
-conclusion 結論
-confidence 自信
-confuse 混乱させる
-consumer 消費者
-continent 大陸
-convenient 便利な
-crop 農作物
-curious 好奇心の強い
-custom 慣習
-decade 10年間
-describe 描写する
-desert 砂漠
-destroy 破壊する
-detail 詳細
-disaster 災害
-discount 割引
-discovery 発見
-disease 病気
-distance 距離
-effort 努力
-employee 従業員
-environment 環境
-exchange 交換する
-exhibition 展覧会
-expand 拡大する
-experiment 実験
-expert 専門家
-fever 熱
-flavor 風味
-flood 洪水
-forecast 予報
-fuel 燃料
-furniture 家具
-generation 世代
-geography 地理学
-government 政府
-graduate 卒業する
-harvest 収穫
-height 高さ
-immediately すぐに
-income 収入
-industry 産業
-injure 傷つける
-insect 昆虫
-instrument 楽器
-invent 発明する
-journey 旅
-knowledge 知識
-laboratory 実験室
-lecture 講義
-liquid 液体
-luggage 手荷物
-medicine 薬
-muscle 筋肉
-mystery なぞ
-nephew おい
-niece めい
-opinion 意見
-opportunity 機会
-ordinary 普通の
-passenger 乗客
-patient 患者
-population 人口
-professor 教授
-protect 守る
-quantity 量
-recommend 勧める
-refuse 断る
-relative 親戚
-repair 修理する
-salary 給料
-scenery 景色
-shortage 不足
-soil 土壌
-surface 表面
-temperature 温度
-translate 翻訳する
-vehicle 乗り物`;
+// 英検準1級前後（社会・時事の上級頻出語）
+const SAMPLE_TEXT_EIKEN = `abolish 廃止する
+abundant 豊富な
+accommodate 収容する
+accumulate 蓄積する
+adverse 不利な
+advocate 擁護する
+alter 変更する
+ambiguous あいまいな
+ample 十分な
+anticipate 予期する
+apparatus 装置
+applaud 拍手を送る
+arrogant 傲慢な
+aspire 熱望する
+assess 評価する
+asset 資産
+assure 保証する
+attain 達成する
+authentic 本物の
+betray 裏切る
+bias 偏見
+boost 押し上げる
+breakthrough 大発見
+brutal 残忍な
+bureaucracy 官僚制
+casualty 死傷者
+cite 引用する
+coincide 同時に起こる
+collapse 崩壊する
+commodity 商品
+compensate 補償する
+competent 有能な
+compile 編集する
+comply 従う
+compromise 妥協する
+conceal 隠す
+concede しぶしぶ認める
+condemn 非難する
+confront 立ち向かう
+congestion 混雑
+conquer 征服する
+conscience 良心
+consecutive 連続した
+consent 同意する
+conserve 保護する
+consistent 一貫した
+conspicuous 目立つ
+contaminate 汚染する
+contradict 矛盾する
+controversy 論争
+convict 有罪と宣告する
+corrupt 腐敗した
+counterpart 対応する相手
+credibility 信頼性
+cultivate 耕す
+deceive だます
+dedicate ささげる
+deficit 赤字
+deliberate 意図的な
+deprive 奪う
+designate 指定する
+deteriorate 悪化する
+devastate 荒廃させる
+dilemma 板ばさみ
+diminish 減少する
+discard 捨てる
+disclose 公開する
+discriminate 差別する
+dispute 紛争
+distort ゆがめる
+divert そらす
+domain 領域
+dominate 支配する
+drastic 思い切った
+duplicate 複製する
+dwell 住む
+embrace 抱きしめる
+emit 放出する
+endorse 支持する
+enhance 高める
+enroll 入会する
+epidemic 流行病
+equivalent 同等の
+erupt 噴火する
+evacuate 避難させる
+evoke 呼び起こす
+exaggerate 誇張する
+exclude 除外する
+execute 実行する
+exempt 免除された
+exile 追放
+exploit 搾取する
+famine 飢饉
+feasible 実現可能な
+fluctuate 変動する
+fraud 詐欺
+grieve 深く悲しむ
+hinder 妨げる
+humiliate 恥をかかせる
+immense 巨大な`;
+
+// 早慶など難関大レベル（学術・評論の頻出語）
+const SAMPLE_TEXT_SOUKEI = `aesthetic 美的な
+alienate 疎外する
+alleviate 和らげる
+altruism 利他主義
+ambivalent 相反する感情を持つ
+anecdote 逸話
+anomaly 異例
+anonymous 匿名の
+apprehension 不安
+arbitrary 恣意的な
+articulate 明瞭に述べる
+assimilate 同化する
+austere 厳格な
+autonomy 自治
+benevolent 慈悲深い
+coerce 強制する
+cognitive 認知の
+coherent 首尾一貫した
+compassion 思いやり
+complacent 自己満足した
+comprehensive 包括的な
+compulsory 義務的な
+conceive 思いつく
+concise 簡潔な
+condone 大目に見る
+conform 順応する
+connotation 言外の意味
+consensus 総意
+console 慰める
+conspiracy 陰謀
+constrain 制約する
+contemplate 熟考する
+contempt 軽蔑
+contend 主張する
+converge 収束する
+credulous だまされやすい
+cynical 冷笑的な
+daunting ひるませるような
+debris 残骸
+deference 敬意
+defy 公然と逆らう
+degenerate 退化する
+deplete 使い果たす
+deploy 配備する
+despise ひどく嫌う
+deter 思いとどまらせる
+detrimental 有害な
+devise 考案する
+disparity 格差
+disperse 分散させる
+disrupt 混乱させる
+dissent 異議
+dogma 教義
+eccentric 風変わりな
+eloquent 雄弁な
+elude 巧みに逃れる
+embark 乗り出す
+eminent 著名な
+empirical 経験的な
+emulate 見習う
+enigma なぞ
+entail 伴う
+ephemeral つかの間の
+epitome 典型
+erode 侵食する
+esteem 尊重する
+evade 回避する
+exquisite 非常に美しい
+extravagant ぜいたくな
+fallacy 誤った考え
+formidable 手ごわい
+futile 無駄な
+hierarchy 階層制
+hypothesis 仮説
+immerse 浸す
+imminent 差し迫った
+impair 損なう
+imperative 必須の
+implicit 暗黙の
+indigenous 先住の
+induce 引き起こす
+infer 推論する
+ingenious 独創的な
+inherent 固有の
+inhibit 抑制する
+integrity 誠実さ
+intricate 複雑に入り組んだ
+intrinsic 本質的な
+lucrative もうかる
+meticulous 細心の
+mundane ありふれた
+notorious 悪名高い
+nuance 微妙な違い
+obsolete 時代遅れの
+pervasive 蔓延する
+plausible もっともらしい
+pragmatic 実用的な
+precarious 不安定な
+prudent 慎重な
+ubiquitous 至る所にある`;
 
 // TOEIC頻出（ビジネス・オフィス）
 const SAMPLE_TEXT_TOEIC = `agenda 議題
@@ -6523,115 +6653,117 @@ reimburse 払い戻す
 shipment 発送品
 workshop 講習会`;
 
-// 日常英会話（生活・健康・街なか）
-const SAMPLE_TEXT_DAILY = `bakery パン屋
-bargain お買い得品
-bill 請求書
-blanket 毛布
-ceiling 天井
-cough せき
-crosswalk 横断歩道
-curtain カーテン
-dessert デザート
-detergent 洗剤
-dizzy めまいがする
-drawer 引き出し
-errand 使い走り
-faucet 蛇口
-fever 発熱
-flavor 味わい
-garbage 生ごみ
-grocery 食料雑貨
-hallway 廊下
-headache 頭痛
-ingredient 材料
-laundry 洗濯物
-leftover 食べ残し
-microwave 電子レンジ
-nap 昼寝
-ointment 軟膏
-oven オーブン
-pedestrian 歩行者
-pharmacy 薬局
-pillow 枕
-plumber 配管工
-receipt レシート
-recipe レシピ
-refrigerator 冷蔵庫
-rent 家賃
-sneeze くしゃみをする
-stain しみ
-stairs 階段
-stomachache 腹痛
-stroller ベビーカー
-tap 水道の栓
-thirsty のどが渇いた
-toothache 歯痛
-towel タオル
-trash ごみ
-umbrella 傘
-vacuum 掃除機をかける
-wallet 財布
-wrinkle しわ
-yawn あくびをする
-allowance こづかい
-appointment 予約
-bruise 打撲のあと
-budget 家計
-broom ほうき
-chore 家事
-commute 通勤
-cupboard 食器棚
-discount 値引き
-downtown 繁華街
-drizzle 小雨
-dusty ほこりっぽい
-elevator エレベーター
-escalator エスカレーター
-expiration 期限切れ
-fasten 締める
-freezer 冷凍庫
-handrail 手すり
-humid 蒸し暑い
-iron アイロンをかける
-itchy かゆい
-janitor 管理人
-kettle やかん
-ladder はしご
-leak 水漏れする
-lid ふた
-lightning 稲妻
-mop モップでふく
-mosquito 蚊
-nutrition 栄養
-outlet コンセント
-oversleep 寝過ごす
-pantry 食品貯蔵室
-parcel 小包
-peel 皮をむく
-puddle 水たまり
-raincoat レインコート
-rinse すすぐ
-scale 体重計
-scrub ごしごし洗う
-shelf 棚
-shortcut 近道
-sidewalk 歩道
-sip 少しずつ飲む
-slippery 滑りやすい
-spill こぼす
-sweep 掃く
-thermometer 体温計
-tidy 整頓された
-vinegar 酢`;
+// IELTSアカデミック頻出（学術・環境・社会）
+const SAMPLE_TEXT_IELTS = `abstract 抽象的な
+accelerate 加速する
+accessible 利用しやすい
+adjacent 隣接した
+allocate 割り当てる
+ambiguity あいまいさ
+amend 改正する
+analogy 類推
+arable 耕作に適した
+artifact 人工遺物
+assert 断言する
+attribute 特性
+biodiversity 生物多様性
+catalyst 触媒
+census 国勢調査
+cohesion 結束
+component 構成要素
+correlation 相関関係
+criterion 基準
+demographic 人口統計の
+derive 引き出す
+deviate 逸脱する
+discourse 談話
+displace 立ち退かせる
+disseminate 広める
+distinct 明確に異なる
+distribution 分布
+diverge 分岐する
+diverse 多様な
+equity 公平
+erosion 侵食
+evaluate 評価する
+evolve 進化する
+excavate 発掘する
+exponential 急激な増加の
+extract 抽出する
+facilitate 促進する
+fauna 動物相
+flora 植物相
+fluctuation 変動
+fossil 化石
+framework 枠組み
+gender 性別
+glacier 氷河
+globalization グローバル化
+habitat 生息地
+homogeneous 同質の
+hypothesize 仮説を立てる
+immigration 移民
+implement 実施する
+imply 暗に示す
+incentive 動機付け
+incidence 発生率
+indicator 指標
+infrastructure 社会基盤
+innovation 革新
+integrate 統合する
+interpret 解釈する
+intervene 介入する
+irrigation かんがい
+legislation 法律の制定
+literacy 読み書き能力
+livestock 家畜
+mechanism 仕組み
+methodology 方法論
+migrate 移住する
+mineral 鉱物
+mitigate 軽減する
+modify 修正する
+norm 規範
+nutrient 栄養素
+obesity 肥満
+offspring 子孫
+outcome 結果
+paradigm 理論的枠組み
+phenomenon 現象
+precede 先行する
+precipitation 降水量
+predominant 優勢な
+proportion 割合
+prosperity 繁栄
+quota 定員
+ratio 比率
+refine 精製する
+renewable 再生可能な
+residue 残留物
+scarcity 不足
+sediment 堆積物
+simulate 模擬実験する
+species 種
+statistics 統計
+subsidy 補助金
+sustainable 持続可能な
+synthesize 合成する
+terrain 地形
+thesis 論文
+transition 移行
+urbanization 都市化
+vegetation 植生
+yield 産出する`;
 
-// サンプル単語集の定義。value は #sampleSelect の option と一致させる。
+
+// サンプル単語集の定義。key は .sample-chips の data-sample と一致させる。
 const SAMPLE_SETS = {
-  exam300: { label: "大学受験標準レベル単語300", text: SAMPLE_TEXT },
   jhs100: { label: "中学基礎100", text: SAMPLE_TEXT_JHS },
-  eiken100: { label: "英検2級レベル100", text: SAMPLE_TEXT_EIKEN },
+  exam300: { label: "大学受験標準レベル単語300", text: SAMPLE_TEXT },
+  eiken100: { label: "英検準1級レベル100", text: SAMPLE_TEXT_EIKEN },
+  soukei100: { label: "早慶レベル100", text: SAMPLE_TEXT_SOUKEI },
   toeic100: { label: "TOEIC頻出100", text: SAMPLE_TEXT_TOEIC },
-  daily100: { label: "日常英会話100", text: SAMPLE_TEXT_DAILY },
+  ielts100: { label: "IELTS頻出100", text: SAMPLE_TEXT_IELTS },
 };
 
 const elements = {
@@ -6655,8 +6787,7 @@ const elements = {
   aiKeyFields: document.querySelector("#aiKeyFields"),
   stepTabs: [...document.querySelectorAll("[data-step-tab]")],
   stepPanels: [...document.querySelectorAll("[data-step-panel]")],
-  sampleButton: document.querySelector("#sampleButton"),
-  sampleSelect: document.querySelector("#sampleSelect"),
+  sampleChips: document.querySelector(".sample-chips"),
   hiAccToggle: document.querySelector("#hiAccToggle"),
   status: document.querySelector("#status"),
   importAllSavedActions: document.querySelector("#importAllSavedActions"),
@@ -16793,11 +16924,13 @@ elements.aiOcrButton.addEventListener("click", async () => {
 
 renderAiKeyFields();
 
-elements.sampleButton.addEventListener("click", () => {
+// サンプル集チップ：押した集を入力欄の末尾へ追記する（委譲で受ける）。
+elements.sampleChips?.addEventListener("click", (event) => {
+  const chip = event.target.closest?.("[data-sample]");
+  if (!chip) return;
+  const set = SAMPLE_SETS[chip.dataset.sample];
+  if (!set) return;
   playSound("tap");
-  // 選択中のサンプル集を末尾に足す。未知の値でも既定の受験300で動く（後方互換）。
-  const key = elements.sampleSelect?.value || "exam300";
-  const set = SAMPLE_SETS[key] || SAMPLE_SETS.exam300;
   const existing = elements.ocrText.value.trimEnd();
   elements.ocrText.value = existing ? `${existing}\n${set.text}` : set.text;
   if (elements.importAllSavedActions) elements.importAllSavedActions.hidden = true;
