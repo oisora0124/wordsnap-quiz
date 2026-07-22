@@ -305,6 +305,13 @@ new Script(
     "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];\n" +
     "const SLOW_ANSWER_MS = 5000;\n" +
     "const MAX_TIMED_ANSWER_MS = 60000;\n" +
+    // 個人適応SRSは既定OFF。OFF時に従来の間隔・判定と完全一致することを、
+    // この回帰検査がそのまま保証し続ける（スタブは常に1＝無効）。
+    "const FAST_ANSWER_MS = 3000;\n" +
+    "const adaptiveSrsEnabled = () => false;\n" +
+    "const adaptiveSrsMultiplier = () => 1;\n" +
+    "const wordAccuracyFactor = () => 1;\n" +
+    "const personalAccuracyFactorCached = () => 1;\n" +
     "const appState = { quizCounter: 10 };\n" +
     "Math.random = () => 0.5;\n" +
     `${publicHtml.slice(learningStart, learningEnd)}\n` +

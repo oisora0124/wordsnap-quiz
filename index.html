@@ -5345,6 +5345,16 @@ accurate 正確な"
                 </label>
               </div>
               <label class="settings-check">
+                <input id="adaptiveSrsToggle" type="checkbox" />
+                <span>復習間隔を成績に合わせて自動調整する（個人適応SRS）</span>
+              </label>
+              <p class="settings-desc">
+                忘却曲線に沿った標準の間隔（1→3→7→14…日）を、その単語の正答率・全体の直近正答率・
+                回答の速さに応じて0.5〜1.6倍に伸縮します。よく覚えている語は間隔が伸び、
+                忘れかけている語は早めに戻ってきます。オフに戻すと従来の固定間隔に即時復帰します
+                （保存データは変わりません）。
+              </p>
+              <label class="settings-check">
                 <input id="autoSpeakToggle" type="checkbox" />
                 <span>出題時に発音を自動再生する</span>
               </label>
@@ -5958,6 +5968,76 @@ const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];
 // これ以上悩んで正解した語は"未定着"とみなし、習得（mastered）へは進めない。
 // 例文モードのように文を読む時間が乗る出題では、この速度判定は無効化する。
 const SLOW_ANSWER_MS = 5000;
+
+// ---------- 個人適応SRS（任意・既定OFF） ----------
+// Ebbinghausの忘却曲線の考え方（間隔は指数的に伸ばし、忘れかけている語は縮める）に沿って、
+// 基本間隔 SRS_INTERVAL_DAYS を「その単語の正答率」「本人全体の直近正答率」「今回の回答速度」で
+// 伸縮させる。係数は保存せず、既に同期・マージされている word.history と今回の解答から毎回
+// 導出する＝学習スキーマ・同期契約・サーバー版ガードに一切触れない（後方互換）。
+// 設定でオフに戻せば即座に従来の固定間隔へ復帰する（データは変わらないため巻き戻し不要）。
+const ADAPTIVE_SRS_KEY = "wordsnap-adaptive-srs"; // "1"=ON（既定OFF）
+const FAST_ANSWER_MS = 3000; // これより速い正解は定着が強いとみなし、間隔を少し伸ばす
+const ADAPTIVE_MIN_MULTIPLIER = 0.5; // 縮めても基本間隔の半分まで（急変させない）
+const ADAPTIVE_MAX_MULTIPLIER = 1.6; // 伸ばしても1.6倍まで
+
+function adaptiveSrsEnabled() {
+  try {
+    return localStorage.getItem(ADAPTIVE_SRS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// その単語の履歴正答率→係数。3回未満は情報不足として中立(1.0)。段階関数＝決定論でテスト可能。
+function wordAccuracyFactor(history) {
+  const entries = Array.isArray(history) ? history : [];
+  if (entries.length < 3) return 1.0;
+  const correct = entries.reduce((n, h) => n + (h && h.correct ? 1 : 0), 0);
+  const acc = correct / entries.length;
+  if (acc >= 0.9) return 1.2;
+  if (acc >= 0.8) return 1.1;
+  if (acc >= 0.6) return 1.0;
+  if (acc >= 0.4) return 0.85;
+  return 0.7;
+}
+
+// 本人全体の直近正答率→係数。全単語の履歴を時刻順に並べ、直近100件で判定。
+// 20件未満は情報不足として中立(1.0)。
+function personalAccuracyFactor(words) {
+  const entries = [];
+  for (const word of words || []) {
+    for (const h of word.history || []) {
+      const t = Date.parse(h && h.at);
+      if (Number.isFinite(t)) entries.push({ t, correct: Boolean(h.correct) });
+    }
+  }
+  if (entries.length < 20) return 1.0;
+  entries.sort((a, b) => b.t - a.t);
+  const recent = entries.slice(0, 100);
+  const acc = recent.reduce((n, e) => n + (e.correct ? 1 : 0), 0) / recent.length;
+  if (acc >= 0.9) return 1.1;
+  if (acc >= 0.8) return 1.05;
+  if (acc >= 0.65) return 1.0;
+  if (acc >= 0.5) return 0.9;
+  return 0.8;
+}
+
+// 3係数を合成し、上下限（0.5〜1.6倍）で丸める。
+function adaptiveSrsMultiplier({ wordFactor, personalFactor, fastCorrect }) {
+  const speedFactor = fastCorrect ? 1.1 : 1.0;
+  const raw = (Number(wordFactor) || 1) * (Number(personalFactor) || 1) * speedFactor;
+  return Math.min(ADAPTIVE_MAX_MULTIPLIER, Math.max(ADAPTIVE_MIN_MULTIPLIER, raw));
+}
+
+// 全語の履歴を走査するpersonalAccuracyFactorは大きな単語帳だと重いので、60秒キャッシュする。
+let personalFactorCache = { at: 0, value: 1 };
+function personalAccuracyFactorCached() {
+  const now = Date.now();
+  if (now - personalFactorCache.at < 60000) return personalFactorCache.value;
+  personalFactorCache = { at: now, value: personalAccuracyFactor(appState.words) };
+  return personalFactorCache.value;
+}
+
 // これを超える回答時間は「悩んだ」ではなく「タブ放置・端末ロック・離席」とみなし、
 // 速度判定の対象外にする（既知語が中断のせいで永久に習得できないのを防ぐ）。
 const MAX_TIMED_ANSWER_MS = 60000;
@@ -7939,6 +8019,7 @@ const elements = {
   autoNextToggle: document.querySelector("#autoNextToggle"),
   autoNextDelaySelect: document.querySelector("#autoNextDelaySelect"),
   quizTimeLimitSelect: document.querySelector("#quizTimeLimitSelect"),
+  adaptiveSrsToggle: document.querySelector("#adaptiveSrsToggle"),
   quizTimer: document.querySelector("#quizTimer"),
   quizTimerTrack: document.querySelector("#quizTimerTrack"),
   quizTimerFill: document.querySelector("#quizTimerFill"),
@@ -8430,6 +8511,7 @@ function applyQuizSettings() {
   if (elements.autoSpeakToggle) elements.autoSpeakToggle.checked = autoSpeakEnabled();
   if (elements.vibrateToggle) elements.vibrateToggle.checked = vibrationEnabled();
   if (elements.quizTimeLimitSelect) elements.quizTimeLimitSelect.value = String(quizTimeLimitSeconds());
+  if (elements.adaptiveSrsToggle) elements.adaptiveSrsToggle.checked = adaptiveSrsEnabled();
 }
 
 function reviewLogEnabled() {
@@ -8493,7 +8575,9 @@ function recordReviewEvent(details) {
     if (Number.isInteger(choiceCount) && choiceCount >= 2 && choiceCount <= 4) {
       event.choiceCount = choiceCount;
     }
-    const scheduler = { engine: "legacy-stage-v1" };
+    const scheduler = {
+      engine: details.scheduler?.engine === "adaptive-stage-v1" ? "adaptive-stage-v1" : "legacy-stage-v1",
+    };
     for (const key of ["stageBefore", "stageAfter"]) {
       const value = details.scheduler?.[key];
       if (Number.isInteger(value) && value >= 0 && value <= 7) scheduler[key] = value;
@@ -16213,9 +16297,11 @@ function scheduleReview(word) {
 // 固定値のままだと、まとめて取り込んだ語がその後もずっと同じ日に戻ってきて
 // 「今日は200語、明日は0語」のような偏りが続くため、山をならす。
 // 1日以内の段階は、ばらつかせても意味がないうえ当日中の再確認を壊すのでそのまま。
-function srsIntervalMs(stage) {
-  const days = SRS_INTERVAL_DAYS[stage] || 0;
-  if (days < 3) return days * SRS_DAY_MS;
+// multiplier は個人適応SRS（設定ON時のみ≠1）。1なら従来と完全に同じ値を返す。
+function srsIntervalMs(stage, multiplier = 1) {
+  const scale = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+  const days = (SRS_INTERVAL_DAYS[stage] || 0) * scale;
+  if (days < 3) return Math.round(days * SRS_DAY_MS);
   const jitter = 1 + (Math.random() * 0.24 - 0.12);
   return Math.round(days * SRS_DAY_MS * jitter);
 }
@@ -16236,10 +16322,25 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
     0,
     Math.min(SRS_INTERVAL_DAYS.length - 1, Math.floor(Number(learning.srsStage) || 0)),
   );
+  // 個人適応SRS（設定ON時のみ）。単語の正答率・全体の直近正答率・今回の速さから
+  // 間隔の伸縮係数を導出する。OFFなら1＝従来と完全に同一の間隔。
+  const fastCorrect =
+    isCorrect &&
+    !options.skipSpeedGate &&
+    Number.isFinite(responseMs) &&
+    responseMs > 0 &&
+    responseMs < FAST_ANSWER_MS;
+  const srsMultiplier = adaptiveSrsEnabled()
+    ? adaptiveSrsMultiplier({
+        wordFactor: wordAccuracyFactor(word.history),
+        personalFactor: personalAccuracyFactorCached(),
+        fastCorrect,
+      })
+    : 1;
   const advanceSrs = () => {
     const nextStage = Math.min(SRS_INTERVAL_DAYS.length - 1, currentStage + 1);
     learning.srsStage = nextStage;
-    learning.nextReviewAt = now + srsIntervalMs(nextStage);
+    learning.nextReviewAt = now + srsIntervalMs(nextStage, srsMultiplier);
   };
   const bumpStreak = () =>
     (learning.correctStreak = Math.max(0, Math.floor(Number(learning.correctStreak) || 0)) + 1);
@@ -16975,6 +17076,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
     choiceCount: currentQuiz.choices.length,
     scheduler: {
       ...schedulerBefore,
+      engine: adaptiveSrsEnabled() ? "adaptive-stage-v1" : "legacy-stage-v1",
       stageAfter: word.learning?.srsStage,
       dueAtAfter: word.learning?.nextReviewAt,
     },
@@ -18812,6 +18914,17 @@ elements.quizTimeLimitSelect?.addEventListener("change", () => {
   // 出題中に変更したら、その場のタイマーを新しい設定で仕切り直す。
   stopQuizTimer();
   if (activeStepId === "quiz") updateQuizControls();
+  playSound("tap");
+});
+
+elements.adaptiveSrsToggle?.addEventListener("change", () => {
+  try {
+    if (elements.adaptiveSrsToggle.checked) localStorage.setItem(ADAPTIVE_SRS_KEY, "1");
+    else localStorage.removeItem(ADAPTIVE_SRS_KEY);
+  } catch {
+    elements.adaptiveSrsToggle.checked = adaptiveSrsEnabled();
+  }
+  applyQuizSettings();
   playSound("tap");
 });
 elements.vibrateToggle?.addEventListener("change", () => {

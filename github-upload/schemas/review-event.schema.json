@@ -21,7 +21,7 @@
       "additionalProperties": false,
       "required": ["engine"],
       "properties": {
-        "engine": { "const": "legacy-stage-v1" },
+        "engine": { "enum": ["legacy-stage-v1", "adaptive-stage-v1"] },
         "stageBefore": { "type": "integer", "minimum": 0, "maximum": 7 },
         "stageAfter": { "type": "integer", "minimum": 0, "maximum": 7 },
         "dueAtBefore": { "type": "integer", "minimum": 0 },

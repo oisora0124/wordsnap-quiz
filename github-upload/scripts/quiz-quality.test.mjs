@@ -74,9 +74,20 @@ function buildSandbox() {
     extractFunction("normalizeQuizTimeLimit"),
     extractConst("CEFR_ORDER"),
     extractFunction("cefrRankOfLevel"),
+    // 個人適応SRSの純関数群。スカラー定数は括弧を含まず extractConst が使えないため、
+    // HTMLから正規表現で値を取り出して同じ値を注入する（乖離したらここで気づける）。
+    `const SRS_DAY_MS = ${html.match(/const SRS_DAY_MS = ([^;]+);/)[1]};`,
+    `const ADAPTIVE_MIN_MULTIPLIER = ${html.match(/const ADAPTIVE_MIN_MULTIPLIER = ([0-9.]+);/)[1]};`,
+    `const ADAPTIVE_MAX_MULTIPLIER = ${html.match(/const ADAPTIVE_MAX_MULTIPLIER = ([0-9.]+);/)[1]};`,
+    extractConst("SRS_INTERVAL_DAYS"),
+    extractFunction("wordAccuracyFactor"),
+    extractFunction("personalAccuracyFactor"),
+    extractFunction("adaptiveSrsMultiplier"),
+    extractFunction("srsIntervalMs"),
     "globalThis.__q = { appStateRef: () => appState, setWords: (w) => { appState.words = w; }," +
       " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
-      " normalizeQuizTimeLimit, cefrRankOfLevel };",
+      " normalizeQuizTimeLimit, cefrRankOfLevel," +
+      " wordAccuracyFactor, personalAccuracyFactor, adaptiveSrsMultiplier, srsIntervalMs, SRS_INTERVAL_DAYS, SRS_DAY_MS };",
   ];
   const sandbox = {};
   new Script(pieces.join("\n\n"), { filename: "quiz-quality-check.js" }).runInNewContext(sandbox);
@@ -177,6 +188,57 @@ test("quiz time-limit setting is clamped to the allowed choices (invalid -> off)
   for (const bad of [7, 3, 999, -5, NaN, null, undefined, "abc", ""]) {
     assert.equal(q.normalizeQuizTimeLimit(bad), 0, `invalid ${String(bad)} should fall back to 0`);
   }
+});
+
+test("adaptive SRS: word accuracy factor is a bounded step function (neutral under 3 tries)", () => {
+  const hist = (correct, wrong) =>
+    [...Array(correct).fill({ at: "2026-07-01T00:00:00Z", correct: true }),
+     ...Array(wrong).fill({ at: "2026-07-01T00:00:00Z", correct: false })];
+  assert.equal(q.wordAccuracyFactor([]), 1.0);
+  assert.equal(q.wordAccuracyFactor(hist(2, 0)), 1.0, "under 3 tries stays neutral");
+  assert.equal(q.wordAccuracyFactor(hist(10, 0)), 1.2);
+  assert.equal(q.wordAccuracyFactor(hist(8, 2)), 1.1);
+  assert.equal(q.wordAccuracyFactor(hist(6, 4)), 1.0);
+  assert.equal(q.wordAccuracyFactor(hist(4, 6)), 0.85);
+  assert.equal(q.wordAccuracyFactor(hist(1, 9)), 0.7);
+});
+
+test("adaptive SRS: personal factor uses only the most recent 100 answers", () => {
+  const at = (daysAgo) => new Date(Date.parse("2026-07-22T00:00:00Z") - daysAgo * 86400000).toISOString();
+  const word = (entries) => ({ history: entries });
+  // 20件未満は中立
+  assert.equal(q.personalAccuracyFactor([word([{ at: at(1), correct: false }])]), 1.0);
+  // 直近100件が全問不正解・それ以前の100件が全問正解 → 直近だけ見るので 0.8
+  const recentWrong = Array.from({ length: 100 }, (_, i) => ({ at: at(i / 24), correct: false }));
+  const oldCorrect = Array.from({ length: 100 }, (_, i) => ({ at: at(30 + i / 24), correct: true }));
+  assert.equal(q.personalAccuracyFactor([word(recentWrong), word(oldCorrect)]), 0.8);
+  // 全問正解なら 1.1
+  const allCorrect = Array.from({ length: 50 }, (_, i) => ({ at: at(i / 24), correct: true }));
+  assert.equal(q.personalAccuracyFactor([word(allCorrect)]), 1.1);
+});
+
+test("adaptive SRS: combined multiplier is clamped to [0.5, 1.6]", () => {
+  assert.equal(q.adaptiveSrsMultiplier({ wordFactor: 0.01, personalFactor: 1, fastCorrect: false }), 0.5);
+  assert.equal(q.adaptiveSrsMultiplier({ wordFactor: 99, personalFactor: 1, fastCorrect: true }), 1.6);
+  assert.equal(q.adaptiveSrsMultiplier({ wordFactor: 1, personalFactor: 1, fastCorrect: false }), 1.0);
+  // 代表的な組み合わせ: 1.2 * 1.1 * 1.1 = 1.452（丸めなし領域）
+  const v = q.adaptiveSrsMultiplier({ wordFactor: 1.2, personalFactor: 1.1, fastCorrect: true });
+  assert.ok(Math.abs(v - 1.452) < 1e-9);
+});
+
+test("adaptive SRS: multiplier=1 keeps legacy intervals exactly; scaling shifts them", () => {
+  // Math.random は 0.5 に固定済み → jitter = 1.0 で決定論比較できる
+  for (let stage = 0; stage < q.SRS_INTERVAL_DAYS.length; stage += 1) {
+    const days = q.SRS_INTERVAL_DAYS[stage];
+    assert.equal(q.srsIntervalMs(stage, 1), days * q.SRS_DAY_MS, `stage ${stage} must equal legacy`);
+    assert.equal(q.srsIntervalMs(stage), days * q.SRS_DAY_MS, "default arg must equal legacy");
+  }
+  // 7日×0.5=3.5日 / 7日×1.6=11.2日
+  assert.equal(q.srsIntervalMs(3, 0.5), Math.round(3.5 * q.SRS_DAY_MS));
+  assert.equal(q.srsIntervalMs(3, 1.6), Math.round(11.2 * q.SRS_DAY_MS));
+  // 不正値は1として扱う
+  assert.equal(q.srsIntervalMs(3, NaN), 7 * q.SRS_DAY_MS);
+  assert.equal(q.srsIntervalMs(3, 0), 7 * q.SRS_DAY_MS);
 });
 
 test("built-in sample word sets are well-formed (format, no dups, expected size)", () => {
