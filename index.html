@@ -8672,10 +8672,20 @@ function renderQuizTimerFrame(totalMs) {
 
 // questionActive を渡して、制限時間ONなら開始/継続、OFFや非アクティブなら停止する。
 // クイズタブを見ている前面時だけ動かす（裏で非同期にrenderQuizが走っても、見えない問題を
-// 時間切れにしない）。activeStepId/document.hidden のガードが High 指摘の中核。
+// 時間切れにしない）。activeStepId/document.hidden/document.hasFocus() で前面表示を確認する。
 function syncQuizTimer(questionActive) {
   const limit = quizTimeLimitSeconds();
-  if (!limit || !questionActive || !currentQuiz || activeStepId !== "quiz" || document.hidden) {
+  // blur後に同期反映などの再描画が走っても、非フォーカスのウィンドウでタイマーを
+  // 再始動しない。hasFocus非対応環境では従来どおりvisibilityだけで判定する。
+  const windowFocused = typeof document.hasFocus !== "function" || document.hasFocus();
+  if (
+    !limit ||
+    !questionActive ||
+    !currentQuiz ||
+    activeStepId !== "quiz" ||
+    document.hidden ||
+    !windowFocused
+  ) {
     stopQuizTimer();
     return;
   }
@@ -10790,8 +10800,8 @@ async function restoreFromRevision(rev) {
     return;
   }
   setSyncBusy(true);
-  setRestoreHistoryStatus(`rev ${rev} を復元しています…`);
-  setSyncStatus(`rev ${rev} を復元しています…`);
+  setRestoreHistoryStatus(`版 ${rev} を復元しています…`);
+  setSyncStatus(`版 ${rev} を復元しています…`);
   bumpSyncRequestGen();
   window.clearTimeout(syncState.pushTimer);
   syncState.pushTimer = 0;
@@ -11455,7 +11465,9 @@ function validateDeckName(value, currentDeckId = null) {
   if (!name) return { error: "単語帳の名前を入力してください。" };
   if (name.length > 80) return { error: "単語帳の名前は80文字以内にしてください。" };
   const duplicate = appState.decks.some(
-    (deck) => deck.id !== currentDeckId && deck.name.trim().toLowerCase() === name.toLowerCase(),
+    (deck) =>
+      deck.id !== currentDeckId &&
+      String(deck.name || "").replace(/\s+/g, " ").trim().toLowerCase() === name.toLowerCase(),
   );
   if (duplicate) return { error: `単語帳「${name}」はすでにあります。別の名前を入力してください。` };
   return { name };
@@ -13939,9 +13951,16 @@ function updateQuizControls() {
     const canAdvance = !elements.nextQuizButton.hidden && currentQuiz?.answered;
     elements.quizNextHint.hidden = !canAdvance;
     if (canAdvance) {
-      elements.quizNextHint.textContent = autoNextEnabled()
-        ? `${autoNextDelay() / 1000}秒後に自動で進みます（「次の問題」またはNキーですぐ進めます）。`
-        : `「次の問題」またはNキーで進みます。`;
+      const showKeyboardHint = keyboardHintsEnabled();
+      if (autoNextEnabled()) {
+        elements.quizNextHint.textContent = showKeyboardHint
+          ? `${autoNextDelay() / 1000}秒後に自動で進みます（「次の問題」またはNキーですぐ進めます）。`
+          : `${autoNextDelay() / 1000}秒後に自動で進みます（「次の問題」ですぐ進めます）。`;
+      } else {
+        elements.quizNextHint.textContent = showKeyboardHint
+          ? "「次の問題」またはNキーで進みます。"
+          : "「次の問題」で進みます。";
+      }
     }
   }
   elements.dontKnowButton.hidden = !questionActive || showingResult;
@@ -14064,7 +14083,7 @@ function updateResumeButton() {
   const saved = !reviewSession && !quizStarted ? readSavedReviewProgress() : null;
   button.hidden = !saved;
   if (saved) {
-    const label = String(saved.label || "クイズ").replace(/\s+/g, " ").trim();
+    const label = String(saved.label || "").replace(/\s+/g, " ").trim() || "クイズ";
     button.textContent = `▶ ${label}を再開（残り${saved.queue.length}語）`;
     button.title = `前回中断した${label}を続きから再開します。`;
   } else {
@@ -14089,7 +14108,7 @@ function resumeSavedReview() {
     allIds: saved.allIds,
     queue: saved.queue,
     total: Number(saved.total) || saved.allIds.length,
-    label: String(saved.label || "復習"),
+    label: String(saved.label || "").replace(/\s+/g, " ").trim() || "復習",
     context: Boolean(saved.context), // 例文モードかどうかも復元する
     contextAmount,
     mixFormat: contextAmount === "some" && Boolean(saved.mixFormat),
@@ -18001,7 +18020,11 @@ function speakWord(term, button = null) {
     resetSpeechButton(button, spokenTerm);
     if (event.error === "canceled" || event.error === "interrupted") return;
     if (button) {
-      setStatus("発音を再生できませんでした。端末の音声設定を確認して、もう一度お試しください。");
+      setStatus(
+        isExample
+          ? "例文を読み上げられませんでした。端末の音声設定を確認して、もう一度お試しください。"
+          : "発音を再生できませんでした。端末の音声設定を確認して、もう一度お試しください。",
+      );
     }
   };
   try {
@@ -18011,7 +18034,11 @@ function speakWord(term, button = null) {
     if (activeSpeechUtterance === utterance) activeSpeechUtterance = null;
     resetSpeechButton(button, spokenTerm);
     if (button) {
-      setStatus("発音を再生できませんでした。端末の音声設定を確認して、もう一度お試しください。");
+      setStatus(
+        isExample
+          ? "例文を読み上げられませんでした。端末の音声設定を確認して、もう一度お試しください。"
+          : "発音を再生できませんでした。端末の音声設定を確認して、もう一度お試しください。",
+      );
     }
     return false;
   }
