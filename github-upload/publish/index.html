@@ -4577,7 +4577,7 @@ textarea:focus-visible {
         </div>
         <div class="hero-side">
           <div class="hero-controls">
-            <button id="streakBadge" class="streak-badge" type="button" hidden aria-label="連続学習日数" aria-controls="streakPanel" aria-expanded="false">
+            <button id="streakBadge" class="streak-badge" type="button" aria-label="学習の記録を開く" aria-controls="streakPanel" aria-expanded="false">
               <span aria-hidden="true">🔥</span><span id="streakBadgeCount">0</span>
             </button>
             <button id="syncBadge" class="sync-badge" type="button" data-state="idle" title="タップで今すぐ同期">
@@ -4671,7 +4671,7 @@ textarea:focus-visible {
         >
           <span class="step-icon" aria-hidden="true"></span>
           <span class="step-copy">
-            <small>Step 1</small>
+            <small>手順 1</small>
             <strong>取り込む</strong>
           </span>
         </button>
@@ -4686,7 +4686,7 @@ textarea:focus-visible {
         >
           <span class="step-icon" aria-hidden="true"></span>
           <span class="step-copy">
-            <small>Step 2</small>
+            <small>手順 2</small>
             <strong>確認</strong>
           </span>
         </button>
@@ -4701,7 +4701,7 @@ textarea:focus-visible {
         >
           <span class="step-icon" aria-hidden="true"></span>
           <span class="step-copy">
-            <small>Step 3</small>
+            <small>手順 3</small>
             <strong>クイズ</strong>
           </span>
         </button>
@@ -4717,7 +4717,7 @@ textarea:focus-visible {
         >
           <span class="step-icon" aria-hidden="true"></span>
           <span class="step-copy">
-            <small>Library</small>
+            <small>単語一覧</small>
             <strong>
               <span class="label-full">保存した単語</span>
               <span class="label-short">単語</span>
@@ -4735,7 +4735,7 @@ textarea:focus-visible {
         >
           <span class="step-icon" aria-hidden="true"></span>
           <span class="step-copy">
-            <small>Settings</small>
+            <small>各種設定</small>
             <strong>設定</strong>
           </span>
         </button>
@@ -4750,7 +4750,7 @@ textarea:focus-visible {
       >
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Step 1</p>
+            <p class="eyebrow">手順 1</p>
             <h2 id="importTitle">単語を取り込む</h2>
           </div>
           <!-- 「全データ削除」は誤タップ防止のため、設定タブの「危険な操作」へ移動した -->
@@ -4897,7 +4897,7 @@ accurate 正確な"
       >
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Step 2</p>
+            <p class="eyebrow">手順 2</p>
             <h2 id="candidateTitle">保存前に確認</h2>
           </div>
           <div class="pill-group">
@@ -4918,7 +4918,7 @@ accurate 正確な"
       >
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Step 3</p>
+            <p class="eyebrow">手順 3</p>
             <h2 id="quizTitle">クイズ</h2>
           </div>
           <div class="pill-group">
@@ -5024,7 +5024,7 @@ accurate 正確な"
       >
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Library</p>
+            <p class="eyebrow">単語一覧</p>
             <h2 id="savedTitle">保存した単語</h2>
           </div>
           <div class="actions compact">
@@ -5062,7 +5062,7 @@ accurate 正確な"
               <span class="select-bar-label">選ぶ</span>
               <label class="select-all">
                 <input type="checkbox" id="selectAllCheckbox" />
-                全部
+                <span id="selectAllLabel">表示中を全選択</span>
               </label>
               <span class="range-select">
                 <span class="range-select-label">番号で</span>
@@ -5148,14 +5148,14 @@ accurate 正確な"
       >
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Settings</p>
+            <p class="eyebrow">各種設定</p>
             <h2 id="settingsTitle">設定</h2>
           </div>
           <span class="pill subtle">この端末に保存</span>
         </div>
 
         <div class="settings-accordion">
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="guide">
             <summary>📖 ツールの使い方</summary>
             <div class="settings-section-body">
               <ol class="usage-steps">
@@ -5170,7 +5170,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="sync">
             <summary>🔄 データの保存・引き継ぎ</summary>
             <div class="settings-section-body" aria-labelledby="syncTitle">
               <!-- 要点を先に2行で示し、長い説明は「詳しい説明」に畳む（文言整理のみ・機能は不変） -->
@@ -5279,7 +5279,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="backup">
             <summary>💾 JSONバックアップ</summary>
             <div class="settings-section-body">
               <p class="settings-desc">保存した単語・成績・単語帳を、端末にJSONファイルとして書き出します。</p>
@@ -5290,7 +5290,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="storage">
             <summary>🔒 データの保存場所と削除について</summary>
             <div class="settings-section-body">
               <ul class="usage-steps">
@@ -5304,7 +5304,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="sound">
             <summary>🔊 音</summary>
             <div class="settings-section-body">
               <p class="settings-desc">操作やクイズ結果に短い効果音を鳴らします。</p>
@@ -5326,7 +5326,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="appearance">
             <summary>🎨 表示</summary>
             <div class="settings-section-body">
               <p class="settings-desc">画面テーマと、クイズ画面の補助表示を調整します。</p>
@@ -5348,7 +5348,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="quiz">
             <summary>📝 クイズ</summary>
             <div class="settings-section-body">
               <p class="settings-desc">反復練習のテンポを調整します。自動送りをオンにすると、答えたあと少し待って次の問題へ進みます。</p>
@@ -5427,7 +5427,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="learning-log">
             <summary>📈 学習の記録（任意）</summary>
             <div class="settings-section-body">
               <p class="settings-desc">
@@ -5446,7 +5446,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="feedback">
             <summary>💬 ご要望・フィードバック</summary>
             <div class="settings-section-body">
               <p class="settings-desc">
@@ -5480,7 +5480,7 @@ accurate 正確な"
           </details>
 
           <!-- 「全データ削除」は取り込み画面の主導線近くにあると誤タップしやすいため、ここへ移動した -->
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="danger">
             <summary>⚠️ 危険な操作</summary>
             <div class="settings-section-body">
               <p class="settings-desc">
@@ -8057,6 +8057,7 @@ const elements = {
   quizDeckCount: document.querySelector("#quizDeckCount"),
   accuracy: document.querySelector("#accuracy"),
   selectAllCheckbox: document.querySelector("#selectAllCheckbox"),
+  selectAllLabel: document.querySelector("#selectAllLabel"),
   selectionActions: document.querySelector("#selectionActions"),
   selectionCount: document.querySelector("#selectionCount"),
   reviewSelectedButton: document.querySelector("#reviewSelectedButton"),
@@ -8149,6 +8150,7 @@ const elements = {
 const THEME_KEY = "wordsnap-theme"; // "light" | "dark" | "auto"
 const GEO_KEY = "wordsnap-geo:v1"; // 自動テーマ用の緯度経度
 const ACTIVE_STEP_KEY = "wordsnap-active-step";
+const SETTINGS_ACCORDION_KEY = "wordsnap-settings-accordion:v1";
 const SOUND_KEY = "wordsnap-sound-enabled";
 const SOUND_VOLUME_KEY = "wordsnap-sound-volume";
 const KBD_HINTS_KEY = "wordsnap-keyboard-hints";
@@ -8224,6 +8226,37 @@ function initTheme() {
   }
   applyTheme(mode);
   refreshAutoThemeWatch(mode);
+}
+
+// 設定へ戻ったとき、前回開いていた項目から続きを確認できるようにする。
+// UIの開閉状態だけを端末内へ保存し、単語データや同期状態には含めない。
+function initSettingsAccordionState() {
+  const sections = [...document.querySelectorAll(".settings-accordion > .settings-section")];
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_ACCORDION_KEY) || "[]");
+    if (Array.isArray(saved)) {
+      const openKeys = new Set(saved.filter((key) => typeof key === "string"));
+      sections.forEach((section) => {
+        section.open = openKeys.has(section.dataset.settingsSection);
+      });
+    }
+  } catch {
+    // 保存値が壊れている／端末の保存が使えない場合は、既定の閉じた状態を使う。
+  }
+
+  sections.forEach((section) => {
+    section.addEventListener("toggle", () => {
+      try {
+        const openKeys = sections
+          .filter((item) => item.open)
+          .map((item) => item.dataset.settingsSection)
+          .filter(Boolean);
+        localStorage.setItem(SETTINGS_ACCORDION_KEY, JSON.stringify(openKeys));
+      } catch {
+        // UI操作は継続できるため、保存失敗時も開閉自体は妨げない。
+      }
+    });
+  });
 }
 
 // 保存した緯度経度を取り出す（自動テーマの日の出・日の入り計算に使う）
@@ -13165,8 +13198,8 @@ function renderCandidates() {
     elements.candidateList.className = "word-list empty empty-guide";
     elements.candidateList.innerHTML =
       '<p>まだ確認する単語がありません。</p>' +
-      '<p>Step 1 で文字を貼り付けるか写真から読み取り、<strong>「単語リストに変換」</strong>を押すと、ここに候補が出ます。</p>' +
-      '<button type="button" class="secondary" data-goto-step="import">Step 1（取り込む）へ</button>';
+      '<p>手順 1 で文字を貼り付けるか写真から読み取り、<strong>「単語リストに変換」</strong>を押すと、ここに候補が出ます。</p>' +
+      '<button type="button" class="secondary" data-goto-step="import">手順 1（取り込む）へ</button>';
     return;
   }
 
@@ -13268,7 +13301,7 @@ function renderSavedWords() {
       elements.savedList.className = "word-list empty empty-guide";
       elements.savedList.innerHTML =
         "<p>保存済みの単語はまだありません。</p>" +
-        "<p>Step 1 で単語を取り込むと、ここに一覧が表示され、クイズに出せるようになります。</p>" +
+        "<p>手順 1 で単語を取り込むと、ここに一覧が表示され、クイズに出せるようになります。</p>" +
         '<button type="button" class="secondary" data-goto-step="import">単語を取り込む</button>';
       renderSelection();
       return;
@@ -13565,8 +13598,13 @@ function renderSelection() {
   if (elements.selectionActions) elements.selectionActions.hidden = n === 0;
   if (elements.selectionCount) elements.selectionCount.textContent = `${n}件 選択中`;
   if (elements.selectAllCheckbox) {
-    elements.selectAllCheckbox.checked = visible.length > 0 && visibleSelected === visible.length;
+    const allVisibleSelected = visible.length > 0 && visibleSelected === visible.length;
+    const actionLabel = allVisibleSelected ? "表示中を解除" : "表示中を全選択";
+    elements.selectAllCheckbox.checked = allVisibleSelected;
     elements.selectAllCheckbox.indeterminate = visibleSelected > 0 && visibleSelected < visible.length;
+    elements.selectAllCheckbox.disabled = visible.length === 0;
+    elements.selectAllCheckbox.setAttribute("aria-label", `${actionLabel}（${visible.length}件）`);
+    if (elements.selectAllLabel) elements.selectAllLabel.textContent = actionLabel;
   }
 }
 
@@ -13736,7 +13774,7 @@ function renderQuizIntro() {
   if (appState.words.length === 0) {
     elements.quizWord.textContent = "単語を保存すると出題できます";
     elements.quizFeedback.textContent =
-      "Step 1 で写真や手入力から単語を保存すると、ここでクイズに挑戦できます。";
+      "手順 1 で写真や手入力から単語を保存すると、ここでクイズに挑戦できます。";
     return;
   }
   elements.quizWord.textContent = "クイズを始めましょう";
@@ -16754,18 +16792,25 @@ function renderStreakBadge() {
   const badge = elements.streakBadge;
   if (!badge) return;
   const streak = normalizeStreak(appState.streak);
-  badge.hidden = streak.count === 0;
-  if (streak.count === 0) return;
+  badge.hidden = false;
   if (elements.streakBadgeCount) elements.streakBadgeCount.textContent = String(streak.count);
   const isToday = streak.last === localDateString();
+  const hasStreak = streak.count > 0;
   // 今日まだ解いていなければ薄く表示する（今日やれば継続が分かるように）
-  badge.classList.toggle("is-stale", !isToday);
-  badge.title = isToday
-    ? `${streak.count}日連続で学習中！`
-    : "今日クイズに答えると連続記録が続きます";
+  badge.classList.toggle("is-stale", hasStreak && !isToday);
+  badge.title = hasStreak
+    ? isToday
+      ? `${streak.count}日連続で学習中！`
+      : "今日クイズに答えると連続記録が続きます"
+    : "学習の記録を見る";
   // 読み上げには「◯日連続」と、開いて学習の記録を見られることを伝える（固定ラベルで数を潰さない）
   const expanded = elements.streakPanel && !elements.streakPanel.hidden;
-  badge.setAttribute("aria-label", `${streak.count}日連続。学習の記録を${expanded ? "閉じる" : "開く"}`);
+  badge.setAttribute(
+    "aria-label",
+    hasStreak
+      ? `${streak.count}日連続。学習の記録を${expanded ? "閉じる" : "開く"}`
+      : `学習の記録を${expanded ? "閉じる" : "開く"}`,
+  );
 }
 
 // ---------- 学習カレンダー ----------
@@ -18843,7 +18888,9 @@ elements.resumeQuizButton?.addEventListener("click", resumeSavedReview);
 elements.streakBadge?.addEventListener("click", () => {
   const streak = normalizeStreak(appState.streak);
   if (elements.streakPanel?.hidden !== false) {
-    if (streak.last === localDateString()) {
+    if (streak.count === 0) {
+      setStatus("学習の記録を開きました。クイズに1問答えると記録が始まります。");
+    } else if (streak.last === localDateString()) {
       setStatus(`🔥 ${streak.count}日連続で学習中！この調子で続けましょう。`);
     } else {
       setStatus(`今日はまだ解いていません。1問解くと連続記録が続きます（現在${streak.count}日）。`);
@@ -19016,12 +19063,18 @@ elements.rangeSelectButton?.addEventListener("click", () => {
 elements.selectAllCheckbox.addEventListener("change", () => {
   // 「表示されている（お気に入り・検索で絞り込み後の）単語」だけを対象にする
   const visible = visibleSavedWords();
-  if (elements.selectAllCheckbox.checked) {
+  const selecting = elements.selectAllCheckbox.checked;
+  if (selecting) {
     visible.forEach((word) => selectedIds.add(word.id));
   } else {
     visible.forEach((word) => selectedIds.delete(word.id));
   }
   renderSavedWords();
+  setStatus(
+    selecting
+      ? `表示中の${visible.length}件をすべて選択しました。`
+      : `表示中の${visible.length}件の選択を解除しました。`,
+  );
 });
 
 elements.reviewSelectedButton.addEventListener("click", () =>
@@ -19635,6 +19688,7 @@ function initServiceWorker() {
 }
 
 initTheme();
+initSettingsAccordionState();
 initSettings();
 initContextGenSettings();
 initStepTabs();
