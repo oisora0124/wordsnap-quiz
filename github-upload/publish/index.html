@@ -2368,6 +2368,83 @@ textarea:focus-visible {
   font-size: 0.78rem !important;
 }
 
+/* 復元履歴は版・日時・保存理由を分け、長い履歴でも同じ位置から選べるようにする。 */
+.restore-history-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.restore-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.restore-history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  min-width: 0;
+}
+
+.restore-history-rev {
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.restore-history-date,
+.restore-history-reason {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.restore-history-reason {
+  flex-basis: 100%;
+}
+
+.restore-history-item button {
+  grid-column: 2;
+  grid-row: 1;
+  white-space: nowrap;
+}
+
+.app-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  justify-content: center;
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-align: center;
+}
+
+.app-footer-version {
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+@media (max-width: 480px) {
+  .restore-history-item {
+    grid-template-columns: 1fr;
+  }
+
+  .restore-history-item button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+}
+
 /* 「別の端末と同じキーで同期」欄：キー/リンクの貼り付け入力＋接続ボタンの1行 */
 .sync-join-row input {
   flex: 1 1 220px;
@@ -5284,7 +5361,7 @@ accurate 正確な"
                   <div class="sync-fix-actions">
                     <button id="restoreHistoryLoadButton" class="secondary" type="button">履歴を読み込む</button>
                   </div>
-                  <div id="restoreHistoryList"></div>
+                  <div id="restoreHistoryList" class="restore-history-list" role="list" aria-label="復元できる過去の状態"></div>
                   <p id="restoreHistoryStatus" class="sync-fix-hint" aria-live="polite"></p>
                 </div>
               </details>
@@ -5505,6 +5582,10 @@ accurate 正確な"
           </details>
         </div>
       </section>
+      <footer class="app-footer" aria-label="アプリ情報">
+        <span>WordBank</span>
+        <span class="app-footer-version">バージョン 1.0.0</span>
+      </footer>
     </main>
 
     <script>
@@ -10653,12 +10734,31 @@ async function loadRestoreHistory() {
       setRestoreHistoryStatus("履歴がありません");
       return;
     }
+    const reasonLabels = {
+      update: "通常保存の前",
+      "pre-update": "通常保存の前",
+      "pre-force": "手動上書きの前",
+      "pre-restore": "復元の前",
+    };
     elements.restoreHistoryList.innerHTML = revisions.map((entry) => {
       const rev = Number(entry.rev);
       const date = new Date(entry.createdAt);
-      const createdAt = Number.isNaN(date.getTime()) ? "日時不明" : date.toLocaleString();
-      const reason = entry.reason || "—";
-      return `<div class="sync-fix-actions"><span>rev ${escapeHtml(rev)} / ${escapeHtml(createdAt)} / ${escapeHtml(reason)}</span><button class="secondary" type="button" data-restore-rev="${escapeHtml(rev)}">この版に戻す</button></div>`;
+      const hasDate = !Number.isNaN(date.getTime());
+      const createdAt = hasDate
+        ? date.toLocaleString("ja-JP", { dateStyle: "medium", timeStyle: "short" })
+        : "日時不明";
+      const dateTime = hasDate ? date.toISOString() : "";
+      const reason = reasonLabels[entry.reason] || "保存時点";
+      return (
+        `<div class="restore-history-item" role="listitem">` +
+        `<span class="restore-history-meta">` +
+        `<span class="restore-history-rev">版 ${escapeHtml(rev)}</span>` +
+        `<time class="restore-history-date"${dateTime ? ` datetime="${escapeHtml(dateTime)}"` : ""}>${escapeHtml(createdAt)}</time>` +
+        `<span class="restore-history-reason">${escapeHtml(reason)}</span>` +
+        `</span>` +
+        `<button class="secondary" type="button" data-restore-rev="${escapeHtml(rev)}">この版に戻す</button>` +
+        `</div>`
+      );
     }).join("");
     setRestoreHistoryStatus(`${revisions.length}件の履歴を読み込みました。`);
   } catch (error) {
@@ -17048,9 +17148,23 @@ function statsAccuracyCard(byDay) {
     const entry = byDay.get(key);
     if (entry && entry.answers > 0) {
       hasData = true;
-      cols.push({ key, rate: entry.correct / entry.answers, answers: entry.answers, day: d.getDate() });
+      cols.push({
+        key,
+        rate: entry.correct / entry.answers,
+        answers: entry.answers,
+        day: d.getDate(),
+        weekday: d.getDay(),
+        isToday: i === 0,
+      });
     } else {
-      cols.push({ key, rate: null, answers: 0, day: d.getDate() });
+      cols.push({
+        key,
+        rate: null,
+        answers: 0,
+        day: d.getDate(),
+        weekday: d.getDay(),
+        isToday: i === 0,
+      });
     }
   }
   if (!hasData) return "";
@@ -17066,16 +17180,33 @@ function statsAccuracyCard(byDay) {
   const bars = cols
     .map((c, i) => {
       const cx = pad + slot * i + (slot - barW) / 2;
+      let bar = "";
       if (c.rate === null) {
         // 学習なし: 底に薄いドット
-        return `<rect x="${cx.toFixed(2)}" y="${(chartH - 2).toFixed(2)}" width="${barW.toFixed(2)}" height="2" rx="1" ${svgFill("--surface-3")}></rect>`;
+        bar = `<rect x="${cx.toFixed(2)}" y="${(chartH - 2).toFixed(2)}" width="${barW.toFixed(2)}" height="2" rx="1" ${svgFill("--surface-3")}></rect>`;
+      } else {
+        const h = Math.max(2, c.rate * chartH);
+        const y = chartH - h;
+        const pct = Math.round(c.rate * 100);
+        bar =
+          `<rect x="${cx.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${h.toFixed(2)}" rx="2" ${svgFill(colorFor(c.rate))}>` +
+          `<title>${escapeHtml(`${c.key} 正答率${pct}%（${c.answers}回）`)}</title></rect>`;
       }
-      const h = Math.max(2, c.rate * chartH);
-      const y = chartH - h;
-      const pct = Math.round(c.rate * 100);
+      const labelX = (cx + barW / 2).toFixed(2);
+      const labelY = (chartH + 12).toFixed(2);
+      const labelColor = c.isToday
+        ? "--action-fg"
+        : c.weekday === 0
+          ? "--danger-text"
+          : c.weekday === 6
+            ? "--accent-text"
+            : "--muted";
+      const todayMarker = c.isToday
+        ? `<circle cx="${labelX}" cy="${(chartH + 9).toFixed(2)}" r="6.5" ${svgFill("--action-bg")}></circle>`
+        : "";
       return (
-        `<rect x="${cx.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${h.toFixed(2)}" rx="2" ${svgFill(colorFor(c.rate))}>` +
-        `<title>${escapeHtml(`${c.key} 正答率${pct}%（${c.answers}回）`)}</title></rect>`
+        bar + todayMarker +
+        `<text x="${labelX}" y="${labelY}" text-anchor="middle" style="fill:var(${labelColor});font-size:8px;font-weight:${c.isToday ? 700 : 500}">${c.day}</text>`
       );
     })
     .join("");
@@ -17094,7 +17225,7 @@ function statsAccuracyCard(byDay) {
     `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">` +
     `${grid}<g>${bars}</g></svg>` +
     `<ul class="sr-only">${srItems}</ul>` +
-    `<p class="stats-caption">棒の高さ＝その日の正答率。点線は50%。</p>` +
+    `<p class="stats-caption">棒の高さ＝その日の正答率。点線は50%。日付の色は日曜・土曜、丸印は今日。</p>` +
     `</div>`
   );
 }
