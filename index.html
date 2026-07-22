@@ -18477,8 +18477,10 @@ elements.exitQuizButton?.addEventListener("click", () => {
   // 今回のセッションの成果をひとこと添えて終える（何も解いていなければ従来どおり）
   if (quizSessionStats.answered > 0) {
     const rate = Math.round((quizSessionStats.correct / quizSessionStats.answered) * 100);
+    const goal = dailyGoalWords();
+    const goalNote = goal ? ` 今日 ${todayAnswerCount()}/${goal}語。` : "";
     setStatus(
-      `クイズ終了：${quizSessionStats.answered}問中 ${quizSessionStats.correct}問正解（正答率${rate}%）。おつかれさまでした！`,
+      `クイズ終了：${quizSessionStats.answered}問中 ${quizSessionStats.correct}問正解（正答率${rate}%）。${goalNote}おつかれさまでした！`,
     );
   } else {
     setStatus("クイズをやめました。設定を変えて再開できます。");
