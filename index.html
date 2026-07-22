@@ -4070,6 +4070,13 @@ textarea:focus-visible {
   color: #0b0f16;
 }
 
+/* クイズの濃いグラデーション上でも、キーボードフォーカスを確実に見分けられる二重リング */
+.choice-button:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 5px rgba(11, 15, 22, 0.72);
+}
+
 .dont-know {
   width: 100%;
   margin-top: 12px;
@@ -9863,6 +9870,7 @@ function describeSyncedAt(ts) {
 function updateSyncBadge() {
   const badge = elements.syncBadge;
   if (!badge) return;
+  const isOffline = navigator.onLine === false;
   let state;
   let text;
   let title;
@@ -9870,6 +9878,10 @@ function updateSyncBadge() {
     state = "off";
     text = "ローカル保存のみ";
     title = "このページではサーバー保存は使えません。https のリンクから開くと自動保存されます。";
+  } else if (isOffline) {
+    state = "off";
+    text = "オフライン・端末に保存";
+    title = "通信が戻るまで端末に保存します。オンラインに戻ると自動で同期します。";
   } else if (syncState.busy) {
     state = "busy";
     text = "同期中…";
@@ -9895,6 +9907,8 @@ function updateSyncBadge() {
   // サーバー保存が使えない場面では押しても更新できず、設定へ移動する。
   const action = !syncServerAvailable()
     ? "押すと設定を開きます"
+    : isOffline
+      ? "オンラインに戻ると自動で同期します"
     : syncState.busy
       ? "同期中です"
       : "押すと今すぐ更新します";
@@ -17180,6 +17194,13 @@ function gradeQuiz(choiceId, dontKnow = false) {
   const answeredAt = Date.now();
   if (!isCorrect) word.learning.blockedUntil = answeredAt + WRONG_COOLDOWN_MS;
   highlightChoices(choiceId);
+  // 空所補充は採点後に完成した英文を見せ、どの語が入るのかを文脈ごと確認できるようにする。
+  if (currentQuiz.context?.en) {
+    elements.quizWord.innerHTML = highlightTermInSentence(
+      currentQuiz.context.en,
+      currentQuiz.answer.term,
+    );
+  }
 
   // 回答時間（問題を表示してから解答するまで）。速い正解ほど定着とみなす。
   // 例文モードは文を読む時間が乗るので速度判定を無効化する（skipSpeedGate）。
@@ -17218,6 +17239,10 @@ function gradeQuiz(choiceId, dontKnow = false) {
     },
   });
 
+  const answerFeedback = currentQuiz.context
+    ? `「${currentQuiz.answer.term}」（${currentQuiz.answer.meaning}）`
+    : `「${currentQuiz.answer.meaning}」`;
+
   if (reviewSession) {
     // セッションのキュー操作（誤答は末尾へ回す）と進捗カウントは従来どおり維持する
     if (isCorrect) {
@@ -17231,7 +17256,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
       ? remaining === 0
         ? "正解！すべてクリアしました。「次の問題」で結果を表示します。"
         : "正解！「次の問題」で続けます。"
-      : `正解は「${currentQuiz.answer.meaning}」。あとでもう一度出します。`;
+      : `正解は${answerFeedback}。あとでもう一度出します。`;
     elements.quizFeedback.textContent += adaptiveScheduleNote(srsInfo);
     elements.quizScope.textContent = reviewScopeText();
     renderQuizProgress();
@@ -17250,8 +17275,8 @@ function gradeQuiz(choiceId, dontKnow = false) {
       ? "正解！2回連続正解で、この単語は習得済みになりました。"
       : "正解！もう一度連続で正解すると習得済みになります（2〜3問後にまた出します）。"
     : dontKnow
-      ? `正解は「${currentQuiz.answer.meaning}」です。2〜3問後にもう一度出します。`
-      : `惜しい。正解は「${currentQuiz.answer.meaning}」。2〜3問後にもう一度出します。`;
+      ? `正解は${answerFeedback}です。2〜3問後にもう一度出します。`
+      : `惜しい。正解は${answerFeedback}。2〜3問後にもう一度出します。`;
   elements.quizFeedback.textContent += adaptiveScheduleNote(srsInfo);
   persistAppState();
   renderAccuracy();
@@ -18434,6 +18459,28 @@ elements.choices.addEventListener("click", (event) => {
   const button = event.target.closest("[data-choice-id]");
   if (!button) return;
   gradeQuiz(button.dataset.choiceId);
+});
+
+// 選択肢内では矢印キーで前後へ移動できるようにする。Home/Endは先頭/末尾へ移動。
+// Enter/Spaceはbutton標準のクリックに任せ、既存の採点経路をそのまま使う。
+elements.choices.addEventListener("keydown", (event) => {
+  if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) {
+    return;
+  }
+  const buttons = [...elements.choices.querySelectorAll(".choice-button")];
+  const current = event.target.closest(".choice-button");
+  const currentIndex = buttons.indexOf(current);
+  if (currentIndex < 0 || buttons.length < 2) return;
+  let nextIndex;
+  if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = buttons.length - 1;
+  else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    nextIndex = (currentIndex + 1) % buttons.length;
+  } else {
+    nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+  }
+  buttons[nextIndex].focus();
+  event.preventDefault();
 });
 
 // キーボード操作: 1〜4で解答、N/Enterで次の問題、0で「わからない」。
