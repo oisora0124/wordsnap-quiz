@@ -78,6 +78,13 @@
   --r-md: 12px;
   --r-sm: 8px;
 
+  /* 余白スケール（新規コンポーネントから段階的に移行。値は既存表示と同一）*/
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
   --font:
     "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", Meiryo, sans-serif;
@@ -740,7 +747,7 @@ h2 {
    依存ゼロのインラインSVGで描く。stateへは一切書き込まない読み取り専用の可視化。 */
 .stats-block {
   margin-top: 18px;
-  padding-top: 16px;
+  padding-top: var(--space-4);
   border-top: 1px solid var(--line);
   display: grid;
   gap: 14px;
@@ -751,7 +758,7 @@ h2 {
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .stats-head h3 {
   margin: 0;
@@ -763,7 +770,7 @@ h2 {
 }
 .stats-grid {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   /* 各カードは中身の高さに収める（背の高いカードに引き伸ばされて余白が空くのを防ぐ） */
   align-items: start;
@@ -772,9 +779,9 @@ h2 {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 .stats-card h4 {
@@ -2417,44 +2424,8 @@ textarea:focus-visible {
 }
 
 /* ---------- Settings ---------- */
-
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.settings-grid > .sync-panel {
-  grid-column: 1 / -1;
-  margin-bottom: 0;
-}
-
-.settings-card {
-  display: grid;
-  gap: 12px;
-  align-content: start;
-  padding: 16px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-}
-
-.settings-card.wide {
-  grid-column: 1 / -1;
-}
-
-.settings-card h3 {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 760;
-}
-
-.settings-card p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.84rem;
-  line-height: 1.6;
-}
+/* （旧 .settings-grid / .settings-card は実マークアップから未使用だったため削除。
+    現在の設定UIは .settings-accordion の1カラム構成） */
 
 .settings-row {
   display: flex;
@@ -4111,7 +4082,6 @@ textarea:focus-visible {
   .hero,
   .import-grid,
   .sync-panel,
-  .settings-grid,
   .word-row,
   .candidate-row {
     grid-template-columns: 1fr;
@@ -4600,7 +4570,8 @@ textarea:focus-visible {
         </div>
       </div>
 
-      <nav class="step-tabs boot-in boot-2" aria-label="学習ステップ" role="tablist">
+      <!-- ステップ(1-3)と行き先(ライブラリ・設定)が混在するため、名称は「メインメニュー」にする -->
+      <nav class="step-tabs boot-in boot-2" aria-label="メインメニュー" role="tablist">
         <button
           id="tab-import"
           class="step-tab active"
@@ -4710,7 +4681,17 @@ accurate 正確な"
 
         <div class="actions">
           <button id="parseButton" type="button">単語リストに変換</button>
-          <button id="sampleButton" class="ghost" type="button">大学受験標準レベル単語300</button>
+          <label class="deck-pick">
+            サンプル
+            <select id="sampleSelect" aria-label="追加するサンプル単語集">
+              <option value="exam300">大学受験標準300</option>
+              <option value="jhs100">中学基礎100</option>
+              <option value="eiken100">英検2級レベル100</option>
+              <option value="toeic100">TOEIC頻出100</option>
+              <option value="daily100">日常英会話100</option>
+            </select>
+          </label>
+          <button id="sampleButton" class="ghost" type="button">サンプルを追加</button>
           <label class="deck-pick">
             保存先
             <select id="saveDeckSelect" aria-label="保存先の単語帳"></select>
@@ -6236,6 +6217,423 @@ victim 犠牲者
 vital 生命に不可欠な
 withdraw 引き揚げる`;
 
+// 中学基礎レベル（動詞・名詞・形容詞のミックス）
+const SAMPLE_TEXT_JHS = `answer 答える
+arrive 到着する
+borrow 借りる
+bring 持ってくる
+build 建てる
+carry 運ぶ
+catch 捕まえる
+choose 選ぶ
+climb 登る
+collect 集める
+cross 渡る
+decide 決める
+draw 描く
+drop 落とす
+enjoy 楽しむ
+explain 説明する
+follow ついていく
+forget 忘れる
+grow 育つ
+happen 起こる
+hold 持つ
+hope 望む
+hurry 急ぐ
+invite 招待する
+join 参加する
+keep 保つ
+laugh 笑う
+learn 学ぶ
+leave 去る
+lend 貸す
+lose 失う
+mean 意味する
+move 動かす
+practice 練習する
+remember 覚えている
+repeat 繰り返す
+return 戻る
+save 救う
+sell 売る
+send 送る
+share 分け合う
+spend 費やす
+teach 教える
+throw 投げる
+touch 触れる
+understand 理解する
+wear 着ている
+win 勝つ
+worry 心配する
+wrap 包む
+bridge 橋
+castle 城
+cloud 雲
+corner 角
+culture 文化
+dictionary 辞書
+earth 地球
+farm 農場
+festival 祭り
+future 未来
+grade 学年
+health 健康
+holiday 休日
+hospital 病院
+island 島
+language 言語
+library 図書館
+luck 運
+meal 食事
+memory 記憶
+message 伝言
+mountain 山
+neighbor 隣人
+newspaper 新聞
+noise 騒音
+prize 賞
+promise 約束
+reason 理由
+river 川
+season 季節
+stone 石
+subject 教科
+uncle おじ
+vegetable 野菜
+voice 声
+weather 天気
+week 週
+angry 怒った
+bright 明るい
+careful 注意深い
+cheap 安い
+dark 暗い
+deep 深い
+famous 有名な
+heavy 重い
+hungry 空腹の
+quiet 静かな
+rich 裕福な
+strong 強い
+tired 疲れた`;
+
+// 英検2級前後（高校〜社会一般の頻出語）
+const SAMPLE_TEXT_EIKEN = `agriculture 農業
+ancient 古代の
+announce 発表する
+anxiety 不安
+appetite 食欲
+architecture 建築
+article 記事
+astronaut 宇宙飛行士
+atmosphere 大気
+audience 聴衆
+behavior ふるまい
+biology 生物学
+blame 非難する
+boil 沸騰させる
+breathe 呼吸する
+celebrate 祝う
+ceremony 式典
+charity 慈善団体
+chemistry 化学
+climate 気候
+colleague 同僚
+complain 不平を言う
+conclusion 結論
+confidence 自信
+confuse 混乱させる
+consumer 消費者
+continent 大陸
+convenient 便利な
+crop 農作物
+curious 好奇心の強い
+custom 慣習
+decade 10年間
+describe 描写する
+desert 砂漠
+destroy 破壊する
+detail 詳細
+disaster 災害
+discount 割引
+discovery 発見
+disease 病気
+distance 距離
+effort 努力
+employee 従業員
+environment 環境
+exchange 交換する
+exhibition 展覧会
+expand 拡大する
+experiment 実験
+expert 専門家
+fever 熱
+flavor 風味
+flood 洪水
+forecast 予報
+fuel 燃料
+furniture 家具
+generation 世代
+geography 地理学
+government 政府
+graduate 卒業する
+harvest 収穫
+height 高さ
+immediately すぐに
+income 収入
+industry 産業
+injure 傷つける
+insect 昆虫
+instrument 楽器
+invent 発明する
+journey 旅
+knowledge 知識
+laboratory 実験室
+lecture 講義
+liquid 液体
+luggage 手荷物
+medicine 薬
+muscle 筋肉
+mystery なぞ
+nephew おい
+niece めい
+opinion 意見
+opportunity 機会
+ordinary 普通の
+passenger 乗客
+patient 患者
+population 人口
+professor 教授
+protect 守る
+quantity 量
+recommend 勧める
+refuse 断る
+relative 親戚
+repair 修理する
+salary 給料
+scenery 景色
+shortage 不足
+soil 土壌
+surface 表面
+temperature 温度
+translate 翻訳する
+vehicle 乗り物`;
+
+// TOEIC頻出（ビジネス・オフィス）
+const SAMPLE_TEXT_TOEIC = `agenda 議題
+applicant 応募者
+appointment 予約
+approve 承認する
+attach 添付する
+attend 出席する
+available 利用できる
+banquet 宴会
+branch 支店
+budget 予算
+candidate 候補者
+cargo 貨物
+commute 通勤する
+conference 会議
+confirm 確認する
+contract 契約
+deadline 締め切り
+deliver 配達する
+department 部署
+deposit 預金
+distribute 配布する
+document 書類
+due 期限が来て
+duty 職務
+estimate 見積もり
+expense 費用
+extend 延長する
+facility 施設
+fare 運賃
+feature 特徴
+fee 料金
+fiscal 会計の
+fragile 壊れやすい
+headquarters 本社
+hire 雇う
+inquiry 問い合わせ
+inspect 点検する
+install 設置する
+inventory 在庫
+invoice 請求書
+itinerary 旅程
+launch 売り出す
+lease 賃貸借契約
+load 積み込む
+manufacture 製造する
+merchandise 商品
+merger 合併
+negotiate 交渉する
+notify 通知する
+occupy 占める
+overtime 残業
+paycheck 給与
+personnel 職員
+postpone 延期する
+procedure 手順
+profit 利益
+promote 昇進させる
+purchase 購入する
+quarter 四半期
+receipt 領収書
+recruit 採用する
+refund 払い戻し
+register 登録する
+reject 却下する
+remind 思い出させる
+renew 更新する
+replace 取り替える
+representative 担当者
+reserve 予約する
+resign 辞職する
+retail 小売
+retire 退職する
+revenue 収益
+revise 修正する
+shift 交代勤務
+submit 提出する
+subscribe 定期購読する
+supervisor 上司
+supply 供給する
+survey 調査
+transfer 移す
+vendor 販売業者
+venue 会場
+warehouse 倉庫
+warranty 保証
+workload 仕事量
+wage 賃金
+attendance 出席
+brochure パンフレット
+committee 委員会
+complimentary 無料の
+efficiency 効率
+enclose 同封する
+enrollment 登録者数
+outlet 直販店
+paperwork 事務処理
+payroll 給与支払い名簿
+reimburse 払い戻す
+shipment 発送品
+workshop 講習会`;
+
+// 日常英会話（生活・健康・街なか）
+const SAMPLE_TEXT_DAILY = `bakery パン屋
+bargain お買い得品
+bill 請求書
+blanket 毛布
+ceiling 天井
+cough せき
+crosswalk 横断歩道
+curtain カーテン
+dessert デザート
+detergent 洗剤
+dizzy めまいがする
+drawer 引き出し
+errand 使い走り
+faucet 蛇口
+fever 発熱
+flavor 味わい
+garbage 生ごみ
+grocery 食料雑貨
+hallway 廊下
+headache 頭痛
+ingredient 材料
+laundry 洗濯物
+leftover 食べ残し
+microwave 電子レンジ
+nap 昼寝
+ointment 軟膏
+oven オーブン
+pedestrian 歩行者
+pharmacy 薬局
+pillow 枕
+plumber 配管工
+receipt レシート
+recipe レシピ
+refrigerator 冷蔵庫
+rent 家賃
+sneeze くしゃみをする
+stain しみ
+stairs 階段
+stomachache 腹痛
+stroller ベビーカー
+tap 水道の栓
+thirsty のどが渇いた
+toothache 歯痛
+towel タオル
+trash ごみ
+umbrella 傘
+vacuum 掃除機をかける
+wallet 財布
+wrinkle しわ
+yawn あくびをする
+allowance こづかい
+appointment 予約
+bruise 打撲のあと
+budget 家計
+broom ほうき
+chore 家事
+commute 通勤
+cupboard 食器棚
+discount 値引き
+downtown 繁華街
+drizzle 小雨
+dusty ほこりっぽい
+elevator エレベーター
+escalator エスカレーター
+expiration 期限切れ
+fasten 締める
+freezer 冷凍庫
+handrail 手すり
+humid 蒸し暑い
+iron アイロンをかける
+itchy かゆい
+janitor 管理人
+kettle やかん
+ladder はしご
+leak 水漏れする
+lid ふた
+lightning 稲妻
+mop モップでふく
+mosquito 蚊
+nutrition 栄養
+outlet コンセント
+oversleep 寝過ごす
+pantry 食品貯蔵室
+parcel 小包
+peel 皮をむく
+puddle 水たまり
+raincoat レインコート
+rinse すすぐ
+scale 体重計
+scrub ごしごし洗う
+shelf 棚
+shortcut 近道
+sidewalk 歩道
+sip 少しずつ飲む
+slippery 滑りやすい
+spill こぼす
+sweep 掃く
+thermometer 体温計
+tidy 整頓された
+vinegar 酢`;
+
+// サンプル単語集の定義。value は #sampleSelect の option と一致させる。
+const SAMPLE_SETS = {
+  exam300: { label: "大学受験標準レベル単語300", text: SAMPLE_TEXT },
+  jhs100: { label: "中学基礎100", text: SAMPLE_TEXT_JHS },
+  eiken100: { label: "英検2級レベル100", text: SAMPLE_TEXT_EIKEN },
+  toeic100: { label: "TOEIC頻出100", text: SAMPLE_TEXT_TOEIC },
+  daily100: { label: "日常英会話100", text: SAMPLE_TEXT_DAILY },
+};
+
 const elements = {
   imageInput: document.querySelector("#imageInput"),
   imagePreview: document.querySelector("#imagePreview"),
@@ -6258,6 +6656,7 @@ const elements = {
   stepTabs: [...document.querySelectorAll("[data-step-tab]")],
   stepPanels: [...document.querySelectorAll("[data-step-panel]")],
   sampleButton: document.querySelector("#sampleButton"),
+  sampleSelect: document.querySelector("#sampleSelect"),
   hiAccToggle: document.querySelector("#hiAccToggle"),
   status: document.querySelector("#status"),
   importAllSavedActions: document.querySelector("#importAllSavedActions"),
@@ -16396,10 +16795,13 @@ renderAiKeyFields();
 
 elements.sampleButton.addEventListener("click", () => {
   playSound("tap");
+  // 選択中のサンプル集を末尾に足す。未知の値でも既定の受験300で動く（後方互換）。
+  const key = elements.sampleSelect?.value || "exam300";
+  const set = SAMPLE_SETS[key] || SAMPLE_SETS.exam300;
   const existing = elements.ocrText.value.trimEnd();
-  elements.ocrText.value = existing ? `${existing}\n${SAMPLE_TEXT}` : SAMPLE_TEXT;
+  elements.ocrText.value = existing ? `${existing}\n${set.text}` : set.text;
   if (elements.importAllSavedActions) elements.importAllSavedActions.hidden = true;
-  setStatus("大学受験標準レベル単語300を末尾に追加しました。既存の入力は保持されています。");
+  setStatus(`${set.label}を末尾に追加しました。既存の入力は保持されています。`);
 });
 
 elements.parseButton.addEventListener("click", () => {

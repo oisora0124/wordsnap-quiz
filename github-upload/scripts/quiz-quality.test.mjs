@@ -179,6 +179,35 @@ test("quiz time-limit setting is clamped to the allowed choices (invalid -> off)
   }
 });
 
+test("built-in sample word sets are well-formed (format, no dups, expected size)", () => {
+  // サンプルは教材品質の対象。行形式「英単語 訳」・セット内重複なし・語数を固定して回帰を防ぐ。
+  const extractTemplate = (name) => {
+    const start = html.indexOf(`const ${name} = \``);
+    if (start < 0) throw new Error(`${name} not found`);
+    const open = html.indexOf("`", start);
+    const close = html.indexOf("`;", open + 1);
+    return html.slice(open + 1, close);
+  };
+  const sets = {
+    SAMPLE_TEXT: 300,
+    SAMPLE_TEXT_JHS: 100,
+    SAMPLE_TEXT_EIKEN: 100,
+    SAMPLE_TEXT_TOEIC: 100,
+    SAMPLE_TEXT_DAILY: 100,
+  };
+  for (const [name, expected] of Object.entries(sets)) {
+    const lines = extractTemplate(name).split("\n").filter(Boolean);
+    assert.equal(lines.length, expected, `${name} should have ${expected} lines, got ${lines.length}`);
+    const seen = new Set();
+    for (const line of lines) {
+      const m = line.match(/^([a-z]+) (\S.*)$/);
+      assert.ok(m, `${name}: malformed line "${line}"`);
+      assert.ok(!seen.has(m[1]), `${name}: duplicate word "${m[1]}"`);
+      seen.add(m[1]);
+    }
+  }
+});
+
 test("CEFR easy-first order ranks A1<A2<...<C2, unknown/invalid last", () => {
   // A1→C2 が昇順、未判定・不明・null はすべて最後（=6）に回る。
   assert.equal(q.cefrRankOfLevel("A1"), 0);
