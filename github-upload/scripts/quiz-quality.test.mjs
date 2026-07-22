@@ -190,11 +190,11 @@ test("built-in sample word sets are well-formed (format, no dups, expected size)
   };
   const sets = {
     SAMPLE_TEXT: 300,
-    SAMPLE_TEXT_JHS: 100,
-    SAMPLE_TEXT_EIKEN: 100,
-    SAMPLE_TEXT_SOUKEI: 100,
-    SAMPLE_TEXT_TOEIC: 100,
-    SAMPLE_TEXT_IELTS: 100,
+    SAMPLE_TEXT_JHS: 300,
+    SAMPLE_TEXT_EIKEN: 300,
+    SAMPLE_TEXT_SOUKEI: 300,
+    SAMPLE_TEXT_TOEIC: 300,
+    SAMPLE_TEXT_IELTS: 300,
   };
   for (const [name, expected] of Object.entries(sets)) {
     const lines = extractTemplate(name).split("\n").filter(Boolean);
