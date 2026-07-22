@@ -13194,6 +13194,8 @@ function renderSavedWords() {
       ? `「${wordSearchQuery.trim()}」に一致する単語はありません。`
       : favoritesOnly
         ? "お気に入り（★）の単語はまだありません。単語の★を押すと登録できます。"
+        : libraryCefrLevel !== "all"
+          ? "選択したCEFRレベルに一致する単語はありません。"
         : "この単語帳にはまだ単語がありません。";
     renderSelection();
     return;
