@@ -1,2 +1,17 @@
+# CSP第1段階の通信・実行方針（index.html と wordsnap-sw.js を2026-07-23に精査）。
+# 同一オリジン: HTML・manifest・アイコン・Service Worker、/api/wordsnap-state、/api/feedback、
+# 保存版生成時の index.html/テーマ画像取得、Service Workerのprecacheと通常の静的アセット取得。
+# 辞書・翻訳: https://api.datamuse.com、https://api.dictionaryapi.dev、
+# https://translate.googleapis.com、https://api.mymemory.translated.net をfetchで利用。
+# AI: ユーザー自身のAPIキーで https://generativelanguage.googleapis.com（Gemini）と
+# https://api.groq.com（Groq）へブラウザから直接fetchする。OpenAI/Anthropicへの直接通信はない。
+# OCR: SRI付きTesseract.js 7.0.0本体、既定Worker/core/WASM/通常精度言語データを
+# https://cdn.jsdelivr.net から取得し、高精度traineddataは
+# https://tessdata.projectnaptha.com から取得する。Workerはblob: URL、coreはWebAssemblyを使う。
+# 画像: 同一オリジンのアイコン、blob:のユーザー画像、data:のCanvasプレビュー/保存版埋め込みを使う。
+# 音声はWeb Audioの合成音とspeechSynthesisのみで外部取得なし。フォントもシステムフォントのみ。
+# 外部リンク（AIキー取得、語源検索、公開URL案内）はナビゲーションだけで、リソース取得には使わない。
 /*
   Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.datamuse.com https://api.dictionaryapi.dev https://translate.googleapis.com https://api.mymemory.translated.net https://generativelanguage.googleapis.com https://api.groq.com https://cdn.jsdelivr.net https://tessdata.projectnaptha.com; img-src 'self' data: blob:; media-src 'self' data: blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; manifest-src 'self'

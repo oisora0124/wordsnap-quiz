@@ -420,10 +420,8 @@ test("a chunked PUT body is cancelled and rejected as soon as it exceeds 4MB", a
   let cancelled = false;
   const chunk = new Uint8Array(2_100_000).fill(0x78);
   const stream = new ReadableStream({
-    start(controller) {
+    pull(controller) {
       controller.enqueue(chunk);
-      controller.enqueue(chunk);
-      controller.close();
     },
     cancel() {
       cancelled = true;

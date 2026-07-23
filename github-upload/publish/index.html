@@ -9895,7 +9895,7 @@ async function syncRequest(method, body = null, requestOptions = {}) {
   }
   if (gen !== syncState.requestGen) throw staleSyncError();
   // normalizeState やマージへ渡す前の共通境界。異常stateはローカルへ一切適用しない。
-  if (syncStateExceedsLimits(data.state)) {
+  if (syncStateExceedsLimits(data?.state)) {
     const error = new Error("同期データが異常に大きいため適用を中止しました。");
     error.noRetry = true;
     error.stateTooLarge = true;

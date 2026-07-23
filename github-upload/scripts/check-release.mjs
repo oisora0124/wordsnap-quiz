@@ -66,6 +66,64 @@ for (const model of ["gemini-3.5-flash", "qwen/qwen3.6-27b"]) {
 assert.equal(rootHtml, publicHtml, "root index.html and publish/index.html must be identical");
 assert.match(headers, /^\/\*[\s\S]*?Referrer-Policy:\s*no-referrer\s*$/m,
   "Cloudflare static responses must suppress referrers before the HTML meta policy is parsed");
+assert.match(headers, /^\s*X-Content-Type-Options:\s*nosniff\s*$/mi,
+  "Cloudflare static responses must disable MIME type sniffing");
+const cspHeader = headers.match(/^\s*Content-Security-Policy:\s*(.+)$/mi)?.[1];
+assert.ok(cspHeader, "Cloudflare static responses must include a Content-Security-Policy");
+const cspDirectives = new Map(
+  cspHeader
+    .split(";")
+    .map((directive) => directive.trim().split(/\s+/))
+    .filter((parts) => parts[0])
+    .map(([name, ...sources]) => [name.toLowerCase(), sources]),
+);
+assert.deepEqual(cspDirectives.get("object-src"), ["'none'"],
+  "Content-Security-Policy must disable object embeds");
+assert.deepEqual(cspDirectives.get("frame-ancestors"), ["'none'"],
+  "Content-Security-Policy must prevent framing");
+
+// HTML内の外部オリジンをすべて拾い、単なる外部ナビゲーション以外がCSPに含まれることを保証する。
+const htmlExternalOrigins = new Set(
+  [...publicHtml.matchAll(/https:\/\/[a-z0-9.-]+/gi)].map((match) => new URL(match[0]).origin),
+);
+const navigationOnlyOrigins = new Set([
+  "https://aistudio.google.com",
+  "https://console.groq.com",
+  "https://www.etymonline.com",
+  "https://en.wiktionary.org",
+  "https://www.google.com",
+  "https://wordbank.pages.dev",
+]);
+const cspExternalOrigins = new Set(
+  [...cspHeader.matchAll(/https:\/\/[a-z0-9.-]+/gi)].map((match) => new URL(match[0]).origin),
+);
+for (const origin of htmlExternalOrigins) {
+  if (navigationOnlyOrigins.has(origin)) continue;
+  assert.ok(cspExternalOrigins.has(origin),
+    `external resource origin is missing from Content-Security-Policy: ${origin}`);
+}
+const scriptSources = new Set(cspDirectives.get("script-src") || []);
+assert.ok(scriptSources.has("https://cdn.jsdelivr.net"),
+  "Tesseract.js CDN must be allowed by script-src");
+assert.ok(scriptSources.has("'wasm-unsafe-eval'"),
+  "Tesseract WebAssembly compilation must be allowed by script-src");
+const workerSources = new Set(cspDirectives.get("worker-src") || []);
+assert.ok(workerSources.has("'self'") && workerSources.has("blob:"),
+  "Service Worker and Tesseract blob workers must be allowed by worker-src");
+const connectSources = new Set(cspDirectives.get("connect-src") || []);
+for (const origin of [
+  "https://api.datamuse.com",
+  "https://api.dictionaryapi.dev",
+  "https://translate.googleapis.com",
+  "https://api.mymemory.translated.net",
+  "https://generativelanguage.googleapis.com",
+  "https://api.groq.com",
+  "https://cdn.jsdelivr.net",
+  "https://tessdata.projectnaptha.com",
+]) {
+  assert.ok(connectSources.has(origin),
+    `runtime connection origin is missing from connect-src: ${origin}`);
+}
 assert.match(publicHtml, /<title>\s*WordBank\s*<\/title>/i, "WordBank title is missing");
 assert.doesNotMatch(publicHtml, /WordSnap\s+単語帳/,
   "the OS share title still exposes the retired WordSnap product name");
@@ -629,7 +687,7 @@ assert.match(publicHtml, /error\?\.name\s*===\s*["']AbortError["'][\s\S]*?timeou
   "a sync timeout must be distinguished from a stale key-switch cancellation");
 assert.match(publicHtml, /const\s+validConflictState\s*=\s*error\.data\.state\s*&&\s*validSyncGetResponse\([\s\S]*?if\s*\(!validConflictState\)\s*{[\s\S]*?error\.noRetry\s*=\s*true/,
   "a malformed 409 state or revision must stop instead of overwriting unseen changes");
-assert.match(publicHtml, /if\s*\(syncStateExceedsLimits\(data\.state\)\)[\s\S]*?同期データが異常に大きいため適用を中止しました。[\s\S]*?error\.stateTooLarge\s*=\s*true/,
+assert.match(publicHtml, /if\s*\(syncStateExceedsLimits\(data\?\.state\)\)[\s\S]*?同期データが異常に大きいため適用を中止しました。[\s\S]*?error\.stateTooLarge\s*=\s*true/,
   "oversized received sync state must stop at the common response boundary");
 assert.match(publicHtml, /if\s*\(!options\.silent\s*\|\|\s*error\.stateTooLarge\)/,
   "oversized sync-state rejection must remain visible during silent polling");
