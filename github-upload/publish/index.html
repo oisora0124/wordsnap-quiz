@@ -2314,6 +2314,40 @@ textarea:focus-visible {
   margin-bottom: 6px;
 }
 
+.safe-share-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+.safe-share-strip button {
+  flex: none;
+}
+
+.safe-share-warning {
+  flex: 1 1 320px;
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.share-url-warning {
+  margin: 0 0 8px;
+  color: var(--danger-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .sync-fix {
   grid-column: 1 / -1;
   margin-top: 4px;
@@ -3960,6 +3994,110 @@ textarea:focus-visible {
   letter-spacing: -0.03em;
 }
 
+/* フラッシュカードは1タップで意味を確認し、そのまま左右へ仕分けできる軽量UI。 */
+.flashcard-stage {
+  display: grid;
+  gap: 12px;
+}
+
+.flashcard-main-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.flashcard-flip {
+  min-height: clamp(170px, 32vw, 250px);
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: clamp(18px, 4vw, 34px);
+  color: #fff;
+  background: rgba(5, 8, 20, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: var(--r-lg);
+  box-shadow: none;
+  text-align: center;
+  touch-action: pan-y;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.flashcard-flip:hover {
+  background: rgba(5, 8, 20, 0.42);
+  transform: none;
+}
+
+.flashcard-term {
+  font-size: clamp(2rem, 8vw, 4rem);
+  font-weight: 800;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.flashcard-meaning {
+  font-size: clamp(1.15rem, 4vw, 1.65rem);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.flashcard-hint {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.flashcard-speak {
+  align-self: start;
+  padding: 0.75rem;
+  color: var(--action-fg);
+  background: var(--action-bg);
+  border-color: transparent;
+}
+
+.flashcard-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.flashcard-actions button {
+  min-height: 50px;
+}
+
+.flashcard-actions .is-known {
+  color: var(--action-fg);
+  background: var(--action-bg);
+}
+
+.flashcard-actions .is-unknown {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.flashcard-actions .is-unknown:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+@media (max-width: 480px) {
+  .flashcard-main-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .flashcard-speak {
+    justify-self: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flashcard-flip {
+    transition: none;
+  }
+}
+
 /* 1問あたりの制限時間のカウントダウン（クイズカードのグラデ背景の上に載る） */
 .quiz-timer {
   display: flex;
@@ -4138,6 +4276,13 @@ textarea:focus-visible {
   background: rgba(255, 255, 255, 0.26);
 }
 
+.speech-rate-field output {
+  min-width: 3.5em;
+  color: var(--accent-text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .kbd-hint {
   margin-left: auto;
   align-self: center;
@@ -4149,6 +4294,72 @@ textarea:focus-visible {
   .kbd-hint {
     display: none;
   }
+}
+
+/* 初回だけ表示する3ステップチュートリアル。テーマトークンだけで両テーマに追従する。 */
+.tutorial-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(5, 8, 20, 0.68);
+}
+
+.tutorial-dialog {
+  width: min(470px, 100%);
+  padding: clamp(20px, 5vw, 30px);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+.tutorial-kicker {
+  margin: 0 0 6px;
+  color: var(--accent-text);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.tutorial-dialog h2 {
+  margin: 0 0 10px;
+  font-size: clamp(1.35rem, 5vw, 1.75rem);
+}
+
+.tutorial-dialog p {
+  margin: 0;
+}
+
+.tutorial-step-dots {
+  display: flex;
+  gap: 7px;
+  margin: 18px 0;
+}
+
+.tutorial-step-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.tutorial-step-dot.is-active {
+  background: var(--action-bg);
+}
+
+.tutorial-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+body.tutorial-open {
+  overflow: hidden;
 }
 
 .choice-button:hover {
@@ -4684,6 +4895,13 @@ textarea:focus-visible {
         </div>
       </section>
 
+      <aside class="safe-share-strip" aria-label="安全な共有">
+        <button id="shareToolHeaderButton" type="button">🤝 キーなしで安全に共有</button>
+        <p class="safe-share-warning">
+          ⚠️ アドレスバーのURLにはあなたの個人キーが含まれます。共有には必ずこのボタンを使ってください。
+        </p>
+      </aside>
+
       <!-- 連続記録バッジから開く学習カレンダー。日次ログは別に持たず、単語ごとの history
            （{at, correct}）からその場で集計する。専用ログを新設すると過去の学習が空欄に
            なってしまうため、既存データを遡って使えるこの形にした。 -->
@@ -5080,6 +5298,20 @@ accurate 正確な"
         <div id="quizCard" class="quiz-card">
           <p class="quiz-label">出題単語</p>
           <h3 id="quizWord">クイズを始めましょう</h3>
+          <div id="flashcardStage" class="flashcard-stage" hidden>
+            <div class="flashcard-main-row">
+              <button id="flashcardFlipButton" class="flashcard-flip" type="button" aria-describedby="flashcardHint">
+                <span id="flashcardTerm" class="flashcard-term"></span>
+                <span id="flashcardMeaning" class="flashcard-meaning" hidden></span>
+                <span id="flashcardHint" class="flashcard-hint">タップまたはスペースキーで意味を表示</span>
+              </button>
+              <button id="flashcardSpeakButton" class="flashcard-speak" type="button" aria-label="単語の発音を聞く" title="発音を聞く">🔊</button>
+            </div>
+            <div id="flashcardActions" class="flashcard-actions" hidden>
+              <button id="flashcardUnknownButton" class="is-unknown" type="button">← 知らない</button>
+              <button id="flashcardKnownButton" class="is-known" type="button">知ってる →</button>
+            </div>
+          </div>
           <div id="quizTimer" class="quiz-timer" hidden role="timer" aria-atomic="true" aria-label="残り時間">
             <div id="quizTimerTrack" class="quiz-timer-track" role="progressbar" aria-label="残り時間（秒）" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0"><div id="quizTimerFill" class="quiz-timer-fill"></div></div>
             <span id="quizTimerText" class="quiz-timer-text"></span>
@@ -5095,11 +5327,12 @@ accurate 正確な"
           <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
           <button id="easyQuizButton" class="secondary" type="button" title="まだ解いていない単語を、CEFR推定でやさしい順（A1→C2、未判定は最後）に出題します。復習の予定には影響しません。">やさしい順で解く（0語）</button>
           <button id="contextQuizButton" class="secondary" type="button" title="例文の空所に入る英単語を4択から選ぶ問題。例文と選択肢はその場で自動生成します（設定で作り方を変更・停止できます）">例文で解く（0語）</button>
+          <button id="startFlashcardButton" class="secondary" type="button" title="選んだ単語帳・範囲を、英単語→意味のカードで1周します">フラッシュカード（0語）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
           <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
           <button id="exitQuizButton" class="ghost" type="button" hidden>クイズをやめる</button>
-          <span class="kbd-hint">キー 1–4＝解答 / N＝次へ / 0＝わからない</span>
+          <span id="quizKeyboardHint" class="kbd-hint">キー 1–4＝解答 / N＝次へ / 0＝わからない</span>
         </div>
       </section>
 
@@ -5256,6 +5489,9 @@ accurate 正確な"
                 <li><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
               </ol>
               <p class="usage-tip">💡 Safariで開いて「ホーム画面に追加」しておくと、データが消えにくく、ワンタップで起動できます。</p>
+              <div class="settings-row">
+                <button id="showTutorialButton" class="secondary" type="button">チュートリアルをもう一度見る</button>
+              </div>
             </div>
           </details>
 
@@ -5304,6 +5540,9 @@ accurate 正確な"
               <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
               <div class="share-tool">
                 <button id="shareToolButton" type="button">🤝 このツールを他の人に共有</button>
+                <p class="share-url-warning">
+                  ⚠️ アドレスバーのURLにはあなたの個人キーが含まれます。共有には必ずこのボタンを使ってください。
+                </p>
                 <p class="settings-desc">
                   相手は<strong>空の状態</strong>から始まります。あなたの単語データは渡りません
                   （個人キーの付かない“共有用リンク”をコピー／共有します）。
@@ -5408,6 +5647,19 @@ accurate 正確な"
                 <span>音量 <output id="soundVolumeValue">70%</output></span>
                 <input id="soundVolumeSlider" type="range" min="0" max="100" step="5" value="70" />
               </label>
+              <label class="settings-field">
+                読み上げ音声
+                <select id="speechVoiceSelect" aria-label="英単語と例文の読み上げ音声">
+                  <option value="">端末の既定音声（英語）</option>
+                </select>
+              </label>
+              <label class="settings-field speech-rate-field">
+                <span>読み上げ速度 <output id="speechRateValue">1.00倍</output></span>
+                <input id="speechRateSlider" type="range" min="0.5" max="1.5" step="0.05" value="1" />
+              </label>
+              <div class="settings-row">
+                <button id="speechTestButton" class="secondary" type="button" data-speech-test>発音をテスト再生</button>
+              </div>
               <label class="settings-check">
                 <input id="vibrateToggle" type="checkbox" />
                 <span>振動（対応端末のみ）</span>
@@ -5587,6 +5839,26 @@ accurate 正確な"
         <span class="app-footer-version">バージョン 1.0.0</span>
       </footer>
     </main>
+
+    <div id="tutorialBackdrop" class="tutorial-backdrop" hidden>
+      <section
+        id="tutorialDialog"
+        class="tutorial-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tutorialTitle"
+        aria-describedby="tutorialText"
+      >
+        <p id="tutorialKicker" class="tutorial-kicker">ステップ 1 / 3</p>
+        <h2 id="tutorialTitle">取り込む</h2>
+        <p id="tutorialText">英単語と意味を1行ずつ貼り付けます。写真からの読み取りも使えます。</p>
+        <div id="tutorialStepDots" class="tutorial-step-dots" aria-hidden="true"></div>
+        <div class="tutorial-actions">
+          <button id="tutorialSkipButton" class="ghost" type="button">スキップ</button>
+          <button id="tutorialNextButton" type="button">次へ</button>
+        </div>
+      </section>
+    </div>
 
     <script>
 // iPhone の Safari は file:// で開くと localStorage / sessionStorage に
@@ -8126,12 +8398,23 @@ const elements = {
   favoriteFilterButton: document.querySelector("#favoriteFilterButton"),
   quizWord: document.querySelector("#quizWord"),
   choices: document.querySelector("#choices"),
+  flashcardStage: document.querySelector("#flashcardStage"),
+  flashcardFlipButton: document.querySelector("#flashcardFlipButton"),
+  flashcardTerm: document.querySelector("#flashcardTerm"),
+  flashcardMeaning: document.querySelector("#flashcardMeaning"),
+  flashcardHint: document.querySelector("#flashcardHint"),
+  flashcardActions: document.querySelector("#flashcardActions"),
+  flashcardSpeakButton: document.querySelector("#flashcardSpeakButton"),
+  flashcardKnownButton: document.querySelector("#flashcardKnownButton"),
+  flashcardUnknownButton: document.querySelector("#flashcardUnknownButton"),
   quizFeedback: document.querySelector("#quizFeedback"),
   quizNextHint: document.querySelector("#quizNextHint"),
+  quizKeyboardHint: document.querySelector("#quizKeyboardHint"),
   startQuizButton: document.querySelector("#startQuizButton"),
   difficultQuizButton: document.querySelector("#difficultQuizButton"),
   easyQuizButton: document.querySelector("#easyQuizButton"),
   contextQuizButton: document.querySelector("#contextQuizButton"),
+  startFlashcardButton: document.querySelector("#startFlashcardButton"),
   contextGenModeSelect: document.querySelector("#contextGenModeSelect"),
   contextGenHint: document.querySelector("#contextGenHint"),
   nextQuizButton: document.querySelector("#nextQuizButton"),
@@ -8210,6 +8493,10 @@ const elements = {
   soundVolumeSlider: document.querySelector("#soundVolumeSlider"),
   soundVolumeValue: document.querySelector("#soundVolumeValue"),
   soundTestButton: document.querySelector("#soundTestButton"),
+  speechVoiceSelect: document.querySelector("#speechVoiceSelect"),
+  speechRateSlider: document.querySelector("#speechRateSlider"),
+  speechRateValue: document.querySelector("#speechRateValue"),
+  speechTestButton: document.querySelector("#speechTestButton"),
   keyboardHintsToggle: document.querySelector("#keyboardHintsToggle"),
   autoNextToggle: document.querySelector("#autoNextToggle"),
   autoNextDelaySelect: document.querySelector("#autoNextDelaySelect"),
@@ -8238,6 +8525,16 @@ const elements = {
   resumeQuizButton: document.querySelector("#resumeQuizButton"),
   downloadToolButton: document.querySelector("#downloadToolButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
+  shareToolHeaderButton: document.querySelector("#shareToolHeaderButton"),
+  showTutorialButton: document.querySelector("#showTutorialButton"),
+  tutorialBackdrop: document.querySelector("#tutorialBackdrop"),
+  tutorialDialog: document.querySelector("#tutorialDialog"),
+  tutorialKicker: document.querySelector("#tutorialKicker"),
+  tutorialTitle: document.querySelector("#tutorialTitle"),
+  tutorialText: document.querySelector("#tutorialText"),
+  tutorialStepDots: document.querySelector("#tutorialStepDots"),
+  tutorialSkipButton: document.querySelector("#tutorialSkipButton"),
+  tutorialNextButton: document.querySelector("#tutorialNextButton"),
 };
 
 const THEME_KEY = "wordsnap-theme"; // "light" | "dark" | "auto"
@@ -8246,6 +8543,8 @@ const ACTIVE_STEP_KEY = "wordsnap-active-step";
 const SETTINGS_ACCORDION_KEY = "wordsnap-settings-accordion:v1";
 const SOUND_KEY = "wordsnap-sound-enabled";
 const SOUND_VOLUME_KEY = "wordsnap-sound-volume";
+const SPEECH_VOICE_KEY = "wordsnap-speech-voice-uri:v1";
+const SPEECH_RATE_KEY = "wordsnap-speech-rate:v1";
 const KBD_HINTS_KEY = "wordsnap-keyboard-hints";
 const AUTO_NEXT_KEY = "wordsnap-auto-next";
 const AUTO_NEXT_DELAY_KEY = "wordsnap-auto-next-delay";
@@ -8266,6 +8565,7 @@ const REVIEW_LOG_ENABLED_KEY = "wordsnap-review-log-enabled:v1";
 const REVIEW_EVENTS_KEY = "wordsnap-review-events:v1";
 const REVIEW_EVENTS_MAX = 2000;
 const REVIEW_EVENTS_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+const TUTORIAL_COMPLETE_KEY = "wordsnap-tutorial-complete:v1";
 const SYNC_ID_KEY = "wordsnap-sync-id:v1";
 const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
@@ -8326,15 +8626,26 @@ function initTheme() {
 function initSettingsAccordionState() {
   const sections = [...document.querySelectorAll(".settings-accordion > .settings-section")];
   try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_ACCORDION_KEY) || "[]");
-    if (Array.isArray(saved)) {
+    const raw = localStorage.getItem(SETTINGS_ACCORDION_KEY);
+    if (raw !== null) {
+      const saved = JSON.parse(raw);
+      if (!Array.isArray(saved)) throw new Error("invalid accordion state");
+      // 保存済みの空配列も「すべて閉じる」という明示状態。既定値より必ず優先する。
       const openKeys = new Set(saved.filter((key) => typeof key === "string"));
       sections.forEach((section) => {
         section.open = openKeys.has(section.dataset.settingsSection);
       });
+    } else {
+      // まだ開閉履歴がない初回だけ、主要なクイズ設定を開き、他は閉じる。
+      sections.forEach((section) => {
+        section.open = section.dataset.settingsSection === "quiz";
+      });
     }
   } catch {
-    // 保存値が壊れている／端末の保存が使えない場合は、既定の閉じた状態を使う。
+    // 保存値が壊れている／端末の保存が使えない場合も、安全な初回既定へ戻す。
+    sections.forEach((section) => {
+      section.open = section.dataset.settingsSection === "quiz";
+    });
   }
 
   sections.forEach((section) => {
@@ -8536,6 +8847,104 @@ function applySoundVolume(value) {
   const volume = Math.max(0, Math.min(100, Number(value) || 0));
   if (elements.soundVolumeSlider) elements.soundVolumeSlider.value = String(volume);
   if (elements.soundVolumeValue) elements.soundVolumeValue.textContent = `${volume}%`;
+}
+
+// SpeechSynthesis設定の保存値を正規化する純関数。不正値は現行の既定動作へ戻す。
+function normalizeSpeechRate(value) {
+  if (value === null || value === undefined || value === "") return 1;
+  const rate = Number(value);
+  if (!Number.isFinite(rate) || rate < 0.5 || rate > 1.5) return 1;
+  return Math.round(rate * 100) / 100;
+}
+
+function normalizeSpeechVoiceUri(value) {
+  if (typeof value !== "string") return "";
+  const uri = value.trim();
+  if (!uri || uri.length > 512 || /[\u0000-\u001f\u007f]/.test(uri)) return "";
+  return uri;
+}
+
+function speechRate() {
+  try {
+    return normalizeSpeechRate(localStorage.getItem(SPEECH_RATE_KEY));
+  } catch {
+    return 1;
+  }
+}
+
+function speechVoiceUri() {
+  try {
+    return normalizeSpeechVoiceUri(localStorage.getItem(SPEECH_VOICE_KEY));
+  } catch {
+    return "";
+  }
+}
+
+function englishSpeechVoices() {
+  if (!("speechSynthesis" in window)) return [];
+  try {
+    return window.speechSynthesis
+      .getVoices()
+      .filter((voice) => /^en(?:[-_]|$)/i.test(String(voice.lang || "")))
+      .sort((a, b) =>
+        String(a.lang || "").localeCompare(String(b.lang || ""), "en") ||
+        String(a.name || "").localeCompare(String(b.name || ""), "en"),
+      );
+  } catch {
+    return [];
+  }
+}
+
+function speechRegionLabel(lang) {
+  const normalized = String(lang || "").replace("_", "-").toLowerCase();
+  if (normalized === "en-us") return "米国";
+  if (normalized === "en-gb") return "英国";
+  if (normalized === "en-au") return "豪州";
+  if (normalized === "en-ca") return "カナダ";
+  if (normalized === "en-ie") return "アイルランド";
+  if (normalized === "en-in") return "インド";
+  return "";
+}
+
+function selectedSpeechVoice() {
+  const uri = speechVoiceUri();
+  if (!uri) return null;
+  // OSやブラウザが変わって保存済み音声が無い場合は、黙って既定音声へ戻す。
+  return englishSpeechVoices().find((voice) => voice.voiceURI === uri) || null;
+}
+
+function populateSpeechVoices() {
+  const select = elements.speechVoiceSelect;
+  if (!select) return;
+  const savedUri = speechVoiceUri();
+  const voices = englishSpeechVoices();
+  select.replaceChildren(new Option("端末の既定音声（英語）", ""));
+  for (const voice of voices) {
+    const region = speechRegionLabel(voice.lang);
+    const suffix = region ? `${voice.lang}・${region}` : voice.lang;
+    select.add(new Option(`${voice.name}（${suffix}）`, voice.voiceURI));
+  }
+  select.value = voices.some((voice) => voice.voiceURI === savedUri) ? savedUri : "";
+  select.disabled = !("speechSynthesis" in window);
+  if (elements.speechTestButton) elements.speechTestButton.disabled = !("speechSynthesis" in window);
+}
+
+function applySpeechSettings() {
+  const rate = speechRate();
+  if (elements.speechRateSlider) elements.speechRateSlider.value = String(rate);
+  if (elements.speechRateValue) elements.speechRateValue.textContent = `${rate.toFixed(2)}倍`;
+  populateSpeechVoices();
+}
+
+function initSpeechSettings() {
+  applySpeechSettings();
+  if (!("speechSynthesis" in window)) return;
+  // Chromium/Safariは音声一覧を遅延ロードするため、voiceschangedで選択肢を更新する。
+  if (typeof window.speechSynthesis.addEventListener === "function") {
+    window.speechSynthesis.addEventListener("voiceschanged", populateSpeechVoices);
+  } else {
+    window.speechSynthesis.onvoiceschanged = populateSpeechVoices;
+  }
 }
 
 function getAudioContext() {
@@ -8804,7 +9213,12 @@ function recordReviewEvent(details) {
       eventId: createReviewEventId(),
       wordId,
       occurredAt: Date.now(),
-      promptMode: details.promptMode === "context-choice" ? "context-choice" : "meaning-choice",
+      promptMode:
+        details.promptMode === "flashcard"
+          ? "flashcard"
+          : details.promptMode === "context-choice"
+            ? "context-choice"
+            : "meaning-choice",
       result: details.result === "dont-know" ? "dont-know" : details.result === "correct" ? "correct" : "wrong",
     };
     const responseTimeMs = Math.round(Number(details.responseTimeMs));
@@ -8976,11 +9390,120 @@ function initFeedbackForm() {
 
 function initSettings() {
   initSound();
+  initSpeechSettings();
   applyKeyboardHints(keyboardHintsEnabled());
   applyQuizSettings();
   initReviewLogSettings();
   initFeedbackForm();
 }
+
+const TUTORIAL_STEPS = [
+  {
+    title: "取り込む",
+    text: "英単語と意味を1行ずつ貼り付けます。写真からの読み取りも使えます。",
+  },
+  {
+    title: "確認",
+    text: "取り込んだ候補の単語と意味を確認し、必要なら直してから保存します。",
+  },
+  {
+    title: "クイズ",
+    text: "保存した単語を4択やフラッシュカードで学習します。結果は次の復習予定に反映されます。",
+  },
+];
+let tutorialStepIndex = 0;
+let tutorialReturnFocus = null;
+
+function renderTutorialStep() {
+  const step = TUTORIAL_STEPS[tutorialStepIndex] || TUTORIAL_STEPS[0];
+  if (elements.tutorialKicker) {
+    elements.tutorialKicker.textContent = `ステップ ${tutorialStepIndex + 1} / ${TUTORIAL_STEPS.length}`;
+  }
+  if (elements.tutorialTitle) elements.tutorialTitle.textContent = step.title;
+  if (elements.tutorialText) elements.tutorialText.textContent = step.text;
+  if (elements.tutorialStepDots) {
+    elements.tutorialStepDots.replaceChildren(
+      ...TUTORIAL_STEPS.map((_, index) => {
+        const dot = document.createElement("span");
+        dot.className = `tutorial-step-dot${index === tutorialStepIndex ? " is-active" : ""}`;
+        return dot;
+      }),
+    );
+  }
+  if (elements.tutorialNextButton) {
+    elements.tutorialNextButton.textContent =
+      tutorialStepIndex === TUTORIAL_STEPS.length - 1 ? "はじめる" : "次へ";
+  }
+}
+
+function showTutorial() {
+  if (!elements.tutorialBackdrop) return;
+  tutorialReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  tutorialStepIndex = 0;
+  renderTutorialStep();
+  elements.tutorialBackdrop.hidden = false;
+  document.body.classList.add("tutorial-open");
+  elements.tutorialNextButton?.focus();
+}
+
+function completeTutorial() {
+  try {
+    localStorage.setItem(TUTORIAL_COMPLETE_KEY, "1");
+  } catch {
+    // 保存不可環境では、このセッション中だけ閉じられればよい。
+  }
+  if (elements.tutorialBackdrop) elements.tutorialBackdrop.hidden = true;
+  document.body.classList.remove("tutorial-open");
+  tutorialReturnFocus?.focus?.();
+  tutorialReturnFocus = null;
+}
+
+function maybeShowInitialTutorial() {
+  let completed = false;
+  let hasExistingSyncIdentity = false;
+  try {
+    completed = localStorage.getItem(TUTORIAL_COMPLETE_KEY) === "1";
+    const params = new URLSearchParams(window.location.search);
+    const incomingId = cleanSyncId(
+      params.get("w") || params.get("wordsnap") || params.get("syncId"),
+    );
+    hasExistingSyncIdentity =
+      Boolean(incomingId) || Boolean(cleanSyncId(localStorage.getItem(SYNC_ID_KEY)));
+  } catch {
+    completed = false;
+  }
+  // 個人リンクや保存済み同期IDがある場合は、この直後の非同期pullで単語が戻る可能性がある。
+  // 取得前の一時的な0件を「初回」と誤判定しないよう、自動表示は完全な新規入口だけに限る。
+  if (!completed && !hasExistingSyncIdentity && appState.words.length === 0) showTutorial();
+}
+
+elements.tutorialNextButton?.addEventListener("click", () => {
+  if (tutorialStepIndex >= TUTORIAL_STEPS.length - 1) {
+    completeTutorial();
+    return;
+  }
+  tutorialStepIndex += 1;
+  renderTutorialStep();
+});
+elements.tutorialSkipButton?.addEventListener("click", completeTutorial);
+elements.showTutorialButton?.addEventListener("click", showTutorial);
+elements.tutorialDialog?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    completeTutorial();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [elements.tutorialSkipButton, elements.tutorialNextButton].filter(Boolean);
+  const index = focusable.indexOf(document.activeElement);
+  if (event.shiftKey && index <= 0) {
+    focusable.at(-1)?.focus();
+    event.preventDefault();
+  } else if (!event.shiftKey && index === focusable.length - 1) {
+    focusable[0]?.focus();
+    event.preventDefault();
+  }
+});
 
 function setActiveStep(id, options = {}) {
   const nextId = STEP_IDS.includes(id) ? id : "import";
@@ -9161,6 +9684,9 @@ let favoritesOnly = false;
 let libraryCefrLevel = "all";
 let currentQuiz = null;
 let reviewSession = null;
+// フラッシュカードの進行はメモリ内だけ。学習データ側へ新しい永続フィールドを追加しない。
+let flashcardSession = null;
+let flashcardRevealed = false;
 // 範囲クイズ・総復習を完走した直後の結果表示用データ（次のクイズを始めると消える）
 let reviewResult = null;
 let quizStarted = false;
@@ -13811,6 +14337,20 @@ function renderQuizProgress() {
   if (!elements.quizProgress) return;
   if (elements.quizProgressTrack) elements.quizProgressTrack.hidden = true;
 
+  if (flashcardSession) {
+    const total = flashcardSession.order.length;
+    const current = Math.min(total, flashcardSession.index + 1);
+    elements.quizProgress.hidden = total === 0;
+    elements.quizProgress.textContent = `${current} / ${total}`;
+    if (elements.quizProgressTrack && total > 0) {
+      elements.quizProgressTrack.hidden = false;
+      if (elements.quizProgressFill) {
+        elements.quizProgressFill.style.width = `${Math.round((flashcardSession.index / total) * 100)}%`;
+      }
+    }
+    return;
+  }
+
   if (reviewSession) {
     const total = reviewSession.total || 0;
     const done = total === 0 ? 0 : Math.max(0, Math.min(total, total - reviewSession.queue.length));
@@ -13833,7 +14373,17 @@ function renderQuizProgress() {
   elements.quizProgress.hidden = true;
 }
 
+function setFlashcardUiActive(active) {
+  if (elements.flashcardStage) elements.flashcardStage.hidden = !active;
+  if (elements.quizWord) elements.quizWord.hidden = active;
+  if (!active) {
+    if (elements.flashcardActions) elements.flashcardActions.hidden = true;
+    flashcardRevealed = false;
+  }
+}
+
 function renderQuiz() {
+  setFlashcardUiActive(Boolean(flashcardSession));
   renderAccuracy();
   renderQuizProgress();
   renderDailyGoalChip();
@@ -13860,6 +14410,17 @@ function renderQuiz() {
     const count = contextEligibleWords().length;
     elements.contextQuizButton.textContent = `例文で解く（${count}語）`;
     elements.contextQuizButton.disabled = count === 0;
+  }
+  if (elements.startFlashcardButton) {
+    const count = quizSelectedDeckWords().length;
+    elements.startFlashcardButton.textContent = `フラッシュカード（${count}語）`;
+    elements.startFlashcardButton.disabled = count === 0;
+  }
+
+  if (flashcardSession) {
+    renderFlashcard();
+    updateQuizControls();
+    return;
   }
 
   if (reviewSession) {
@@ -13918,6 +14479,8 @@ function renderChoices(choices) {
 }
 
 function renderQuizIntro() {
+  const label = document.querySelector("#quizCard .quiz-label");
+  if (label) label.textContent = "出題単語";
   elements.choices.innerHTML = "";
   if (appState.words.length === 0) {
     elements.quizWord.textContent = "単語を保存すると出題できます";
@@ -13933,6 +14496,8 @@ function renderQuizIntro() {
 }
 
 function renderQuizEmpty() {
+  const label = document.querySelector("#quizCard .quiz-label");
+  if (label) label.textContent = "出題単語";
   elements.choices.innerHTML = "";
   elements.quizWord.textContent = quizEmptyReason
     ? "出題できる単語が足りません"
@@ -13943,6 +14508,7 @@ function renderQuizEmpty() {
 
 function updateQuizControls() {
   const inReview = !!reviewSession;
+  const inFlashcard = !!flashcardSession;
   const hasQuestion = !!currentQuiz;
   const questionActive =
     hasQuestion &&
@@ -13953,7 +14519,7 @@ function updateQuizControls() {
   // 復習完走サマリを表示中は、設定欄や「次の問題」等の操作ボタンを隠し、
   // サマリ内の「もう一度解く／通常クイズに戻る」だけを見せる。
   const showingResult = !!reviewResult && !inReview;
-  const quizActive = inReview || quizStarted;
+  const quizActive = inReview || inFlashcard || quizStarted;
   // 出題中はモバイルのヘッダーを圧縮するため、body に目印のクラスを付け外しする
   document.body.classList.toggle("quiz-active", quizActive && !showingResult);
   // 出題中はクイズ設定欄を隠して、問題と選択肢を上に表示する
@@ -13962,11 +14528,12 @@ function updateQuizControls() {
   if (elements.difficultQuizButton) elements.difficultQuizButton.hidden = quizActive || showingResult;
   if (elements.easyQuizButton) elements.easyQuizButton.hidden = quizActive || showingResult;
   if (elements.contextQuizButton) elements.contextQuizButton.hidden = quizActive || showingResult;
+  if (elements.startFlashcardButton) elements.startFlashcardButton.hidden = quizActive || showingResult;
   if (elements.generalReviewButton) elements.generalReviewButton.hidden = quizActive || showingResult;
   // 生成待ち中は「次の問題」を出さない。押しても同じ語のまま pending に戻るだけで、
   // 押した回数だけ解決コールバックが積み上がる（進んだように見えて進まない）。
   elements.nextQuizButton.hidden =
-    !quizActive || showingResult || currentQuiz?.contextPending === true;
+    inFlashcard || !quizActive || showingResult || currentQuiz?.contextPending === true;
   if (elements.quizNextHint) {
     const canAdvance = !elements.nextQuizButton.hidden && currentQuiz?.answered;
     elements.quizNextHint.hidden = !canAdvance;
@@ -13983,13 +14550,19 @@ function updateQuizControls() {
       }
     }
   }
-  elements.dontKnowButton.hidden = !questionActive || showingResult;
+  elements.dontKnowButton.hidden = inFlashcard || !questionActive || showingResult;
   elements.exitReviewButton.hidden = !inReview;
   if (elements.exitQuizButton) {
     elements.exitQuizButton.hidden = !(quizStarted && !inReview) || showingResult;
   }
-  // 制限時間: 解答可能な問題が出ている間だけカウントダウンする（dontKnowButtonと同条件）。
-  syncQuizTimer(questionActive && !showingResult);
+  if (elements.quizKeyboardHint) {
+    elements.quizKeyboardHint.textContent = inFlashcard
+      ? "スペース＝意味を表示 / ←＝知らない / →＝知ってる"
+      : "キー 1–4＝解答 / N＝次へ / 0＝わからない";
+  }
+  // フラッシュカードは自己評価の高速周回であり、思い出してから裏返す時間を急かさないため
+  // クイズの制限時間を適用しない。4択・例文問題だけを既存タイマーの対象にする。
+  syncQuizTimer(questionActive && !showingResult && !inFlashcard);
 }
 
 function renderAccuracy() {
@@ -14036,6 +14609,20 @@ function orderIdsByPriority(ids) {
       return diff !== 0 ? diff : orderIndex.get(a.id) - orderIndex.get(b.id);
     })
     .map((entry) => entry.id);
+}
+
+// フラッシュカードの順序を作る純関数。シャッフルOFFは入力順を厳密に維持する。
+// random引数を差し替えられるため、単体テストで順序を決定論的に検証できる。
+function buildFlashcardOrder(ids, shouldShuffle, random = Math.random) {
+  const ordered = Array.from(new Set(ids.filter((id) => typeof id === "string" && id)));
+  if (!shouldShuffle) return ordered;
+  for (let i = ordered.length - 1; i > 0; i -= 1) {
+    const raw = Number(random());
+    const bounded = Number.isFinite(raw) ? Math.max(0, Math.min(0.999999999, raw)) : 0;
+    const j = Math.floor(bounded * (i + 1));
+    [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
+  }
+  return ordered;
 }
 
 // 進行中の復習/範囲クイズを保存する。ページを閉じたりリロードしても
@@ -14158,6 +14745,8 @@ function selectedQuizContextAmount() {
 function startReview(ids, options = {}) {
   const valid = ids.filter((id) => appState.words.some((word) => word.id === id));
   if (valid.length === 0) return;
+  flashcardSession = null;
+  flashcardRevealed = false;
   let queue;
   if (options.order === "priority") {
     queue = orderIdsByPriority(valid);
@@ -14388,6 +14977,200 @@ function startQuizFromRange() {
   });
 }
 
+function selectedFlashcardWords() {
+  const words = quizSelectedDeckWords();
+  const total = words.length;
+  if (total === 0) return [];
+  const useRange = elements.quizRangeRow && !elements.quizRangeRow.hidden;
+  const fromResult = useRange
+    ? validatedQuizRangeValue(elements.quizRangeFrom, "開始", total)
+    : { valid: true, value: null };
+  if (!fromResult.valid) return null;
+  const toResult = useRange
+    ? validatedQuizRangeValue(elements.quizRangeTo, "終了", total)
+    : { valid: true, value: null };
+  if (!toResult.valid) return null;
+  const from = fromResult.value ?? 1;
+  const to = toResult.value ?? total;
+  if (from > to) {
+    const message = "開始番号は終了番号以下で入力してください。";
+    elements.quizRangeFrom?.setCustomValidity(message);
+    setStatus(message);
+    elements.quizRangeFrom?.reportValidity?.();
+    elements.quizRangeFrom?.focus();
+    return null;
+  }
+  return words.slice(from - 1, to);
+}
+
+function startFlashcardsFromIds(ids, options = {}) {
+  const validIds = ids.filter((id) => appState.words.some((word) => word.id === id));
+  if (validIds.length === 0) {
+    setStatus("フラッシュカードにできる単語がありません。");
+    return;
+  }
+  clearAutoNextTimer();
+  clearSavedReviewProgress();
+  reviewSession = null;
+  reviewResult = null;
+  quizEmptyReason = "";
+  quizStarted = true;
+  flashcardSession = {
+    order: buildFlashcardOrder(validIds, options.shuffle !== false),
+    allIds: validIds.slice(),
+    index: 0,
+    knownIds: [],
+    unknownIds: [],
+    shuffled: options.shuffle !== false,
+  };
+  flashcardRevealed = false;
+  currentQuiz = null;
+  setActiveStep("quiz", { sound: false });
+  renderQuiz();
+  elements.quizWord.closest(".panel").scrollIntoView({
+    behavior: prefersReducedMotion() ? "auto" : "smooth",
+    block: "start",
+  });
+  setStatus(`${validIds.length}語のフラッシュカードを開始しました。`);
+}
+
+function startFlashcardMode() {
+  const words = selectedFlashcardWords();
+  if (words === null) return;
+  if (words.length === 0) {
+    setStatus("この条件にはフラッシュカードにできる単語がありません。");
+    return;
+  }
+  persistLastQuizSettings();
+  startFlashcardsFromIds(words.map((word) => word.id), {
+    shuffle: elements.quizShuffle ? elements.quizShuffle.checked : true,
+  });
+}
+
+function buildCurrentFlashcard() {
+  if (!flashcardSession) return null;
+  while (flashcardSession.index < flashcardSession.order.length) {
+    const answer = appState.words.find(
+      (word) => word.id === flashcardSession.order[flashcardSession.index],
+    );
+    if (!answer) {
+      flashcardSession.index += 1;
+      continue;
+    }
+    const dueAt = Number(answer.learning?.nextReviewAt || 0);
+    return {
+      answer,
+      choices: [],
+      answered: false,
+      shownAt: Date.now(),
+      srsDueAtStart: dueAt > 0 && dueAt <= Date.now(),
+      flashcard: true,
+    };
+  }
+  return null;
+}
+
+function renderFlashcard() {
+  if (!flashcardSession) return;
+  if (!currentQuiz) currentQuiz = buildCurrentFlashcard();
+  if (!currentQuiz) {
+    finishFlashcardSession();
+    return;
+  }
+  const label = document.querySelector("#quizCard .quiz-label");
+  if (label) {
+    label.textContent =
+      `フラッシュカード ${flashcardSession.index + 1} / ${flashcardSession.order.length}`;
+  }
+  elements.choices.replaceChildren();
+  if (elements.flashcardTerm) elements.flashcardTerm.textContent = currentQuiz.answer.term;
+  if (elements.flashcardMeaning) {
+    elements.flashcardMeaning.textContent = currentQuiz.answer.meaning;
+    elements.flashcardMeaning.hidden = !flashcardRevealed;
+  }
+  if (elements.flashcardHint) {
+    elements.flashcardHint.textContent = flashcardRevealed
+      ? "← 知らない / 知ってる →（矢印キーまたはスワイプ）"
+      : "タップまたはスペースキーで意味を表示";
+  }
+  if (elements.flashcardActions) elements.flashcardActions.hidden = !flashcardRevealed;
+  if (elements.flashcardFlipButton) {
+    elements.flashcardFlipButton.setAttribute("aria-expanded", String(flashcardRevealed));
+    elements.flashcardFlipButton.setAttribute(
+      "aria-label",
+      flashcardRevealed
+        ? `${currentQuiz.answer.term}、意味は${currentQuiz.answer.meaning}`
+        : `${currentQuiz.answer.term}。押すと意味を表示`,
+    );
+  }
+  if (elements.flashcardSpeakButton) {
+    elements.flashcardSpeakButton.dataset.speechTerm = currentQuiz.answer.term;
+    elements.flashcardSpeakButton.setAttribute(
+      "aria-label",
+      `${currentQuiz.answer.term} の発音を聞く`,
+    );
+  }
+  elements.quizFeedback.textContent = flashcardRevealed
+    ? "思い出せたかを仕分けすると、すぐ次のカードへ進みます。"
+    : "意味を思い出してからカードを裏返してください。";
+  autoSpeakCurrentQuiz();
+}
+
+function flipFlashcard() {
+  if (!flashcardSession || !currentQuiz || currentQuiz.answered || flashcardRevealed) return;
+  flashcardRevealed = true;
+  renderFlashcard();
+  elements.flashcardKnownButton?.focus({ preventScroll: true });
+}
+
+function gradeFlashcard(isKnown) {
+  if (!flashcardSession || !currentQuiz || currentQuiz.answered || !flashcardRevealed) return;
+  const wordId = currentQuiz.answer.id;
+  // 4択と同じgradeQuizを通すことで、stats/history/applyLearningResult/同期保存を完全に共用する。
+  // 「知らない」はスキップ扱いではなく明示的な不正解としてreview-eventにも記録する。
+  gradeQuiz(isKnown ? wordId : "__flashcard_wrong__", false);
+  if (!currentQuiz?.answered) return;
+  if (isKnown) flashcardSession.knownIds.push(wordId);
+  else flashcardSession.unknownIds.push(wordId);
+  flashcardSession.index += 1;
+  currentQuiz = null;
+  flashcardRevealed = false;
+  if (flashcardSession.index >= flashcardSession.order.length) {
+    finishFlashcardSession();
+    return;
+  }
+  renderQuiz();
+}
+
+function finishFlashcardSession() {
+  const session = flashcardSession;
+  if (!session) return;
+  const unknownWords = session.unknownIds
+    .map((id) => appState.words.find((word) => word.id === id))
+    .filter(Boolean)
+    .map((word) => ({ term: word.term, meaning: word.meaning }));
+  reviewResult = {
+    label: "フラッシュカード",
+    total: session.order.length,
+    missedCount: session.unknownIds.length,
+    missedWords: unknownWords,
+    allIds: session.allIds.slice(),
+    flashcard: true,
+    flashcardShuffle: session.shuffled,
+  };
+  const known = Math.max(0, session.order.length - session.unknownIds.length);
+  flashcardSession = null;
+  flashcardRevealed = false;
+  quizStarted = false;
+  currentQuiz = null;
+  stopQuizTimer();
+  playSound("success");
+  renderQuiz();
+  setStatus(
+    `フラッシュカード完了：${session.order.length}語中${known}語を「知ってる」に仕分けしました。`,
+  );
+}
+
 // 「前回の設定」（単語帳・CEFR・範囲・シャッフル・例文問題の割合）を保存する
 function persistLastQuizSettings() {
   try {
@@ -14504,6 +15287,8 @@ function buildReviewResult(session) {
 function renderReviewResult() {
   const result = reviewResult;
   if (!result) return;
+  const label = document.querySelector("#quizCard .quiz-label");
+  if (label) label.textContent = "セッション結果";
   const correct = Math.max(0, result.total - result.missedCount);
   elements.quizWord.textContent = result.missedCount === 0 ? "全問クリア！" : "クイズ完了！";
   elements.quizFeedback.textContent = "";
@@ -14513,16 +15298,20 @@ function renderReviewResult() {
 
   const score = document.createElement("p");
   score.className = "review-result-score";
-  score.textContent = result.missedCount === 0
-    ? `${result.label}：全${result.total}語を間違えずにクリア`
-    : `${result.label}：${result.total}語中${correct}語を間違えずに正解`;
+  score.textContent = result.flashcard
+    ? `${result.label}：${result.total}語中${correct}語を「知ってる」に仕分け`
+    : result.missedCount === 0
+      ? `${result.label}：全${result.total}語を間違えずにクリア`
+      : `${result.label}：${result.total}語中${correct}語を間違えずに正解`;
   box.append(score);
 
   if (result.missedWords.length > 0) {
     const missed = document.createElement("div");
     missed.className = "review-result-missed";
     const head = document.createElement("p");
-    head.textContent = `間違えた単語（${result.missedWords.length}語）`;
+    head.textContent = result.flashcard
+      ? `「知らない」にした単語（${result.missedWords.length}語）`
+      : `間違えた単語（${result.missedWords.length}語）`;
     missed.append(head);
     const list = document.createElement("ul");
     for (const item of result.missedWords) {
@@ -14542,9 +15331,13 @@ function renderReviewResult() {
   actions.className = "review-result-actions";
   const again = document.createElement("button");
   again.type = "button";
-  again.textContent = "もう一度解く";
+  again.textContent = result.flashcard ? "もう一度見る" : "もう一度解く";
   again.addEventListener("click", () => {
     reviewResult = null;
+    if (result.flashcard) {
+      startFlashcardsFromIds(result.allIds, { shuffle: result.flashcardShuffle });
+      return;
+    }
     startReview(result.allIds, {
       label: result.label,
       context: result.context,
@@ -17324,13 +18117,14 @@ function statsSpeedCard() {
 }
 
 // C2) 出題形式別の正答率（学習イベントの promptMode 別）。第二弾。
-// 「意味を選ぶ」と「例文の空所」でどちらが得意/苦手かを比べられる。
+// 「意味を選ぶ」「例文の空所」「フラッシュカード」を形式別に振り返る。
 function statsFormatCard() {
   if (!reviewLogEnabled()) return "";
   const events = retainedReviewEvents().filter((e) => e.result !== "dont-know");
   const groups = [
     { key: "meaning-choice", label: "意味を選ぶ", total: 0, correct: 0 },
     { key: "context-choice", label: "例文の空所", total: 0, correct: 0 },
+    { key: "flashcard", label: "フラッシュカード", total: 0, correct: 0 },
   ];
   for (const e of events) {
     const g = groups.find((x) => x.key === e.promptMode);
@@ -17522,7 +18316,11 @@ function gradeQuiz(choiceId, dontKnow = false) {
   if (!currentQuiz || currentQuiz.answered) return;
   // 生成側の全経路で防いでいるが、古い画面状態や将来の呼び出し追加があっても
   // 1択で採点・SRS更新へ進まないよう、更新直前にも最後のガードを置く。
-  if (!Array.isArray(currentQuiz.choices) || currentQuiz.choices.length < 2) {
+  // フラッシュカードは選択肢を持たず、本人が裏面を確認して正誤を明示するため例外。
+  if (
+    !currentQuiz.flashcard &&
+    (!Array.isArray(currentQuiz.choices) || currentQuiz.choices.length < 2)
+  ) {
     currentQuiz = null;
     quizEmptyReason =
       "意味の異なる単語をもう1語以上登録してください。1択の問題は採点されません。";
@@ -17558,7 +18356,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
   // 場合の保険で、実際には◯問後の条件が先に成立することが多い（OR判定はavailableQuizWords側）
   const answeredAt = Date.now();
   if (!isCorrect) word.learning.blockedUntil = answeredAt + WRONG_COOLDOWN_MS;
-  highlightChoices(choiceId);
+  if (!currentQuiz.flashcard) highlightChoices(choiceId);
   // 空所補充は採点後に完成した英文を見せ、どの語が入るのかを文脈ごと確認できるようにする。
   if (currentQuiz.context?.en) {
     elements.quizWord.innerHTML = highlightTermInSentence(
@@ -17570,7 +18368,8 @@ function gradeQuiz(choiceId, dontKnow = false) {
   // 回答時間（問題を表示してから解答するまで）。速い正解ほど定着とみなす。
   // 例文モードは文を読む時間が乗るので速度判定を無効化する（skipSpeedGate）。
   const responseMs = currentQuiz.shownAt ? answeredAt - currentQuiz.shownAt : NaN;
-  const skipSpeedGate = Boolean(currentQuiz.context);
+  // 自己評価カードは熟考時間を含むため、例文と同じく回答速度によるSRS補正を使わない。
+  const skipSpeedGate = Boolean(currentQuiz.context || currentQuiz.flashcard);
   const schedulerBefore = {
     stageBefore: word.learning?.srsStage,
     dueAtBefore: word.learning?.nextReviewAt,
@@ -17584,7 +18383,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
     historyBeforeAnswer,
   });
   // セッション集計（復習セッションの解答はデイリーゴールにのみ計上済み）
-  if (!reviewSession) {
+  if (!reviewSession && !currentQuiz.flashcard) {
     quizSessionStats.answered += 1;
     if (isCorrect) quizSessionStats.correct += 1;
   }
@@ -17592,10 +18391,14 @@ function gradeQuiz(choiceId, dontKnow = false) {
   maybeCelebrateDailyGoal();
   recordReviewEvent({
     wordId: currentQuiz.answer.id,
-    promptMode: currentQuiz.context ? "context-choice" : "meaning-choice",
+    promptMode: currentQuiz.flashcard
+      ? "flashcard"
+      : currentQuiz.context
+        ? "context-choice"
+        : "meaning-choice",
     result: dontKnow ? "dont-know" : isCorrect ? "correct" : "wrong",
     responseTimeMs: Number.isFinite(responseMs) ? responseMs : undefined,
-    choiceCount: currentQuiz.choices.length,
+    choiceCount: currentQuiz.flashcard ? undefined : currentQuiz.choices.length,
     scheduler: {
       ...schedulerBefore,
       engine: adaptiveSrsEnabled() ? "adaptive-stage-v1" : "legacy-stage-v1",
@@ -17607,6 +18410,16 @@ function gradeQuiz(choiceId, dontKnow = false) {
   const answerFeedback = currentQuiz.context
     ? `「${currentQuiz.answer.term}」（${currentQuiz.answer.meaning}）`
     : `「${currentQuiz.answer.meaning}」`;
+
+  if (currentQuiz.flashcard) {
+    persistAppState();
+    renderAccuracy();
+    updateSavedWordRow(word);
+    renderDeckStats();
+    renderDailyGoalChip();
+    updateQuizControls();
+    return;
+  }
 
   if (reviewSession) {
     // セッションのキュー操作（誤答は末尾へ回す）と進捗カウントは従来どおり維持する
@@ -17990,9 +18803,13 @@ let activeSpeechUtterance = null;
 function resetSpeechButton(button, term) {
   if (!button) return;
   const isExample = button.hasAttribute("data-speak-example");
+  const isTest = button.hasAttribute("data-speech-test");
   button.classList.remove("is-speaking");
-  button.setAttribute("aria-label", isExample ? "例文を読み上げる" : `${term} の発音を聞く`);
-  button.title = isExample ? "例文を読み上げる" : "発音を聞く";
+  button.setAttribute(
+    "aria-label",
+    isTest ? "発音をテスト再生" : isExample ? "例文を読み上げる" : `${term} の発音を聞く`,
+  );
+  button.title = isTest ? "発音をテスト再生" : isExample ? "例文を読み上げる" : "発音を聞く";
   if (activeSpeechButton === button) activeSpeechButton = null;
 }
 
@@ -18014,8 +18831,11 @@ function speakWord(term, button = null) {
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(spokenTerm);
   activeSpeechUtterance = utterance;
-  utterance.lang = "en-US";
-  utterance.rate = 0.95;
+  const selectedVoice = selectedSpeechVoice();
+  // 保存済みvoiceURIがこの端末に無ければvoiceを設定せず、従来どおり英語の既定音声を使う。
+  if (selectedVoice) utterance.voice = selectedVoice;
+  utterance.lang = selectedVoice?.lang || "en-US";
+  utterance.rate = speechRate();
   if (button) {
     activeSpeechButton = button;
     button.dataset.speechTerm = spokenTerm;
@@ -18933,6 +19753,40 @@ elements.choices.addEventListener("click", (event) => {
   gradeQuiz(button.dataset.choiceId);
 });
 
+elements.flashcardFlipButton?.addEventListener("click", (event) => {
+  if (suppressFlashcardFlipClick) {
+    suppressFlashcardFlipClick = false;
+    event.preventDefault();
+    return;
+  }
+  flipFlashcard();
+});
+elements.flashcardKnownButton?.addEventListener("click", () => gradeFlashcard(true));
+elements.flashcardUnknownButton?.addEventListener("click", () => gradeFlashcard(false));
+elements.flashcardSpeakButton?.addEventListener("click", () => {
+  if (currentQuiz?.flashcard) speakWord(currentQuiz.answer.term, elements.flashcardSpeakButton);
+});
+
+// モバイルは裏面表示後の横スワイプで即仕分け。右=知ってる、左=知らない。
+let flashcardPointerStartX = null;
+let suppressFlashcardFlipClick = false;
+elements.flashcardFlipButton?.addEventListener("pointerdown", (event) => {
+  flashcardPointerStartX = event.clientX;
+});
+elements.flashcardFlipButton?.addEventListener("pointercancel", () => {
+  flashcardPointerStartX = null;
+});
+elements.flashcardFlipButton?.addEventListener("pointerup", (event) => {
+  if (flashcardPointerStartX === null || !flashcardRevealed) {
+    flashcardPointerStartX = null;
+    return;
+  }
+  const delta = event.clientX - flashcardPointerStartX;
+  flashcardPointerStartX = null;
+  if (Math.abs(delta) < 55) return;
+  suppressFlashcardFlipClick = true;
+  gradeFlashcard(delta > 0);
+});
 // 選択肢内では矢印キーで前後へ移動できるようにする。Home/Endは先頭/末尾へ移動。
 // Enter/Spaceはbutton標準のクリックに任せ、既存の採点経路をそのまま使う。
 elements.choices.addEventListener("keydown", (event) => {
@@ -18957,6 +19811,9 @@ elements.choices.addEventListener("keydown", (event) => {
 
 // キーボード操作: 1〜4で解答、N/Enterで次の問題、0で「わからない」。
 document.addEventListener("keydown", (event) => {
+  // チュートリアルが開いている間は、背後のクイズ/フラッシュカードをキー操作しない。
+  // EscapeとTabはダイアログ側のハンドラが先に処理する。
+  if (elements.tutorialBackdrop?.hidden === false) return;
   const key = event.key.toLowerCase();
   // 保存一覧では Ctrl/⌘+K でどこからでも検索へ移動できるようにする。
   if (
@@ -18974,6 +19831,20 @@ document.addEventListener("keydown", (event) => {
   const target = event.target;
   const tag = (target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) {
+    return;
+  }
+
+  if (flashcardSession) {
+    if (event.key === " " || event.code === "Space") {
+      event.preventDefault();
+      flipFlashcard();
+    } else if (flashcardRevealed && event.key === "ArrowRight") {
+      event.preventDefault();
+      gradeFlashcard(true);
+    } else if (flashcardRevealed && event.key === "ArrowLeft") {
+      event.preventDefault();
+      gradeFlashcard(false);
+    }
     return;
   }
 
@@ -19002,6 +19873,8 @@ let quizSessionStats = { answered: 0, correct: 0 };
 elements.startQuizButton.addEventListener("click", () => {
   clearAutoNextTimer();
   clearSavedReviewProgress(); // 再開せず別のクイズを始めたら、前回の続きは破棄する
+  flashcardSession = null;
+  flashcardRevealed = false;
   reviewResult = null; // 完走サマリが残っていたら消して通常クイズへ
   quizEmptyReason = "";
   quizStarted = true;
@@ -19017,6 +19890,21 @@ elements.startQuizButton.addEventListener("click", () => {
 // 通常クイズを途中でやめて、設定欄に戻る
 elements.exitQuizButton?.addEventListener("click", () => {
   clearAutoNextTimer();
+  if (flashcardSession) {
+    const answered = flashcardSession.index;
+    const known = flashcardSession.knownIds.length;
+    flashcardSession = null;
+    flashcardRevealed = false;
+    quizStarted = false;
+    currentQuiz = null;
+    renderQuiz();
+    setStatus(
+      answered > 0
+        ? `フラッシュカードを終了しました：${answered}語中${known}語を「知ってる」に仕分けました。`
+        : "フラッシュカードを終了しました。",
+    );
+    return;
+  }
   quizStarted = false;
   currentQuiz = null;
   quizEmptyReason = "";
@@ -19073,6 +19961,7 @@ elements.generalReviewButton.addEventListener("click", startGeneralReview);
 elements.difficultQuizButton?.addEventListener("click", startDifficultQuiz);
 elements.easyQuizButton?.addEventListener("click", startEasyQuiz);
 elements.contextQuizButton?.addEventListener("click", startContextQuiz);
+elements.startFlashcardButton?.addEventListener("click", startFlashcardMode);
 elements.exitReviewButton.addEventListener("click", () => endReview("復習を終了しました。"));
 elements.quizRangeStartButton?.addEventListener("click", startQuizFromRange);
 elements.resumeQuizButton?.addEventListener("click", resumeSavedReview);
@@ -19627,6 +20516,32 @@ elements.soundVolumeSlider.addEventListener("input", () => {
 });
 elements.soundVolumeSlider.addEventListener("change", () => playSound("tap"));
 elements.soundTestButton.addEventListener("click", () => playSound("success"));
+elements.speechVoiceSelect?.addEventListener("change", () => {
+  const uri = normalizeSpeechVoiceUri(elements.speechVoiceSelect.value);
+  try {
+    if (uri) localStorage.setItem(SPEECH_VOICE_KEY, uri);
+    else localStorage.removeItem(SPEECH_VOICE_KEY);
+  } catch {
+    // 保存できない環境では既定音声へ戻す。
+  }
+  applySpeechSettings();
+});
+elements.speechRateSlider?.addEventListener("input", () => {
+  const rate = normalizeSpeechRate(elements.speechRateSlider.value);
+  if (elements.speechRateValue) elements.speechRateValue.textContent = `${rate.toFixed(2)}倍`;
+});
+elements.speechRateSlider?.addEventListener("change", () => {
+  const rate = normalizeSpeechRate(elements.speechRateSlider.value);
+  try {
+    localStorage.setItem(SPEECH_RATE_KEY, String(rate));
+  } catch {
+    // 保存できない環境では既定速度へ戻す。
+  }
+  applySpeechSettings();
+});
+elements.speechTestButton?.addEventListener("click", () => {
+  speakWord("Welcome to WordBank.", elements.speechTestButton);
+});
 elements.keyboardHintsToggle.addEventListener("change", () => {
   localStorage.setItem(KBD_HINTS_KEY, elements.keyboardHintsToggle.checked ? "1" : "0");
   applyKeyboardHints(elements.keyboardHintsToggle.checked);
@@ -19723,6 +20638,7 @@ function shareTool() {
   setSyncStatus(`このURLを共有してください：${url}`);
 }
 elements.shareToolButton?.addEventListener("click", shareTool);
+elements.shareToolHeaderButton?.addEventListener("click", shareTool);
 
 const HIACC_KEY = "wordsnap-ocr-hiacc";
 elements.hiAccToggle.checked = localStorage.getItem(HIACC_KEY) === "1";
@@ -19904,7 +20820,16 @@ const startWordsnapSync = () => {
   syncInitStarted = true;
   initWordsnapSync();
 };
-recoverPersisted().then(startWordsnapSync).catch(startWordsnapSync);
+recoverPersisted()
+  .then(() => {
+    // IndexedDBから既存単語を復元したユーザーには初回チュートリアルを誤表示しない。
+    maybeShowInitialTutorial();
+    startWordsnapSync();
+  })
+  .catch(() => {
+    maybeShowInitialTutorial();
+    startWordsnapSync();
+  });
 window.setTimeout(startWordsnapSync, 4000);
 
 // 起動時の導入アニメーション。CSSの既定は「見えている状態」なので、

@@ -72,6 +72,9 @@ function buildSandbox() {
     extractFunction("pickDistractors"),
     extractConst("QUIZ_TIME_LIMIT_CHOICES"),
     extractFunction("normalizeQuizTimeLimit"),
+    extractFunction("normalizeSpeechRate"),
+    extractFunction("normalizeSpeechVoiceUri"),
+    extractFunction("buildFlashcardOrder"),
     extractConst("CEFR_ORDER"),
     extractFunction("cefrRankOfLevel"),
     extractConst("DAILY_GOAL_CHOICES"),
@@ -89,6 +92,7 @@ function buildSandbox() {
     "globalThis.__q = { appStateRef: () => appState, setWords: (w) => { appState.words = w; }," +
       " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
       " normalizeQuizTimeLimit, cefrRankOfLevel, normalizeDailyGoal," +
+      " normalizeSpeechRate, normalizeSpeechVoiceUri, buildFlashcardOrder," +
       " wordAccuracyFactor, personalAccuracyFactor, adaptiveSrsMultiplier, srsIntervalMs, SRS_INTERVAL_DAYS, SRS_DAY_MS };",
   ];
   const sandbox = {};
@@ -190,6 +194,28 @@ test("quiz time-limit setting is clamped to the allowed choices (invalid -> off)
   for (const bad of [7, 3, 999, -5, NaN, null, undefined, "abc", ""]) {
     assert.equal(q.normalizeQuizTimeLimit(bad), 0, `invalid ${String(bad)} should fall back to 0`);
   }
+});
+
+test("speech settings normalize valid values and fall back safely", () => {
+  for (const ok of [0.5, 0.75, 1, 1.25, 1.5, "1.05"]) {
+    assert.equal(q.normalizeSpeechRate(ok), Number(ok));
+  }
+  for (const bad of [0.49, 1.51, -1, Infinity, NaN, null, undefined, "", "fast"]) {
+    assert.equal(q.normalizeSpeechRate(bad), 1, `invalid rate ${String(bad)} should use 1.0`);
+  }
+  assert.equal(q.normalizeSpeechVoiceUri("  com.example.voice  "), "com.example.voice");
+  for (const bad of [null, undefined, 12, "", "  ", "bad\u0000voice", "x".repeat(513)]) {
+    assert.equal(q.normalizeSpeechVoiceUri(bad), "", "invalid voice URI should use the default voice");
+  }
+});
+
+test("flashcard order preserves source order or performs a deterministic shuffle", () => {
+  const ids = ["a", "b", "c", "d"];
+  assert.deepEqual([...q.buildFlashcardOrder(ids, false)], ids);
+  assert.deepEqual([...q.buildFlashcardOrder(["a", "a", "", "b", null], false)], ["a", "b"]);
+  // random=0 のFisher-Yates: dを先頭へ移し、以後の先頭交換で [b,c,d,a] になる。
+  assert.deepEqual([...q.buildFlashcardOrder(ids, true, () => 0)], ["b", "c", "d", "a"]);
+  assert.deepEqual(ids, ["a", "b", "c", "d"], "the input array must not be mutated");
 });
 
 test("adaptive SRS: word accuracy factor is a bounded step function (neutral under 3 tries)", () => {

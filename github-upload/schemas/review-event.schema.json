@@ -11,7 +11,7 @@
     "eventId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,96}$" },
     "wordId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,96}$" },
     "occurredAt": { "type": "integer", "minimum": 0 },
-    "promptMode": { "enum": ["meaning-choice", "context-choice"] },
+    "promptMode": { "enum": ["meaning-choice", "context-choice", "flashcard"] },
     "result": { "enum": ["correct", "wrong", "dont-know"] },
     "responseTimeMs": { "type": "integer", "minimum": 0, "maximum": 3600000 },
     "choiceCount": { "type": "integer", "minimum": 2, "maximum": 4 },
