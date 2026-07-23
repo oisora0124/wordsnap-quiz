@@ -119,3 +119,11 @@ CREATE TABLE IF NOT EXISTS rooms (
 - R2: legacyへの428施行は撤回（旧クライアント消滅は判定不能）
 - R3: state_revisionsはstateKey参照を維持（V2は代理キー、legacyは従来キー）。移行不要
 - R4: roomId公開は条件付き採用（128bit・厳格検証・secretは絶対にURL不可・legacy名前空間と完全分離）
+
+## Phase 0 実装レビューメモ（Claude 2026-07-24、敵対的レビュー）
+
+サーバー実装(9787b37)を精読。実運用の欠陥なし。以下はPhase 1で確認する軽微点:
+
+- **N1（軽微・整合性）**: `createV2Room` の冪等応答（既存room再create）が `{ok, syncId, stateRev}` を返し `updatedAt` を含まない。新規create応答は `updatedAt` を含む。Phase 1クライアントのcreate後処理が `updatedAt` を参照するなら、冪等パスにも付与する（`readRow` は includeState=false でも updatedAt を返せるか確認）。
+- **N2（極小・timing）**: `verifyRoomSecret` は鍵リングを走査中、一致後は `matchedIndex < 0` の短絡で以降の `timingSafeEqual` を飛ばす。どのkidで一致したかがタイミングに出るが、secret自体は漏れず鍵リングは通常1〜2要素のため無視可。鍵リングを常に全走査したい場合は短絡を外す。
+- **確認済みで良好**: `bindStateKeyAlias` のbind位置は全legacy SQL（states/state_revisions の SELECT/INSERT/UPDATE/DELETE）と一致。legacy応答の `syncId` は roomId を返し内部 stateKey を漏らさない。`db.batch` はcreateのみで使用、legacy転送経路では未使用のためaliasに `batch` 不在でも問題なし。
