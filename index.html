@@ -243,9 +243,11 @@ h2 {
 .learning-quote {
   position: relative;
   display: flex;
-  width: 100%;
+  /* 64chは日本語だと約32文字で切れてしまう。内容幅に合わせ、
+     画面幅が足りない時だけ省略記号にする。 */
+  width: fit-content;
   min-width: 0;
-  max-width: 64ch;
+  max-width: 100%;
   gap: 0.45rem;
   align-items: baseline;
   margin: 0.65rem 0 0;
