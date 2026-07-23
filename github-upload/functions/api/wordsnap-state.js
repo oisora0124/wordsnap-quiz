@@ -289,12 +289,419 @@ async function readRevision(db, key, rev) {
   }
 }
 
+const ROOM_ID_PATTERN = /^wr_[0-9a-f]{32}$/;
+const ROOM_SECRET_PATTERN = /^wk_[0-9a-f]{60}$/;
+const AUTH_DOMAIN = "wordsnap-sync-auth-v2\0";
+const DUMMY_ROOM_ID = `wr_${"0".repeat(32)}`;
+const DUMMY_ROOM_SECRET = `wk_${"0".repeat(60)}`;
+const DUMMY_AUTH_HASH = "0".repeat(64);
+const CREATE_BATCH_RETRIES = 3;
+
+function v2Unavailable() {
+  return json({ error: "sync v2 unavailable" }, 503);
+}
+
+function v2Forbidden() {
+  return json({ error: "forbidden" }, 403);
+}
+
+function parseAuthKeyRing(raw) {
+  if (typeof raw !== "string" || raw === "") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    const seenKids = new Set();
+    const encoder = new TextEncoder();
+    const ring = [];
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      if (typeof entry.kid !== "string" || entry.kid === "" || seenKids.has(entry.kid)) return null;
+      if (typeof entry.secret !== "string" || encoder.encode(entry.secret).byteLength < 32) return null;
+      seenKids.add(entry.kid);
+      ring.push({ kid: entry.kid, secret: entry.secret });
+    }
+    return ring;
+  } catch {
+    return null;
+  }
+}
+
+function bytesToHex(bytes) {
+  let result = "";
+  for (const byte of bytes) result += byte.toString(16).padStart(2, "0");
+  return result;
+}
+
+function hexToFixedBytes(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) return null;
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+async function authHmacHex(keySecret, roomId, roomSecret) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(keySecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const input = encoder.encode(`${AUTH_DOMAIN}${roomId}\0${roomSecret}`);
+  const digest = await crypto.subtle.sign("HMAC", key, input);
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function updateAuthHashLazily(db, room, currentKey, roomId, roomSecret) {
+  const currentHash = await authHmacHex(currentKey.secret, roomId, roomSecret);
+  try {
+    await db
+      .prepare(
+        "UPDATE rooms SET auth_hash = ?, auth_kid = ? WHERE room_id = ? AND auth_hash = ? AND auth_kid = ?",
+      )
+      .bind(currentHash, currentKey.kid, room.room_id, room.auth_hash, room.auth_kid)
+      .run();
+  } catch {
+    // 再ハッシュ失敗で既存roomを締め出さず、次回認可時に再試行する。
+  }
+}
+
+async function verifyRoomSecret(db, room, roomId, roomSecret, keyRing) {
+  const storedBytes = hexToFixedBytes(room ? room.auth_hash : DUMMY_AUTH_HASH);
+  let matchedIndex = -1;
+  for (let index = 0; index < keyRing.length; index += 1) {
+    const candidateHash = await authHmacHex(keyRing[index].secret, roomId, roomSecret);
+    const candidateBytes = hexToFixedBytes(candidateHash);
+    if (
+      storedBytes
+      && candidateBytes
+      && crypto.subtle.timingSafeEqual(storedBytes, candidateBytes)
+      && matchedIndex < 0
+    ) {
+      matchedIndex = index;
+    }
+  }
+  if (!room || !storedBytes || matchedIndex < 0) return false;
+  if (matchedIndex !== 0 || room.auth_kid !== keyRing[0].kid) {
+    await updateAuthHashLazily(db, room, keyRing[0], roomId, roomSecret);
+  }
+  return true;
+}
+
+async function rejectInvalidV2Credential(keyRing) {
+  await verifyRoomSecret(null, null, DUMMY_ROOM_ID, DUMMY_ROOM_SECRET, keyRing);
+  return v2Forbidden();
+}
+
+async function selectRoomById(db, roomId) {
+  return db
+    .prepare(
+      "SELECT room_id, state_key, auth_hash, auth_kid, created_at, upgraded_from_legacy FROM rooms WHERE room_id = ?",
+    )
+    .bind(roomId)
+    .first();
+}
+
+async function selectRoomByStateKey(db, stateKey) {
+  return db
+    .prepare(
+      "SELECT room_id, state_key, auth_hash, auth_kid, created_at, upgraded_from_legacy FROM rooms WHERE state_key = ?",
+    )
+    .bind(stateKey)
+    .first();
+}
+
+function randomStateKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return `v2:${bytesToHex(bytes)}`;
+}
+
+async function parseCreateState(request) {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_RAW_BODY) {
+    return { response: json({ error: "body too large" }, 413) };
+  }
+  let raw = "";
+  try {
+    raw = await readBodyCapped(request, MAX_RAW_BODY);
+  } catch (error) {
+    if (error && error.tooLarge) return { response: json({ error: "body too large" }, 413) };
+    return { response: json({ error: "unreadable body" }, 400) };
+  }
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return { response: json({ error: "invalid json" }, 400) };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { response: json({ error: "invalid body" }, 400) };
+  }
+  if (body.baseRev !== undefined && body.baseRev !== null) {
+    const baseRev = Number(body.baseRev);
+    if (!Number.isInteger(baseRev) || baseRev < 0) {
+      return { response: json({ error: "invalid baseRev" }, 400) };
+    }
+  }
+
+  let state;
+  if (body.format === "gzip-base64" && typeof body.stateGz === "string") {
+    if (body.stateGz.length > MAX_INCOMING_BASE64) {
+      return { response: json({ error: "compressed state too large" }, 413) };
+    }
+    try {
+      state = JSON.parse(await gunzipBase64ToText(body.stateGz));
+    } catch (error) {
+      if (error && error.sizeExceeded) {
+        return { response: json({ error: "inflated state too large" }, 413) };
+      }
+      return { response: json({ error: "invalid compressed state" }, 400) };
+    }
+  } else {
+    state = body.state;
+  }
+  if (!validStateShape(state)) return { response: json({ error: "invalid state" }, 422) };
+  if (state.words.length > MAX_STATE_WORDS || state.decks.length > MAX_STATE_DECKS) {
+    return { response: json({ error: "state too large" }, 413) };
+  }
+
+  const stateJson = JSON.stringify(state);
+  if (stateJson.length > MAX_INFLATED_JSON) {
+    return { response: json({ error: "state too large" }, 413) };
+  }
+  const storedBase64 = await gzipTextToBase64(stateJson);
+  if (storedBase64.length > MAX_STORED_BASE64) {
+    return { response: json({ error: "state too large" }, 413) };
+  }
+  return { storedJson: JSON.stringify({ __gz: storedBase64 }) };
+}
+
+async function createV2Room(request, env, roomId, roomSecret, keyRing) {
+  if (env.SYNC_V2_ENABLED !== "1") return v2Unavailable();
+  if (request.method !== "PUT") return methodNotAllowed();
+
+  const existing = await selectRoomById(env.DB, roomId);
+  if (existing) {
+    if (!(await verifyRoomSecret(env.DB, existing, roomId, roomSecret, keyRing))) {
+      return v2Forbidden();
+    }
+    const current = await readRow(env.DB, existing.state_key, false);
+    return json({ ok: true, syncId: roomId, stateRev: current.rev });
+  }
+
+  const parsed = await parseCreateState(request);
+  if (parsed.response) return parsed.response;
+  const currentKey = keyRing[0];
+  const authHash = await authHmacHex(currentKey.secret, roomId, roomSecret);
+
+  for (let attempt = 0; attempt < CREATE_BATCH_RETRIES; attempt += 1) {
+    const stateKey = randomStateKey();
+    const now = Date.now();
+    try {
+      await env.DB.batch([
+        env.DB
+          .prepare("INSERT INTO states (key, state, rev, updatedAt) VALUES (?, ?, 1, ?)")
+          .bind(stateKey, parsed.storedJson, now),
+        env.DB
+          .prepare(
+            "INSERT INTO rooms (room_id, state_key, auth_hash, auth_kid, created_at, upgraded_from_legacy) VALUES (?, ?, ?, ?, ?, 0)",
+          )
+          .bind(roomId, stateKey, authHash, currentKey.kid, now),
+      ]);
+      return json({ ok: true, syncId: roomId, stateRev: 1, updatedAt: now });
+    } catch {
+      const racedRoom = await selectRoomById(env.DB, roomId);
+      if (racedRoom) {
+        if (!(await verifyRoomSecret(env.DB, racedRoom, roomId, roomSecret, keyRing))) {
+          return v2Forbidden();
+        }
+        const current = await readRow(env.DB, racedRoom.state_key, false);
+        return json({ ok: true, syncId: roomId, stateRev: current.rev });
+      }
+      // stateKey衝突なら新しい代理キーで再試行する。rooms失敗時はD1 batchがstatesも戻す。
+    }
+  }
+  return json({ error: "storage unavailable" }, 500);
+}
+
+function stateKeyBindIndexes(sql) {
+  const normalized = sql.replace(/\s+/g, " ").trim();
+  if (/^UPDATE states SET /i.test(normalized)) return [2];
+  if (/^DELETE FROM state_revisions /i.test(normalized)) return [0, 1, 2, 4];
+  if (
+    /^(SELECT .* FROM states |SELECT .* FROM state_revisions |INSERT .* INTO states |INSERT .* INTO state_revisions )/i
+      .test(normalized)
+  ) {
+    return [0];
+  }
+  return [];
+}
+
+function bindStateKeyAlias(db, roomId, stateKey) {
+  return {
+    prepare(sql) {
+      const statement = db.prepare(sql);
+      return {
+        bind(...args) {
+          const mapped = [...args];
+          for (const index of stateKeyBindIndexes(sql)) {
+            if (mapped[index] === roomId) mapped[index] = stateKey;
+          }
+          return statement.bind(...mapped);
+        },
+      };
+    },
+  };
+}
+
+async function bodyHasBaseRevision(request) {
+  try {
+    const raw = await readBodyCapped(request.clone(), MAX_RAW_BODY);
+    const body = JSON.parse(raw);
+    return Boolean(
+      body
+      && typeof body === "object"
+      && !Array.isArray(body)
+      && body.baseRev !== undefined
+      && body.baseRev !== null,
+    );
+  } catch {
+    // 本体の入力エラーは既存PUTへ委ね、legacyと同じ400/413応答にする。
+    return true;
+  }
+}
+
+async function handleV2RoomRequest(context, url) {
+  const { request, env } = context;
+  const keyRing = parseAuthKeyRing(env.SYNC_AUTH_SECRETS);
+  if (!keyRing) return v2Unavailable();
+  if (url.searchParams.get("create") === "1" && env.SYNC_V2_ENABLED !== "1") {
+    return v2Unavailable();
+  }
+
+  const roomId = url.searchParams.get("room");
+  const roomSecret = request.headers.get("x-room-key");
+  if (!ROOM_ID_PATTERN.test(roomId || "") || !ROOM_SECRET_PATTERN.test(roomSecret || "")) {
+    return rejectInvalidV2Credential(keyRing);
+  }
+
+  try {
+    if (url.searchParams.get("create") === "1") {
+      return await createV2Room(request, env, roomId, roomSecret, keyRing);
+    }
+    if (request.method !== "GET" && request.method !== "PUT") return methodNotAllowed();
+
+    const room = await selectRoomById(env.DB, roomId);
+    if (!(await verifyRoomSecret(env.DB, room, roomId, roomSecret, keyRing))) {
+      return v2Forbidden();
+    }
+    if (
+      request.method === "PUT"
+      && url.searchParams.get("force") !== "1"
+      && !(await bodyHasBaseRevision(request))
+    ) {
+      return json({ error: "force required", code: "force_required" }, 422);
+    }
+
+    const forwardedUrl = new URL(request.url);
+    forwardedUrl.searchParams.delete("room");
+    forwardedUrl.searchParams.delete("create");
+    forwardedUrl.searchParams.delete("force");
+    forwardedUrl.searchParams.delete("op");
+    forwardedUrl.searchParams.set("sync", roomId);
+    const forwardedRequest = new Request(forwardedUrl, request);
+    return onRequest({
+      ...context,
+      request: forwardedRequest,
+      env: { ...env, DB: bindStateKeyAlias(env.DB, roomId, room.state_key) },
+    });
+  } catch {
+    return json({ error: "storage unavailable" }, 500);
+  }
+}
+
+function upgradeConflict(code) {
+  return json({ error: "conflict", code }, 409);
+}
+
+async function classifyExistingUpgrade(db, legacyKey, roomId, roomSecret, keyRing) {
+  const byRoom = await selectRoomById(db, roomId);
+  if (byRoom) {
+    if (byRoom.state_key !== legacyKey) return upgradeConflict("room-taken");
+    if (!(await verifyRoomSecret(db, byRoom, roomId, roomSecret, keyRing))) {
+      return v2Forbidden();
+    }
+    return json({ ok: true, syncId: roomId });
+  }
+  const byStateKey = await selectRoomByStateKey(db, legacyKey);
+  if (byStateKey) return upgradeConflict("already-upgraded");
+  return null;
+}
+
+async function handleV2UpgradeRequest(context, url) {
+  const { request, env } = context;
+  const keyRing = parseAuthKeyRing(env.SYNC_AUTH_SECRETS);
+  if (!keyRing) return v2Unavailable();
+  if (env.SYNC_V2_ENABLED !== "1") return v2Unavailable();
+  if (request.method !== "PUT") return methodNotAllowed();
+
+  const legacyKey = cleanSyncId(url.searchParams.get("sync"));
+  if (!legacyKey) return json({ error: "sync id required" }, 400);
+
+  let raw = "";
+  try {
+    raw = await readBodyCapped(request, MAX_RAW_BODY);
+  } catch (error) {
+    if (error && error.tooLarge) return json({ error: "body too large" }, 413);
+    return json({ error: "unreadable body" }, 400);
+  }
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  const roomId = body && typeof body === "object" && !Array.isArray(body) ? body.roomId : null;
+  const roomSecret = request.headers.get("x-room-key");
+  if (!ROOM_ID_PATTERN.test(roomId || "") || !ROOM_SECRET_PATTERN.test(roomSecret || "")) {
+    return rejectInvalidV2Credential(keyRing);
+  }
+
+  try {
+    const existing = await classifyExistingUpgrade(env.DB, legacyKey, roomId, roomSecret, keyRing);
+    if (existing) return existing;
+
+    const currentKey = keyRing[0];
+    const authHash = await authHmacHex(currentKey.secret, roomId, roomSecret);
+    try {
+      await env.DB
+        .prepare(
+          "INSERT INTO rooms (room_id, state_key, auth_hash, auth_kid, created_at, upgraded_from_legacy) VALUES (?, ?, ?, ?, ?, 1)",
+        )
+        .bind(roomId, legacyKey, authHash, currentKey.kid, Date.now())
+        .run();
+      return json({ ok: true, syncId: roomId });
+    } catch {
+      const raced = await classifyExistingUpgrade(env.DB, legacyKey, roomId, roomSecret, keyRing);
+      if (raced) return raced;
+      return json({ error: "storage unavailable" }, 500);
+    }
+  } catch {
+    return json({ error: "storage unavailable" }, 500);
+  }
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
   if (!env || !env.DB) {
     return json({ error: "storage unavailable" }, 500);
   }
   const url = new URL(request.url);
+  if (url.searchParams.has("room")) return handleV2RoomRequest(context, url);
+  if (url.searchParams.get("op") === "upgrade") return handleV2UpgradeRequest(context, url);
   const syncId = cleanSyncId(url.searchParams.get("sync"));
   if (!syncId) return json({ error: "sync id required" }, 400);
 
