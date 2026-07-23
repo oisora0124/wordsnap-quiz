@@ -456,7 +456,7 @@ const idempotentTwice = mergeStates(idempotentOnce, crossDeckLegacyMerge);
 assert.equal(JSON.stringify(idempotentTwice), JSON.stringify(idempotentOnce),
   "repeating the same application-state merge must be idempotent");
 
-const getResponseStart = publicHtml.indexOf("function validSyncGetResponse(");
+const getResponseStart = publicHtml.indexOf("function syncStateExceedsLimits(");
 const getResponseEnd = publicHtml.indexOf("\nasync function syncRequest(", getResponseStart);
 assert.ok(getResponseStart >= 0 && getResponseEnd > getResponseStart,
   "sync GET response validator source is missing");
@@ -464,10 +464,19 @@ const getResponseSandbox = {};
 new Script(
   "const cleanSyncId = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 64);\n" +
     `${publicHtml.slice(getResponseStart, getResponseEnd)}\n` +
-    "globalThis.__syncResponse = { validSyncGetResponse, validSyncPutResponse };",
+    "globalThis.__syncResponse = { syncStateExceedsLimits, validSyncGetResponse, validSyncPutResponse };",
   { filename: "sync-get-response-check.js" },
 ).runInNewContext(getResponseSandbox);
-const { validSyncGetResponse, validSyncPutResponse } = getResponseSandbox.__syncResponse;
+const { syncStateExceedsLimits, validSyncGetResponse, validSyncPutResponse } =
+  getResponseSandbox.__syncResponse;
+assert.equal(syncStateExceedsLimits({
+  words: Array(60_000).fill(null),
+  decks: Array(2_000).fill(null),
+}), false, "sync state at the safety limits must remain accepted");
+assert.equal(syncStateExceedsLimits({ words: Array(60_001).fill(null), decks: [] }), true,
+  "sync state above the word limit must be rejected");
+assert.equal(syncStateExceedsLimits({ words: [], decks: Array(2_001).fill(null) }), true,
+  "sync state above the deck limit must be rejected");
 assert.equal(validSyncGetResponse({ state: null, stateRev: 0 }, null), true,
   "a new empty sync room must remain backward compatible");
 assert.equal(validSyncGetResponse({ state: null, stateRev: 3, notModified: true }, 3), true,
@@ -602,7 +611,12 @@ assert.match(schema, /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+states/i, "D1 states 
 assert.match(api, /env\.DB/, "API must require the DB binding");
 assert.match(api, /RETURNING\s+rev,\s*updatedAt/i, "API atomic revision result is missing");
 assert.match(api, /MAX_RAW_BODY/, "API body-size guard is missing");
-assert.match(api, /MAX_INFLATED_JSON/, "API inflated-size guard is missing");
+assert.match(api, /const\s+MAX_INFLATED_JSON\s*=\s*24_000_000/,
+  "API inflated-size guard must stay at 24MB");
+assert.match(api, /const\s+MAX_STATE_WORDS\s*=\s*60_000/,
+  "API sync-state word limit is missing");
+assert.match(api, /const\s+MAX_STATE_DECKS\s*=\s*2_000/,
+  "API sync-state deck limit is missing");
 assert.match(api, /MAX_INCOMING_BASE64/, "API compressed-input guard is missing");
 assert.match(api, /MAX_STORED_BASE64/, "API D1 row-size guard is missing");
 assert.match(publicHtml, /const\s+SYNC_REQUEST_TIMEOUT_MS\s*=\s*60\s*\*\s*1000/,
@@ -615,6 +629,10 @@ assert.match(publicHtml, /error\?\.name\s*===\s*["']AbortError["'][\s\S]*?timeou
   "a sync timeout must be distinguished from a stale key-switch cancellation");
 assert.match(publicHtml, /const\s+validConflictState\s*=\s*error\.data\.state\s*&&\s*validSyncGetResponse\([\s\S]*?if\s*\(!validConflictState\)\s*{[\s\S]*?error\.noRetry\s*=\s*true/,
   "a malformed 409 state or revision must stop instead of overwriting unseen changes");
+assert.match(publicHtml, /if\s*\(syncStateExceedsLimits\(data\.state\)\)[\s\S]*?同期データが異常に大きいため適用を中止しました。[\s\S]*?error\.stateTooLarge\s*=\s*true/,
+  "oversized received sync state must stop at the common response boundary");
+assert.match(publicHtml, /if\s*\(!options\.silent\s*\|\|\s*error\.stateTooLarge\)/,
+  "oversized sync-state rejection must remain visible during silent polling");
 assert.doesNotMatch(publicHtml, /壊れた409応答（stateなし）でも[^\n]*再送/,
   "the client still documents unsafe retry behavior for a state-less conflict");
 assert.match(api, /latest\.corrupt[\s\S]*?code:\s*["']corrupt_state["']/,

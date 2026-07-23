@@ -102,6 +102,13 @@ export async function onRequest(context) {
     return json({ error: "method not allowed" }, 405, { allow: "POST" });
   }
 
+  // 現行クライアントはJSONで送信する。simple POSTになり得る非JSON本文は、
+  // クロスサイトからの踏み台利用を防ぐためストレージへ触れる前に拒否する。
+  const contentType = String(request.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    return json({ error: "unsupported media type" }, 415);
+  }
+
   if (!env || !env.DB) {
     return json({ error: "storage unavailable" }, 503);
   }

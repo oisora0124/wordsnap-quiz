@@ -31,8 +31,12 @@ const HEADERS = {
 
 // bodyの上限は従来どおり4MB（gzip後のstateはこの中に余裕で収まる）
 const MAX_RAW_BODY = 4_000_000;
-// 解凍後JSONの上限。正当な数万語データでも到達しない値にして「解凍爆弾」を防ぐ
-const MAX_INFLATED_JSON = 50_000_000;
+// クライアントのインポート上限（8MB・5万語）に、学習履歴やメタデータ分の
+// 十分な余裕を加えた24MBを解凍上限とし、正規stateを保ちつつ解凍爆弾を防ぐ。
+const MAX_INFLATED_JSON = 24_000_000;
+// 正規データの上限（5万語）より余裕を持たせ、異常な件数だけを拒否する。
+const MAX_STATE_WORDS = 60_000;
+const MAX_STATE_DECKS = 2_000;
 // 現行クライアントは1.8MBで送信を止める。サーバーではD1保存上限と同じ
 // 1.9MBを受信上限にして、巨大なbase64をデコード・解凍する前に拒否する。
 // 旧クライアントのプレーンstate受信には影響しない。
@@ -54,6 +58,46 @@ function json(body, status = 200, extraHeaders = {}) {
 
 function methodNotAllowed() {
   return json({ error: "method not allowed" }, 405, { allow: "GET, PUT" });
+}
+
+// body をストリームで読み、上限バイトを超えた時点で打ち切る。Content-Length が
+// 不明なchunked送信でも、全量をメモリへ載せる前に拒否できる。
+async function readBodyCapped(request, maxBytes) {
+  if (!request.body) {
+    const text = await request.text();
+    if (text.length > maxBytes) {
+      const error = new Error("body too large");
+      error.tooLarge = true;
+      throw error;
+    }
+    return text;
+  }
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+        // 中断失敗は無視（例外で処理自体は打ち切られる）
+      }
+      const error = new Error("body too large");
+      error.tooLarge = true;
+      throw error;
+    }
+    chunks.push(value);
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
 }
 
 // キーは英数字・ハイフン・アンダーバーのみ、最大64文字（Netlify版 cleanSyncId と同一仕様）
@@ -160,7 +204,7 @@ async function readRow(db, syncId, includeState = true) {
 
 // 履歴テーブルは後から追加されるため、未マイグレーション環境でも主同期を止めない。
 // 保存・整理はそれぞれ独立した best-effort とし、履歴側の障害を通常PUTへ伝播させない。
-async function archiveRevision(db, key, rev, storedState, reason) {
+async function archiveRevision(db, key, rev, storedState, reason, logFailure = false) {
   try {
     await db
       .prepare(
@@ -168,8 +212,11 @@ async function archiveRevision(db, key, rev, storedState, reason) {
       )
       .bind(key, rev, storedState, Date.now(), reason)
       .run();
-  } catch {
+  } catch (error) {
     // 履歴は復元用の補助データであり、主書き込みの成功を取り消してはならない。
+    if (logFailure) {
+      console.error("強制上書き後の履歴保存に失敗しました。", error);
+    }
   }
 }
 
@@ -245,7 +292,7 @@ async function readRevision(db, key, rev) {
 export async function onRequest(context) {
   const { request, env } = context;
   if (!env || !env.DB) {
-    return json({ error: "D1 binding 'DB' is not configured" }, 500);
+    return json({ error: "storage unavailable" }, 500);
   }
   const url = new URL(request.url);
   const syncId = cleanSyncId(url.searchParams.get("sync"));
@@ -307,11 +354,11 @@ export async function onRequest(context) {
     }
     let raw = "";
     try {
-      raw = await request.text();
-    } catch {
+      raw = await readBodyCapped(request, MAX_RAW_BODY);
+    } catch (error) {
+      if (error && error.tooLarge) return json({ error: "body too large" }, 413);
       return json({ error: "unreadable body" }, 400);
     }
-    if (raw.length > MAX_RAW_BODY) return json({ error: "body too large" }, 413);
     let body;
     try {
       body = JSON.parse(raw);
@@ -346,6 +393,9 @@ export async function onRequest(context) {
     // 検証は解凍後のstateに対して行う（プレーン受信時も同一の検証）
     if (!validStateShape(state)) {
       return json({ error: "invalid state" }, 422);
+    }
+    if (state.words.length > MAX_STATE_WORDS || state.decks.length > MAX_STATE_DECKS) {
+      return json({ error: "state too large" }, 413);
     }
 
     // 有効なPUTであることを確認してから初めてD1へ触れる。不正JSON・巨大body・
@@ -404,6 +454,7 @@ export async function onRequest(context) {
     // RETURNING なら競合ウィンドウが無い。
     let savedRev = null;
     let savedUpdatedAt = now;
+    let forcedOverwrite = false;
     if (current.rev === 0 && !(await rowExists(db, syncId))) {
       // 新規キー: baseRev 未指定 or 0 のときだけ作成（原子的 INSERT）
       if (!hasBase || baseRev === 0) {
@@ -420,6 +471,7 @@ export async function onRequest(context) {
       }
     } else if (!hasBase && incomingLearningVersion >= 1) {
       // baseRev 省略 = 強制上書き（「この端末を正にする」）。原子的に rev を進める。
+      forcedOverwrite = true;
       const row = await db
         .prepare("UPDATE states SET state = ?, rev = rev + 1, updatedAt = ? WHERE key = ? RETURNING rev, updatedAt")
         .bind(storedJson, now, syncId)
@@ -459,7 +511,7 @@ export async function onRequest(context) {
     }
     // 主書き込みがRETURNINGで成功確定した後だけ、その同一文字列を復元履歴へ残す。
     // 履歴の保存・整理はいずれもbest-effortなので、未マイグレーション環境でも200を維持する。
-    await archiveRevision(db, syncId, savedRev, storedJson, "update");
+    await archiveRevision(db, syncId, savedRev, storedJson, "update", forcedOverwrite);
     await pruneRevisions(db, syncId);
     return json({ ok: true, syncId, stateRev: savedRev, updatedAt: savedUpdatedAt });
   }

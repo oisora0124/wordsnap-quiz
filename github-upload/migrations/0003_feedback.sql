@@ -10,12 +10,12 @@
 -- 保存しないもの（プライバシー方針）:
 --   - 同期キー（?w= の値。実質的にデータのパスワード）
 --   - IPアドレス
+--   - User-Agent（user_agent 列はスキーマ安定のため残し、APIから空文字を固定保存）
 -- 保存するもの:
 --   - category   要望 / 不具合 / その他
 --   - message    本文（サーバー側で最大2000文字に制限）
 --   - contact    任意の連絡先（空可・最大200文字）
 --   - app_version クライアントのビルド識別（デバッグ用・任意）
---   - user_agent ブラウザ種別（デバッグ用・最大300文字に切り詰め）
 
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

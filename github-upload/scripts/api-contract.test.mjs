@@ -415,6 +415,45 @@ test("unsupported methods and oversized input are rejected before D1 access", as
   assert.equal(invalidDb.calls.length, 0);
 });
 
+test("a chunked PUT body is cancelled and rejected as soon as it exceeds 4MB", async () => {
+  const db = new FakeD1();
+  let cancelled = false;
+  const chunk = new Uint8Array(2_100_000).fill(0x78);
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(chunk);
+      controller.enqueue(chunk);
+      controller.close();
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const request = new Request(`${API_URL}?sync=${LEGACY_SYNC_ID}`, {
+    method: "PUT",
+    body: stream,
+    duplex: "half",
+  });
+  const response = await onRequest({ request, env: { DB: db } });
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), { error: "body too large" });
+  assert.equal(cancelled, true);
+  assert.equal(db.calls.length, 0);
+});
+
+test("states above the word or deck count limits are rejected before D1 access", async () => {
+  for (const state of [
+    { learningSchemaVersion: 1, words: Array(60_001).fill(null), decks: [] },
+    { learningSchemaVersion: 1, words: [], decks: Array(2_001).fill(null) },
+  ]) {
+    const db = new FakeD1();
+    const result = await requestApi(db, { method: "PUT", body: { state } });
+    assert.equal(result.response.status, 413);
+    assert.equal(result.data.error, "state too large");
+    assert.equal(db.calls.length, 0);
+  }
+});
+
 test("successful PUT archives the committed revision with the exact stored state", async () => {
   const db = new FakeD1();
   const saved = await requestApi(db, { method: "PUT", body: { state: sampleState("archived") } });
@@ -477,6 +516,36 @@ test("missing history table and history INSERT failures never break normal GET o
   assert.equal(insertErrorPut.response.status, 200);
   assert.equal(insertErrorPut.data.stateRev, 1);
   assert.equal((await requestApi(insertErrorDb)).response.status, 200);
+});
+
+test("history INSERT failure is logged only for the force-overwrite path", async () => {
+  const logged = [];
+  const originalConsoleError = console.error;
+  console.error = (...args) => logged.push(args);
+  try {
+    const forceDb = new FakeD1([
+      [LEGACY_SYNC_ID, { state: JSON.stringify(sampleState("force-before")), rev: 2, updatedAt: 1 }],
+    ], { historyInsertError: true });
+    const forced = await requestApi(forceDb, {
+      method: "PUT",
+      body: { state: sampleState("force-after") },
+    });
+    assert.equal(forced.response.status, 200);
+    assert.equal(logged.length, 1);
+    assert.match(String(logged[0][0]), /強制上書き後の履歴保存に失敗しました/);
+
+    const casDb = new FakeD1([
+      [LEGACY_SYNC_ID, { state: JSON.stringify(sampleState("cas-before")), rev: 2, updatedAt: 1 }],
+    ], { historyInsertError: true });
+    const cas = await requestApi(casDb, {
+      method: "PUT",
+      body: { baseRev: 2, state: sampleState("cas-after") },
+    });
+    assert.equal(cas.response.status, 200);
+    assert.equal(logged.length, 1, "CASの履歴失敗は従来どおり黙殺する");
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 test("prune keeps the top five revisions plus one latest revision for each recent UTC day", async () => {

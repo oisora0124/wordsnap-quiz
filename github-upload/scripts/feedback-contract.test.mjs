@@ -83,6 +83,28 @@ test("PUT/DELETE/PATCH are rejected as method not allowed", async () => {
   }
 });
 
+test("POST without an application/json Content-Type is rejected (415)", async () => {
+  for (const contentType of ["text/plain", "application/x-www-form-urlencoded"]) {
+    const db = new FakeD1();
+    const { response, data } = await post(
+      db,
+      JSON.stringify({ message: "hi" }),
+      { headers: { "content-type": contentType } },
+    );
+    assert.equal(response.status, 415);
+    assert.equal(data.error, "unsupported media type");
+    assert.equal(db.inserted.length, 0);
+  }
+
+  const db = new FakeD1();
+  const response = await onRequest({
+    request: new Request(API_URL, { method: "POST", body: JSON.stringify({ message: "hi" }) }),
+    env: { DB: db },
+  });
+  assert.equal(response.status, 415);
+  assert.equal(db.inserted.length, 0);
+});
+
 test("empty or whitespace-only message is rejected", async () => {
   const db = new FakeD1();
   for (const message of ["", "   ", "\n\t"]) {
@@ -177,7 +199,11 @@ test("missing feedback table degrades to 503, never crashes", async () => {
 
 test("no DB binding returns 503 without throwing", async () => {
   const response = await onRequest({
-    request: new Request(API_URL, { method: "POST", body: JSON.stringify({ message: "hi" }) }),
+    request: new Request(API_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    }),
     env: {},
   });
   assert.equal(response.status, 503);

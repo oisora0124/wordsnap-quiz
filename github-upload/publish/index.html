@@ -9794,6 +9794,16 @@ function bumpSyncRequestGen() {
   syncState.abortControllers.clear();
 }
 
+// サーバー側と同じ余裕値で件数だけを確認し、異常な同期stateは切り詰めずに拒否する。
+// syncRequest の共通受信境界で使うため、通常GET・復元・409競合のすべてに適用される。
+function syncStateExceedsLimits(state) {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return false;
+  return (
+    (Array.isArray(state.words) && state.words.length > 60_000) ||
+    (Array.isArray(state.decks) && state.decks.length > 2_000)
+  );
+}
+
 function validSyncGetResponse(data, requestedSinceRev, expectedSyncId = "") {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
   if (expectedSyncId && cleanSyncId(data.syncId) !== cleanSyncId(expectedSyncId)) return false;
@@ -9884,6 +9894,13 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     if (controller) syncState.abortControllers.delete(controller);
   }
   if (gen !== syncState.requestGen) throw staleSyncError();
+  // normalizeState やマージへ渡す前の共通境界。異常stateはローカルへ一切適用しない。
+  if (syncStateExceedsLimits(data.state)) {
+    const error = new Error("同期データが異常に大きいため適用を中止しました。");
+    error.noRetry = true;
+    error.stateTooLarge = true;
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error(data.error || "同期サーバーへ接続できませんでした。");
     error.status = response.status;
@@ -10615,7 +10632,10 @@ async function pullWordsnapState(options = {}) {
   } catch (error) {
     if (isStaleSyncError(error)) return false; // キー切替で破棄された応答は無視
     syncState.connected = false;
-    if (!options.silent) setSyncStatus(error.message || "読み込みに失敗しました。", "error");
+    // 定期ポーリング中でも、異常なstateを拒否した事実だけはユーザーへ通知する。
+    if (!options.silent || error.stateTooLarge) {
+      setSyncStatus(error.message || "読み込みに失敗しました。", "error");
+    }
     return false;
   } finally {
     syncState.pulling = false;
