@@ -1600,6 +1600,47 @@ button.ghost.danger:hover {
   line-height: 1.55;
 }
 
+.ocr-progress {
+  display: grid;
+  flex-basis: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.ocr-progress-label {
+  min-width: 0;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.ocr-progress progress {
+  width: 100%;
+  height: 0.55rem;
+  grid-column: 1;
+  accent-color: var(--accent);
+}
+
+.ocr-progress progress::-webkit-progress-value {
+  transition: width 160ms ease;
+}
+
+.ocr-progress button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ocr-progress progress::-webkit-progress-value {
+    transition: none;
+  }
+}
+
 .ocr-notice strong {
   font-weight: 750;
 }
@@ -1947,6 +1988,29 @@ button.ghost.danger:hover {
   margin: 14px 0 0;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.save-notice {
+  position: fixed;
+  z-index: 80;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(88px + env(safe-area-inset-bottom));
+  width: min(360px, calc(100vw - 32px));
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--success) 42%, var(--line));
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.save-notice[data-state="error"] {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  background: var(--danger-soft);
+  color: var(--danger-text);
 }
 
 .hi-acc {
@@ -5281,6 +5345,11 @@ accurate 正確な"
                 <input type="checkbox" id="hiAccToggle" />
                 高精度（前処理を比較・低速）
               </label>
+              <div id="ocrProgress" class="ocr-progress" role="status" aria-live="polite" aria-atomic="true" hidden>
+                <span id="ocrProgressLabel" class="ocr-progress-label"></span>
+                <progress id="ocrProgressBar" max="100" aria-label="OCRの進捗"></progress>
+                <button id="ocrCancelButton" class="ghost danger" type="button">読み取りを中止</button>
+              </div>
               <p class="ocr-local-note">端末内OCRは画像をアップロードしません。高精度では通常画像と照明むら補正画像を比較するため、時間とメモリを多く使います。</p>
             </div>
 
@@ -5984,6 +6053,8 @@ accurate 正確な"
         </div>
       </section>
     </div>
+
+    <p id="saveNotice" class="status save-notice" role="status" aria-live="polite" aria-atomic="true" hidden></p>
 
     <script>
 // iPhone の Safari は file:// で開くと localStorage / sessionStorage に
@@ -8478,6 +8549,10 @@ const elements = {
   perspHSlider: document.querySelector("#perspHSlider"),
   perspHValue: document.querySelector("#perspHValue"),
   ocrButton: document.querySelector("#ocrButton"),
+  ocrProgress: document.querySelector("#ocrProgress"),
+  ocrProgressLabel: document.querySelector("#ocrProgressLabel"),
+  ocrProgressBar: document.querySelector("#ocrProgressBar"),
+  ocrCancelButton: document.querySelector("#ocrCancelButton"),
   ocrLayoutSelect: document.querySelector("#ocrLayoutSelect"),
   aiOcrButton: document.querySelector("#aiOcrButton"),
   aiKeyFields: document.querySelector("#aiKeyFields"),
@@ -8486,6 +8561,7 @@ const elements = {
   sampleChips: document.querySelector(".sample-chips"),
   hiAccToggle: document.querySelector("#hiAccToggle"),
   status: document.querySelector("#status"),
+  saveNotice: document.querySelector("#saveNotice"),
   importAllSavedActions: document.querySelector("#importAllSavedActions"),
   importGoLibraryButton: document.querySelector("#importGoLibraryButton"),
   importClearButton: document.querySelector("#importClearButton"),
@@ -12422,6 +12498,44 @@ function setStatus(message) {
   elements.status.textContent = message;
 }
 
+const INLINE_SAVE_NOTICE_DEBOUNCE_MS = 450;
+const INLINE_SAVE_ERROR_VISIBLE_MS = 4500;
+let inlineSaveNoticeTimer = 0;
+let inlineSaveNoticeHideTimer = 0;
+let inlineSaveErrorVisibleUntil = 0;
+
+function showInlineSaveNotice(message, state) {
+  window.clearTimeout(inlineSaveNoticeHideTimer);
+  elements.saveNotice.dataset.state = state;
+  elements.saveNotice.textContent = message;
+  elements.saveNotice.hidden = false;
+  const visibleMs = state === "error" ? INLINE_SAVE_ERROR_VISIBLE_MS : 3000;
+  inlineSaveNoticeHideTimer = window.setTimeout(() => {
+    elements.saveNotice.hidden = true;
+    elements.saveNotice.textContent = "";
+  }, visibleMs);
+}
+
+function scheduleInlineSaveSuccess(message) {
+  window.clearTimeout(inlineSaveNoticeTimer);
+  const delay = Math.max(
+    INLINE_SAVE_NOTICE_DEBOUNCE_MS,
+    inlineSaveErrorVisibleUntil - Date.now(),
+  );
+  inlineSaveNoticeTimer = window.setTimeout(() => {
+    inlineSaveNoticeTimer = 0;
+    showInlineSaveNotice(message, "success");
+  }, delay);
+}
+
+function notifyInlineSaveFailure() {
+  // 保留中の成功を必ず破棄し、失敗通知を後から成功で上書きしない。
+  window.clearTimeout(inlineSaveNoticeTimer);
+  inlineSaveNoticeTimer = 0;
+  inlineSaveErrorVisibleUntil = Date.now() + INLINE_SAVE_ERROR_VISIBLE_MS;
+  showInlineSaveNotice("保存できませんでした。入力内容を確認して、もう一度お試しください。", "error");
+}
+
 function createId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -13797,15 +13911,26 @@ function scoreOrientation(data) {
 
 // Tries the four right-angle orientations on a small probe image and returns
 // the rotation (deg) that reads best, so sideways/upside-down photos work.
-async function detectOrientation(worker, baseCanvas) {
+async function detectOrientation(worker, baseCanvas, run) {
   const probe = downscaleCanvas(baseCanvas, 1100);
   const angles = [0, 90, 270, 180];
   let best = { angle: 0, score: -1 };
-  for (let i = 0; i < angles.length; i += 1) {
-    setStatus(`写真の向きを判定しています… (${i + 1}/${angles.length})`);
-    const { data } = await worker.recognize(rotateCanvas(probe, angles[i]));
-    const score = scoreOrientation(data);
-    if (score > best.score) best = { angle: angles[i], score };
+  try {
+    for (let i = 0; i < angles.length; i += 1) {
+      ensureOcrRunActive(run);
+      setOcrRunStage(run, `写真の向きを判定しています… (${i + 1}/${angles.length})`);
+      const rotatedProbe = rotateCanvas(probe, angles[i]);
+      try {
+        const { data } = await worker.recognize(rotatedProbe);
+        ensureOcrRunActive(run);
+        const score = scoreOrientation(data);
+        if (score > best.score) best = { angle: angles[i], score };
+      } finally {
+        releaseTemporaryCanvas(rotatedProbe, probe);
+      }
+    }
+  } finally {
+    releaseTemporaryCanvas(probe, baseCanvas);
   }
   return best.angle;
 }
@@ -13813,51 +13938,129 @@ async function detectOrientation(worker, baseCanvas) {
 let ocrWorker = null;
 let ocrWorkerMode = null;
 let ocrWorkerPromise = null;
+let ocrWorkerToken = 0;
+let ocrWorkerTokenSerial = 0;
+let ocrRunSerial = 0;
+let activeOcrRun = null;
 let ocrPhaseLabel = "文字を読んでいます";
+const terminatingOcrWorkers = new WeakMap();
+const OCR_CANCELLED_CODE = "OCR_CANCELLED";
 
-function reportOcrProgress(progress) {
-  if (progress.status === "recognizing text") {
-    const percent = Math.round(progress.progress * 100);
-    setStatus(`${ocrPhaseLabel}... ${percent}%`);
-  } else if (/load|download|initializ/i.test(progress.status || "")) {
-    setStatus("OCRモデルを準備中…（初回だけダウンロードします）");
+function ocrCancelledError() {
+  const error = new Error("OCRを中止しました。");
+  error.code = OCR_CANCELLED_CODE;
+  return error;
+}
+
+function isOcrCancelledError(error) {
+  return error?.code === OCR_CANCELLED_CODE;
+}
+
+function ensureOcrRunActive(run) {
+  if (!run || run.cancelled || activeOcrRun !== run) throw ocrCancelledError();
+}
+
+function updateOcrProgress(label, percent = null) {
+  if (!elements.ocrProgress) return;
+  elements.ocrProgress.hidden = false;
+  elements.ocrProgressLabel.textContent = label;
+  if (Number.isFinite(percent)) {
+    const bounded = Math.max(0, Math.min(100, Math.round(percent)));
+    elements.ocrProgressBar.value = bounded;
+    elements.ocrProgressBar.setAttribute("value", String(bounded));
+  } else {
+    elements.ocrProgressBar.removeAttribute("value");
   }
 }
 
-async function resetOcrWorker() {
+function setOcrRunStage(run, message, percent = null) {
+  ensureOcrRunActive(run);
+  setStatus(message);
+  updateOcrProgress(message, percent);
+}
+
+function clearOcrProgress() {
+  if (!elements.ocrProgress) return;
+  elements.ocrProgress.hidden = true;
+  elements.ocrProgressLabel.textContent = "";
+  elements.ocrProgressBar.value = 0;
+  elements.ocrProgressBar.removeAttribute("value");
+  elements.ocrCancelButton.disabled = false;
+}
+
+function reportOcrProgress(progress, workerToken) {
+  const run = activeOcrRun;
+  if (!run || run.cancelled || run.workerToken !== workerToken) return;
+  if (progress.status === "recognizing text") {
+    const percent = Math.round(progress.progress * 100);
+    setOcrRunStage(run, `${ocrPhaseLabel}… ${percent}%`, percent);
+  } else if (/load|download|initializ/i.test(progress.status || "")) {
+    setOcrRunStage(run, "OCRモデルを準備中…（初回だけダウンロードします）");
+  }
+}
+
+function terminateOcrWorkerInstance(worker) {
+  if (!worker) return Promise.resolve();
+  const existing = terminatingOcrWorkers.get(worker);
+  if (existing) return existing;
+  const termination = Promise.resolve()
+    .then(() => worker.terminate())
+    .catch(() => {
+      // 壊れたworkerの後始末失敗は次回の再生成を妨げない。
+    });
+  terminatingOcrWorkers.set(worker, termination);
+  return termination;
+}
+
+async function resetOcrWorker(expectedToken = null) {
+  if (expectedToken !== null && ocrWorkerToken !== expectedToken) return;
   const worker = ocrWorker;
   ocrWorker = null;
   ocrWorkerMode = null;
-  if (worker) {
-    try {
-      await worker.terminate();
-    } catch {
-      // 壊れたworkerの後始末失敗は次回の再生成を妨げない。
-    }
-  }
+  ocrWorkerToken = 0;
+  await terminateOcrWorkerInstance(worker);
 }
 
-async function getOcrWorker(Tesseract, highAccuracy) {
+async function getOcrWorker(Tesseract, highAccuracy, run) {
+  ensureOcrRunActive(run);
   const mode = highAccuracy ? "best" : "fast";
-  if (ocrWorker && ocrWorkerMode === mode) return ocrWorker;
+  if (ocrWorker && ocrWorkerMode === mode) {
+    run.workerToken = ocrWorkerToken;
+    return ocrWorker;
+  }
   if (ocrWorkerPromise) {
-    await ocrWorkerPromise;
-    if (ocrWorker && ocrWorkerMode === mode) return ocrWorker;
+    await ocrWorkerPromise.promise;
+    ensureOcrRunActive(run);
+    if (ocrWorker && ocrWorkerMode === mode) {
+      run.workerToken = ocrWorkerToken;
+      return ocrWorker;
+    }
   }
 
   ocrWorkerPromise = (async () => {
     await resetOcrWorker();
-    const options = { logger: reportOcrProgress };
+    ensureOcrRunActive(run);
+    const workerToken = ++ocrWorkerTokenSerial;
+    run.workerToken = workerToken;
+    const options = { logger: (progress) => reportOcrProgress(progress, workerToken) };
     if (highAccuracy) options.langPath = "https://tessdata.projectnaptha.com/4.0.0_best";
     const engineMode = Tesseract.OEM?.LSTM_ONLY ?? 1;
-    ocrWorker = await Tesseract.createWorker(["eng", "jpn"], engineMode, options);
+    const worker = await Tesseract.createWorker(["eng", "jpn"], engineMode, options);
+    if (run.cancelled || activeOcrRun !== run) {
+      await terminateOcrWorkerInstance(worker);
+      throw ocrCancelledError();
+    }
+    ocrWorker = worker;
     ocrWorkerMode = mode;
-    return ocrWorker;
+    ocrWorkerToken = workerToken;
+    return worker;
   })();
+  const pending = { promise: ocrWorkerPromise, runId: run.id };
+  ocrWorkerPromise = pending;
   try {
-    return await ocrWorkerPromise;
+    return await pending.promise;
   } finally {
-    ocrWorkerPromise = null;
+    if (ocrWorkerPromise === pending) ocrWorkerPromise = null;
   }
 }
 
@@ -13878,21 +14081,25 @@ function releaseTemporaryCanvas(canvas, keep = null) {
   canvas.height = 0;
 }
 
-async function recognizeOcrCanvas(worker, canvas, layout, variantLabel) {
+async function recognizeOcrCanvas(worker, canvas, layout, variantLabel, run) {
+  ensureOcrRunActive(run);
   const pageSegmentationMode = layout === "auto" ? "3" : "6";
   await worker.setParameters({
     tessedit_pageseg_mode: pageSegmentationMode,
     preserve_interword_spaces: "1",
     user_defined_dpi: "300",
   });
+  ensureOcrRunActive(run);
 
   const results = [];
   const regions = ocrRegions(canvas, layout);
   for (let index = 0; index < regions.length; index += 1) {
+    ensureOcrRunActive(run);
     const regionLabel = regions.length > 1 ? `・${index === 0 ? "左列" : "右列"}` : "";
     ocrPhaseLabel = `文字を読んでいます（${variantLabel}${regionLabel}）`;
     try {
       const { data } = await worker.recognize(regions[index]);
+      ensureOcrRunActive(run);
       results.push(data || {});
     } finally {
       // 2列モードの切り出しCanvasは片列を読み終えた時点で解放する。
@@ -13923,13 +14130,14 @@ function isOcrResultReliable(result) {
   );
 }
 
-async function runOcr(source) {
+async function runOcr(source, run) {
+  ensureOcrRunActive(run);
   const hiAcc = Boolean(elements.hiAccToggle && elements.hiAccToggle.checked);
   const layout = ["one", "two"].includes(elements.ocrLayoutSelect?.value)
     ? elements.ocrLayoutSelect.value
     : "auto";
 
-  setStatus("画像を補正しています…");
+  setOcrRunStage(run, "画像を補正しています…");
   let normalCanvas = null;
   let adaptiveCanvas = null;
   try {
@@ -13941,15 +14149,28 @@ async function runOcr(source) {
   } catch {
     if (source instanceof HTMLCanvasElement) normalCanvas = source;
   }
+  ensureOcrRunActive(run);
   if (!normalCanvas) throw new Error("OCR用に画像を準備できませんでした。");
 
-  setStatus(
+  setOcrRunStage(
+    run,
     hiAcc
       ? "高精度モデルを準備中…（初回は十数MBのダウンロードがあり時間がかかります）"
       : "OCRを準備しています。初回は少し時間がかかります。",
   );
-  const Tesseract = await loadTesseract();
-  const worker = await getOcrWorker(Tesseract, hiAcc);
+  let worker;
+  try {
+    const Tesseract = await loadTesseract();
+    ensureOcrRunActive(run);
+    worker = await getOcrWorker(Tesseract, hiAcc, run);
+  } catch (error) {
+    releaseTemporaryCanvas(normalCanvas, source);
+    releaseTemporaryCanvas(adaptiveCanvas, source);
+    if (run.cancelled || isOcrCancelledError(error)) throw ocrCancelledError();
+    throw error;
+  }
+  run.worker = worker;
+  ensureOcrRunActive(run);
 
   try {
     // 向き判定は全文レイアウトの軽量画像で一度だけ行い、各補正候補・各列で再利用する。
@@ -13960,15 +14181,16 @@ async function runOcr(source) {
     ocrPhaseLabel = "写真の向きを判定しています";
     let angle = 0;
     try {
-      angle = await detectOrientation(worker, normalCanvas);
-    } catch {
+      angle = await detectOrientation(worker, normalCanvas, run);
+    } catch (error) {
+      if (run.cancelled || isOcrCancelledError(error)) throw ocrCancelledError();
       angle = 0;
     }
 
     const candidates = [];
     let rotated = rotateCanvas(normalCanvas, angle);
     try {
-      candidates.push(await recognizeOcrCanvas(worker, rotated, layout, "通常補正"));
+      candidates.push(await recognizeOcrCanvas(worker, rotated, layout, "通常補正", run));
     } finally {
       releaseTemporaryCanvas(rotated, normalCanvas);
       releaseTemporaryCanvas(normalCanvas, source);
@@ -13978,31 +14200,35 @@ async function runOcr(source) {
     // 高精度候補は通常候補の認識・解放後に作り、2枚の大きなCanvasを同時保持しない。
     if (hiAcc) {
       try {
-        setStatus("照明むら補正を試しています…");
+        setOcrRunStage(run, "照明むら補正を試しています…");
         adaptiveCanvas = await preprocessImage(source, {
           maxSide: 4000,
           maxPixels: 9 * 1000 * 1000,
           variant: "adaptive",
         });
+        ensureOcrRunActive(run);
         rotated = rotateCanvas(adaptiveCanvas, angle);
         try {
-          candidates.push(await recognizeOcrCanvas(worker, rotated, layout, "照明むら補正"));
+          candidates.push(await recognizeOcrCanvas(worker, rotated, layout, "照明むら補正", run));
         } finally {
           releaseTemporaryCanvas(rotated, adaptiveCanvas);
           releaseTemporaryCanvas(adaptiveCanvas, source);
           adaptiveCanvas = null;
         }
-      } catch {
+      } catch (error) {
+        if (run.cancelled || isOcrCancelledError(error)) throw ocrCancelledError();
         // メモリ不足などで追加補正だけ失敗した場合は通常補正の結果で続行する。
         releaseTemporaryCanvas(adaptiveCanvas, source);
         adaptiveCanvas = null;
       }
     }
+    ensureOcrRunActive(run);
     candidates.sort((a, b) => scoreOcrResult(b) - scoreOcrResult(a));
     const best = candidates[0] || { text: "", confidence: 0 };
     return { ...best, metrics: ocrTextMetrics(best.text) };
   } catch (error) {
-    await resetOcrWorker();
+    await resetOcrWorker(run.workerToken || null);
+    if (run.cancelled || isOcrCancelledError(error)) throw ocrCancelledError();
     throw error;
   } finally {
     releaseTemporaryCanvas(normalCanvas, source);
@@ -19561,12 +19787,90 @@ window.addEventListener("pointermove", editorPointerMove);
 window.addEventListener("pointerup", editorPointerUp);
 window.addEventListener("pointercancel", editorPointerUp);
 
-elements.ocrButton.addEventListener("click", async () => {
-  if (!editorImg) return;
+function lockOcrUiForRun() {
+  const controls = [
+    elements.imageInput,
+    elements.ocrText,
+    elements.parseButton,
+    elements.ocrButton,
+    elements.aiOcrButton,
+    elements.ocrLayoutSelect,
+    elements.hiAccToggle,
+    ...elements.editorTools.querySelectorAll("button, input"),
+  ].filter((control, index, list) => control && list.indexOf(control) === index);
+  const snapshot = controls.map((control) => ({ control, disabled: control.disabled }));
+  for (const { control } of snapshot) control.disabled = true;
+  const details = elements.ocrButton.closest(".ocr-details");
+  const ariaBusy = details?.getAttribute("aria-busy");
+  details?.setAttribute("aria-busy", "true");
+  return { snapshot, details, ariaBusy };
+}
 
-  elements.ocrButton.disabled = true;
+function restoreOcrUi(lock) {
+  for (const { control, disabled } of lock.snapshot) control.disabled = disabled;
+  if (lock.details) {
+    if (lock.ariaBusy === null) lock.details.removeAttribute("aria-busy");
+    else lock.details.setAttribute("aria-busy", lock.ariaBusy);
+  }
+}
+
+function finishOcrUiRun(run) {
+  if (activeOcrRun !== run) return;
+  restoreOcrUi(run.uiLock);
+  clearOcrProgress();
+  activeOcrRun = null;
+}
+
+async function cancelActiveOcrRun() {
+  const run = activeOcrRun;
+  if (!run || run.cancelled) return;
+  run.cancelled = true;
+  elements.ocrCancelButton.disabled = true;
+  setStatus("端末内OCRを中止しています…");
+  updateOcrProgress("端末内OCRを中止しています…");
+
+  // 生成済みworkerは即時停止する。生成途中なら、そのPromiseが解決した瞬間に
+  // getOcrWorker側でterminateし、キャンセル済みworkerをキャッシュへ残さない。
+  const pending =
+    ocrWorkerPromise && ocrWorkerPromise.runId === run.id
+      ? ocrWorkerPromise.promise
+      : null;
+  await resetOcrWorker();
+  await terminateOcrWorkerInstance(run.worker);
+  if (pending) {
+    try {
+      await pending;
+    } catch {
+      // キャンセルによるrejectは、実行側の共通終了処理で扱う。
+    }
+  }
+  if (activeOcrRun === run) {
+    setStatus("端末内OCRを中止しました。入力欄の内容は変更していません。");
+    finishOcrUiRun(run);
+  }
+}
+
+elements.ocrCancelButton.addEventListener("click", cancelActiveOcrRun);
+
+elements.ocrButton.addEventListener("click", async () => {
+  // disabled属性だけに頼らず、プログラム的clickを含む多重実行もここで止める。
+  if (!editorImg || activeOcrRun) return;
+
+  const run = {
+    id: ++ocrRunSerial,
+    cancelled: false,
+    worker: null,
+    workerToken: 0,
+    uiLock: null,
+  };
+  activeOcrRun = run;
+  run.uiLock = lockOcrUiForRun();
+  updateOcrProgress("画像を補正しています…");
+  let source = null;
   try {
-    const result = await runOcr(getEditedCanvas());
+    source = getEditedCanvas();
+    const result = await runOcr(source, run);
+    ensureOcrRunActive(run);
     elements.ocrText.value = result.text;
     if (isOcrResultReliable(result)) {
       setStatus(
@@ -19578,9 +19882,16 @@ elements.ocrButton.addEventListener("click", async () => {
       );
     }
   } catch (error) {
-    setStatus(`${error.message} 下の欄に単語と意味を貼り付ければ続けられます。`);
+    if (run.cancelled || isOcrCancelledError(error)) {
+      if (activeOcrRun === run) {
+        setStatus("端末内OCRを中止しました。入力欄の内容は変更していません。");
+      }
+    } else {
+      setStatus(`${error.message} 下の欄に単語と意味を貼り付ければ続けられます。`);
+    }
   } finally {
-    elements.ocrButton.disabled = false;
+    finishOcrUiRun(run);
+    releaseTemporaryCanvas(source);
   }
 });
 
@@ -19865,8 +20176,14 @@ elements.saveParsedButton.addEventListener("click", () => {
   candidates = [];
   currentQuiz = null;
   if (appState.activeDeckId !== "all") appState.activeDeckId = targetDeckId;
-  saveState();
+  try {
+    saveState();
+  } catch (error) {
+    notifyInlineSaveFailure();
+    throw error;
+  }
   setStatus(`単語帳「${deckName(targetDeckId)}」に${cleaned.length}件を保存しました。`);
+  scheduleInlineSaveSuccess(`編集した単語と意味を保存しました（${cleaned.length}件）。`);
   playSound(cleaned.length > 0 ? "save" : "wrong");
   if (cleaned.length > 0) setActiveStep("quiz", { sound: false });
 });
