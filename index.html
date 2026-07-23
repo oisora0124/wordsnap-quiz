@@ -242,9 +242,14 @@ h2 {
 /* 学習にまつわる名言（4時間ごとに切り替わる） */
 .learning-quote {
   position: relative;
-  max-width: 52ch;
-  margin: 1.1rem 0 0;
-  padding: 0.85rem 1rem 0.85rem 1.1rem;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 64ch;
+  gap: 0.45rem;
+  align-items: baseline;
+  margin: 0.65rem 0 0;
+  padding: 0.5rem 0.75rem;
   border-left: 3px solid var(--accent);
   border-radius: 0 var(--r-md) var(--r-md) 0;
   background: var(--accent-soft);
@@ -252,18 +257,29 @@ h2 {
 }
 
 .learning-quote .quote-text {
+  min-width: 0;
+  flex: 1 1 auto;
   margin: 0;
+  overflow: hidden;
   color: var(--ink);
   font-size: 0.92rem;
   font-style: italic;
-  line-height: 1.6;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .learning-quote .quote-author {
-  margin-top: 0.4rem;
+  min-width: 0;
+  max-width: 42%;
+  flex: 0 1 auto;
+  margin: 0;
+  overflow: hidden;
   color: var(--accent-text);
   font-size: 0.8rem;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .learning-quote .quote-author::before {
@@ -392,6 +408,10 @@ h2 {
   align-items: start;
   margin-bottom: 28px;
   animation: rise 460ms ease both;
+}
+
+.hero > * {
+  min-width: 0;
 }
 
 .hero-side {
@@ -3983,6 +4003,49 @@ textarea:focus-visible {
   font-size: 0.74rem;
 }
 
+.quiz-setup-help {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.quiz-setup-summary {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.quiz-setup-summary .quiz-setup-hint {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.quiz-setup-hint-toggle {
+  flex: none;
+  padding: 0.3rem 0.55rem;
+  color: var(--accent-text);
+  background: transparent;
+  border-color: var(--line);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.quiz-setup-hint-toggle:hover,
+.quiz-setup-hint-toggle[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+.quiz-setup-details {
+  margin: 8px 0 0;
+  padding-left: 1.25rem;
+}
+
+.quiz-setup-details li + li {
+  margin-top: 0.3rem;
+}
+
 .quiz-card {
   position: relative;
   overflow: hidden;
@@ -4913,7 +4976,7 @@ body.tutorial-open {
         </div>
         <div class="hero-side">
           <div class="hero-controls">
-            <button id="streakBadge" class="streak-badge" type="button" aria-label="学習の記録を開く" aria-controls="streakPanel" aria-expanded="false">
+            <button id="streakBadge" class="streak-badge" type="button" title="連続学習 0日" aria-label="連続学習 0日" aria-controls="streakPanel" aria-expanded="false">
               <span aria-hidden="true">🔥</span><span id="streakBadgeCount">0</span>
             </button>
             <button id="syncBadge" class="sync-badge" type="button" data-state="idle" title="タップで今すぐ同期">
@@ -5332,14 +5395,24 @@ accurate 正確な"
             <span class="quiz-range-hint">空欄なら全部</span>
             <span class="quiz-range-hint quiz-range-note">※番号は選択した単語帳・CEFR条件での追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
           </div>
-          <!-- 2つの開始ボタンの違いが分かりにくいという指摘への補足（文言のみ・挙動は不変） -->
-          <p id="quizSetupHint" class="settings-desc quiz-setup-hint">
-            「この設定で出題」＝上の単語帳・範囲を<strong>1周だけ</strong>出題（習得済みも含む）。
-            例文問題は初期値では<strong>出しません</strong>。「一部」または「全部」を選んだ場合だけ空所補充を含めます。
-            「クイズを始める（おまかせ）」＝覚えていない単語を自動で選んで<strong>エンドレス</strong>に出題。
-            「苦手だけ」＝誤答歴があり正答率80%未満の単語、「今日の復習」＝日付が来た単語だけを1周。
-            「やさしい順」＝未着手の単語をCEFRのA1→C2順（未判定は最後）で1周。
-          </p>
+          <div class="quiz-setup-help">
+            <div class="quiz-setup-summary">
+              <p id="quizSetupHint" class="settings-desc quiz-setup-hint">設定した範囲は1周、おまかせはエンドレスで出題します。</p>
+              <button
+                id="quizSetupHintToggle"
+                class="ghost mini quiz-setup-hint-toggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="quizSetupDetails"
+              >？ 詳しく</button>
+            </div>
+            <ul id="quizSetupDetails" class="settings-desc quiz-setup-details" hidden>
+              <li><strong>この設定で出題：</strong>上の単語帳・範囲を、習得済みも含めて1周します。例文問題は初期値では出さず、「一部」か「全部」を選んだ場合だけ含めます。</li>
+              <li><strong>クイズを始める（おまかせ）：</strong>覚えていない単語を自動で選び、エンドレスに出題します。</li>
+              <li><strong>苦手だけ／今日の復習：</strong>正答率80%未満の誤答歴がある単語、または復習日が来た単語だけを1周します。</li>
+              <li><strong>やさしい順：</strong>未着手の単語をCEFRのA1→C2順で1周します。未判定の単語は最後です。</li>
+            </ul>
+          </div>
         </div>
 
         <div id="quizCard" class="quiz-card">
@@ -8475,6 +8548,8 @@ const elements = {
   quizCefrSelect: document.querySelector("#quizCefrSelect"),
   quizRangeToggle: document.querySelector("#quizRangeToggle"),
   quizRangeRow: document.querySelector("#quizRangeRow"),
+  quizSetupHintToggle: document.querySelector("#quizSetupHintToggle"),
+  quizSetupDetails: document.querySelector("#quizSetupDetails"),
   quizRangeFrom: document.querySelector("#quizRangeFrom"),
   quizRangeTo: document.querySelector("#quizRangeTo"),
   quizShuffle: document.querySelector("#quizShuffle"),
@@ -17922,19 +17997,9 @@ function renderStreakBadge() {
   const hasStreak = streak.count > 0;
   // 今日まだ解いていなければ薄く表示する（今日やれば継続が分かるように）
   badge.classList.toggle("is-stale", hasStreak && !isToday);
-  badge.title = hasStreak
-    ? isToday
-      ? `${streak.count}日連続で学習中！`
-      : "今日クイズに答えると連続記録が続きます"
-    : "学習の記録を見る";
-  // 読み上げには「◯日連続」と、開いて学習の記録を見られることを伝える（固定ラベルで数を潰さない）
-  const expanded = elements.streakPanel && !elements.streakPanel.hidden;
-  badge.setAttribute(
-    "aria-label",
-    hasStreak
-      ? `${streak.count}日連続。学習の記録を${expanded ? "閉じる" : "開く"}`
-      : `学習の記録を${expanded ? "閉じる" : "開く"}`,
-  );
+  const streakLabel = `連続学習 ${streak.count}日`;
+  badge.title = streakLabel;
+  badge.setAttribute("aria-label", streakLabel);
 }
 
 // ---------- 学習カレンダー ----------
@@ -20228,6 +20293,12 @@ elements.quizRangeToggle?.addEventListener("click", () => {
     if (elements.quizRangeTo) elements.quizRangeTo.value = "";
   }
   renderQuiz();
+});
+elements.quizSetupHintToggle?.addEventListener("click", () => {
+  const show = Boolean(elements.quizSetupDetails?.hidden);
+  if (elements.quizSetupDetails) elements.quizSetupDetails.hidden = !show;
+  elements.quizSetupHintToggle.setAttribute("aria-expanded", String(show));
+  elements.quizSetupHintToggle.textContent = show ? "閉じる" : "？ 詳しく";
 });
 [elements.quizRangeFrom, elements.quizRangeTo].forEach((input) => {
   input?.addEventListener("input", () => {

@@ -143,12 +143,22 @@ for (const attribute of ["aria-labelledby", "aria-describedby", "aria-controls"]
     }
   }
 }
-for (const id of ["quizRangeToggle", "trashToggleButton"]) {
+for (const id of ["quizRangeToggle", "quizSetupHintToggle", "trashToggleButton"]) {
   const control = staticMarkup.match(new RegExp(`<button\\b[^>]*\\bid=["']${id}["'][^>]*>`, "i"));
   assert.ok(control && /\baria-expanded=["']false["']/i.test(control[0]) &&
     /\baria-controls=["'][^"']+["']/i.test(control[0]),
   `${id} must expose both its collapsed state and controlled region`);
 }
+const streakBadge = staticMarkup.match(
+  /<button\b[^>]*\bid=["']streakBadge["'][^>]*>/i,
+)?.[0] || "";
+assert.match(streakBadge, /\btitle=["']連続学習 0日["']/i,
+  "the streak badge must expose its initial day count in the title");
+assert.match(streakBadge, /\baria-label=["']連続学習 0日["']/i,
+  "the streak badge must expose its initial day count to assistive technology");
+assert.match(publicHtml,
+  /const\s+streakLabel\s*=\s*`連続学習\s+\$\{streak\.count\}日`[\s\S]*?badge\.title\s*=\s*streakLabel[\s\S]*?badge\.setAttribute\(["']aria-label["'],\s*streakLabel\)/,
+  "the streak badge title and aria-label must track the current streak count");
 const tutorialDialog = staticMarkup.match(/<section\b[^>]*\bid=["']tutorialDialog["'][^>]*>/i)?.[0] || "";
 assert.match(tutorialDialog, /\brole=["']dialog["']/i,
   "the onboarding tutorial must expose dialog semantics");
