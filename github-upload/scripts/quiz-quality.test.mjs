@@ -75,6 +75,7 @@ function buildSandbox() {
     extractFunction("normalizeSpeechRate"),
     extractFunction("normalizeSpeechVoiceUri"),
     extractFunction("buildFlashcardOrder"),
+    extractFunction("sliceWordsByQuizRange"),
     extractFunction("isMasteryVerificationDue"),
     extractFunction("flashcardEligibleIds"),
     extractConst("CEFR_ORDER"),
@@ -95,7 +96,7 @@ function buildSandbox() {
       " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
       " normalizeQuizTimeLimit, cefrRankOfLevel, normalizeDailyGoal," +
       " normalizeSpeechRate, normalizeSpeechVoiceUri, buildFlashcardOrder," +
-      " isMasteryVerificationDue, flashcardEligibleIds," +
+      " sliceWordsByQuizRange, isMasteryVerificationDue, flashcardEligibleIds," +
       " wordAccuracyFactor, personalAccuracyFactor, adaptiveSrsMultiplier, srsIntervalMs, SRS_INTERVAL_DAYS, SRS_DAY_MS };",
   ];
   const sandbox = {};
@@ -221,6 +222,43 @@ test("flashcard order preserves source order or performs a deterministic shuffle
   assert.deepEqual(ids, ["a", "b", "c", "d"], "the input array must not be mutated");
 });
 
+test("flashcard range count uses the same open range as the actual session", () => {
+  const words = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }];
+  assert.deepEqual([...q.sliceWordsByQuizRange(words, false, "2", "3")], words,
+    "a closed range means the whole selected deck");
+  assert.deepEqual([...q.sliceWordsByQuizRange(words, true, "", "")], words,
+    "blank open bounds mean the whole selected deck");
+  assert.deepEqual([...q.sliceWordsByQuizRange(words, true, "2", "3")], [words[1], words[2]]);
+  for (const [from, to] of [["0", "2"], ["3", "2"], ["1", "5"], ["x", "2"]]) {
+    assert.deepEqual([...q.sliceWordsByQuizRange(words, true, from, to)], [],
+      `invalid range ${from}-${to} must not advertise startable cards`);
+  }
+  assert.deepEqual([...q.sliceWordsByQuizRange([words[0]], true, "1", "1")], [words[0]],
+    "a one-word flashcard range remains valid");
+});
+
+test("deleting pending flashcards removes them from progress and replay without erasing answered cards", () => {
+  const pieces = [
+    "let flashcardSession = {" +
+      " order: ['a', 'b', 'c'], allIds: ['a', 'b', 'c'], index: 1," +
+      " knownIds: ['a'], unknownIds: [] };",
+    extractFunction("dropWordFromFlashcardSession"),
+    "dropWordFromFlashcardSession('a');",
+    "const afterAnswered = JSON.parse(JSON.stringify(flashcardSession));",
+    "dropWordFromFlashcardSession('b');",
+    "const afterCurrent = JSON.parse(JSON.stringify(flashcardSession));",
+    "dropWordFromFlashcardSession('c');",
+    "globalThis.__state = { afterAnswered, afterCurrent, final: flashcardSession };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "flashcard-delete-check.js" }).runInNewContext(sandbox);
+  assert.deepEqual([...sandbox.__state.afterAnswered.order], ["a", "b", "c"]);
+  assert.deepEqual([...sandbox.__state.afterCurrent.order], ["a", "c"]);
+  assert.deepEqual([...sandbox.__state.afterCurrent.allIds], ["a", "c"]);
+  assert.deepEqual([...sandbox.__state.final.order], ["a"]);
+  assert.deepEqual([...sandbox.__state.final.allIds], ["a"]);
+});
+
 test("due provisional mastery is excluded from flashcards but remains eligible before its due time", () => {
   const NOW = 1_700_000_000_000;
   const due = {
@@ -304,6 +342,16 @@ test("due provisional mastery bypasses context formats in the actual review quiz
   const mixedContext = build({ context: false, mixFormat: true });
   assert.equal(mixedContext.context, null);
   assert.equal(mixedContext.choices.length, 4);
+
+  const easyOrder = build({ context: false, mixFormat: false, easyOrder: true, label: "やさしい順" });
+  assert.equal(easyOrder.context, null);
+  assert.equal(easyOrder.choices.length, 4,
+    "the shared easy-order review builder must still force a meaning choice when verification is due");
+
+  const rangeQuiz = build({ context: false, mixFormat: false, label: "単語帳・1〜4番" });
+  assert.equal(rangeQuiz.context, null);
+  assert.equal(rangeQuiz.choices.length, 4,
+    "the range-review path must still force a meaning choice when verification is due");
 });
 
 test("adaptive SRS: word accuracy factor is a bounded step function (neutral under 3 tries)", () => {

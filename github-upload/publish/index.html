@@ -2327,6 +2327,13 @@ textarea:focus-visible {
   box-shadow: var(--shadow-sm);
 }
 
+.safe-share-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .safe-share-strip button {
   flex: none;
 }
@@ -2346,6 +2353,33 @@ textarea:focus-visible {
   font-size: 0.8rem;
   font-weight: 700;
   line-height: 1.5;
+}
+
+@media (max-width: 560px) {
+  .safe-share-strip {
+    align-items: stretch;
+    padding: 10px;
+  }
+
+  .safe-share-actions {
+    display: grid;
+    flex: 1 1 100%;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .safe-share-actions button {
+    min-width: 0;
+  }
+
+  .safe-share-warning {
+    flex-basis: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .safe-share-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .sync-fix {
@@ -4309,6 +4343,10 @@ textarea:focus-visible {
 
 .tutorial-dialog {
   width: min(470px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: clamp(20px, 5vw, 30px);
   color: var(--ink);
   background: var(--surface);
@@ -4895,9 +4933,18 @@ body.tutorial-open {
         </div>
       </section>
 
-      <aside class="safe-share-strip" aria-label="安全な共有">
-        <button id="shareToolHeaderButton" type="button">🤝 キーなしで安全に共有</button>
-        <p class="safe-share-warning">
+      <aside id="safeShareStrip" class="safe-share-strip" aria-label="安全な共有">
+        <div class="safe-share-actions">
+          <button id="shareToolHeaderButton" type="button">🤝 キーなしで安全に共有</button>
+          <button
+            id="safeShareToggleButton"
+            class="ghost mini"
+            type="button"
+            aria-expanded="true"
+            aria-controls="safeShareWarning"
+          >注意を最小化</button>
+        </div>
+        <p id="safeShareWarning" class="safe-share-warning">
           ⚠️ アドレスバーのURLにはあなたの個人キーが含まれます。共有には必ずこのボタンを使ってください。
         </p>
       </aside>
@@ -5850,9 +5897,11 @@ accurate 正確な"
         aria-labelledby="tutorialTitle"
         aria-describedby="tutorialText"
       >
-        <p id="tutorialKicker" class="tutorial-kicker">ステップ 1 / 3</p>
-        <h2 id="tutorialTitle">取り込む</h2>
-        <p id="tutorialText">英単語と意味を1行ずつ貼り付けます。写真からの読み取りも使えます。</p>
+        <div id="tutorialContent" aria-live="polite" aria-atomic="true">
+          <p id="tutorialKicker" class="tutorial-kicker">ステップ 1 / 3</p>
+          <h2 id="tutorialTitle">取り込む</h2>
+          <p id="tutorialText">英単語と意味を1行ずつ貼り付けます。写真からの読み取りも使えます。</p>
+        </div>
         <div id="tutorialStepDots" class="tutorial-step-dots" aria-hidden="true"></div>
         <div class="tutorial-actions">
           <button id="tutorialSkipButton" class="ghost" type="button">スキップ</button>
@@ -8527,6 +8576,8 @@ const elements = {
   downloadToolButton: document.querySelector("#downloadToolButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
   shareToolHeaderButton: document.querySelector("#shareToolHeaderButton"),
+  safeShareWarning: document.querySelector("#safeShareWarning"),
+  safeShareToggleButton: document.querySelector("#safeShareToggleButton"),
   showTutorialButton: document.querySelector("#showTutorialButton"),
   tutorialBackdrop: document.querySelector("#tutorialBackdrop"),
   tutorialDialog: document.querySelector("#tutorialDialog"),
@@ -8567,6 +8618,7 @@ const REVIEW_EVENTS_KEY = "wordsnap-review-events:v1";
 const REVIEW_EVENTS_MAX = 2000;
 const REVIEW_EVENTS_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 const TUTORIAL_COMPLETE_KEY = "wordsnap-tutorial-complete:v1";
+const SAFE_SHARE_COLLAPSED_KEY = "wordsnap-safe-share-collapsed:v1";
 const SYNC_ID_KEY = "wordsnap-sync-id:v1";
 const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
@@ -8917,17 +8969,23 @@ function selectedSpeechVoice() {
 function populateSpeechVoices() {
   const select = elements.speechVoiceSelect;
   if (!select) return;
+  const supported = "speechSynthesis" in window;
   const savedUri = speechVoiceUri();
   const voices = englishSpeechVoices();
-  select.replaceChildren(new Option("端末の既定音声（英語）", ""));
+  select.replaceChildren(
+    new Option(
+      supported ? "端末の既定音声（英語）" : "この端末は読み上げに対応していません",
+      "",
+    ),
+  );
   for (const voice of voices) {
     const region = speechRegionLabel(voice.lang);
     const suffix = region ? `${voice.lang}・${region}` : voice.lang;
     select.add(new Option(`${voice.name}（${suffix}）`, voice.voiceURI));
   }
   select.value = voices.some((voice) => voice.voiceURI === savedUri) ? savedUri : "";
-  select.disabled = !("speechSynthesis" in window);
-  if (elements.speechTestButton) elements.speechTestButton.disabled = !("speechSynthesis" in window);
+  select.disabled = !supported;
+  if (elements.speechTestButton) elements.speechTestButton.disabled = !supported;
 }
 
 function applySpeechSettings() {
@@ -14427,8 +14485,14 @@ function renderQuiz() {
     elements.contextQuizButton.disabled = count === 0;
   }
   if (elements.startFlashcardButton) {
+    const scopedWords = sliceWordsByQuizRange(
+      quizSelectedDeckWords(),
+      Boolean(elements.quizRangeRow && !elements.quizRangeRow.hidden),
+      elements.quizRangeFrom?.value,
+      elements.quizRangeTo?.value,
+    );
     const count = flashcardEligibleIds(
-      quizSelectedDeckWords().map((word) => word.id),
+      scopedWords.map((word) => word.id),
       appState.words,
     ).length;
     elements.startFlashcardButton.textContent = `フラッシュカード（${count}語）`;
@@ -15015,6 +15079,23 @@ function startQuizFromRange() {
   });
 }
 
+// フラッシュカード開始ボタンの件数と実際の開始対象を同じ範囲にそろえる。
+// 不正な入力中は空配列を返し、クリック時の詳しいバリデーション表示は既存処理へ任せる。
+function sliceWordsByQuizRange(words, useRange, fromValue, toValue) {
+  const list = Array.isArray(words) ? words : [];
+  if (!useRange) return list.slice();
+  const parseBound = (value, fallback) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return fallback;
+    const parsed = Number(raw);
+    return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
+  };
+  const from = parseBound(fromValue, 1);
+  const to = parseBound(toValue, list.length);
+  if (from === null || to === null || from > to || to > list.length) return [];
+  return list.slice(from - 1, to);
+}
+
 function selectedFlashcardWords() {
   const words = quizSelectedDeckWords();
   const total = words.length;
@@ -15038,12 +15119,14 @@ function selectedFlashcardWords() {
     elements.quizRangeFrom?.focus();
     return null;
   }
-  return words.slice(from - 1, to);
+  return sliceWordsByQuizRange(words, useRange, from, to);
 }
 
 function startFlashcardsFromIds(ids, options = {}) {
   const validIds = flashcardEligibleIds(ids, appState.words);
   if (validIds.length === 0) {
+    // 画面表示後に仮習得の検証期限を迎えた場合も、押した時点の0語表示へ更新する。
+    renderQuiz();
     setStatus("フラッシュカードにできる単語がありません。仮習得の検証待ちは通常クイズで出題します。");
     return;
   }
@@ -15092,7 +15175,8 @@ function buildCurrentFlashcard() {
       (word) => word.id === flashcardSession.order[flashcardSession.index],
     );
     if (!answer) {
-      flashcardSession.index += 1;
+      const [removedId] = flashcardSession.order.splice(flashcardSession.index, 1);
+      flashcardSession.allIds = flashcardSession.allIds.filter((id) => id !== removedId);
       continue;
     }
     // セッション開始後に期限を迎えた場合も、自己申告で検証を通過させず通常クイズへ残す。
@@ -15116,6 +15200,15 @@ function buildCurrentFlashcard() {
 
 function renderFlashcard() {
   if (!flashcardSession) return;
+  // 同期反映など、ローカル削除ハンドラを通らない削除でも表示中の幽霊カードを残さない。
+  if (
+    currentQuiz?.answer?.id &&
+    !appState.words.some((word) => word.id === currentQuiz.answer.id)
+  ) {
+    dropWordFromFlashcardSession(currentQuiz.answer.id);
+    currentQuiz = null;
+    flashcardRevealed = false;
+  }
   if (!currentQuiz) currentQuiz = buildCurrentFlashcard();
   if (!currentQuiz) {
     finishFlashcardSession();
@@ -15189,6 +15282,17 @@ function gradeFlashcard(isKnown) {
 function finishFlashcardSession() {
   const session = flashcardSession;
   if (!session) return;
+  if (session.order.length === 0) {
+    flashcardSession = null;
+    flashcardRevealed = false;
+    reviewResult = null;
+    quizStarted = false;
+    currentQuiz = null;
+    stopQuizTimer();
+    renderQuiz();
+    setStatus("対象の単語が0語になったため、フラッシュカードを終了しました。");
+    return;
+  }
   const unknownWords = session.unknownIds
     .map((id) => appState.words.find((word) => word.id === id))
     .filter(Boolean)
@@ -15296,6 +15400,17 @@ function dropWordFromReviewSession(id) {
   reviewSession.missedIds = reviewSession.missedIds.filter((entry) => entry !== id);
   reviewSession.total = Math.max(0, (reviewSession.total || 0) - 1);
   persistReviewProgress(); // 再開用スナップショットも削除後の姿に合わせる
+}
+
+// フラッシュカードでまだ回答していない削除語を、総数・再実行対象からも取り除く。
+// 回答済みの語はそのセッションで正当に仕分け済みなので、結果の件数には残す。
+function dropWordFromFlashcardSession(id) {
+  if (!flashcardSession) return;
+  const position = flashcardSession.order.indexOf(id);
+  if (position < 0) return;
+  if (position < flashcardSession.index) return;
+  flashcardSession.order.splice(position, 1);
+  flashcardSession.allIds = flashcardSession.allIds.filter((entry) => entry !== id);
 }
 
 // 復習セッションを完走したときのサマリ文言。誤答語も正解するまで出題済みなので、
@@ -19754,6 +19869,7 @@ elements.savedList.addEventListener("click", async (event) => {
     if (word) recordDeletion(word);
     appState.words = appState.words.filter((item) => item.id !== id);
     dropWordFromReviewSession(id); // 復習セッション中の未回答語なら total ごと取り除く
+    dropWordFromFlashcardSession(id);
     if (currentQuiz?.answer.id === id) currentQuiz = null;
     saveState();
     offerUndo(snapshot);
@@ -20111,9 +20227,13 @@ elements.quizRangeToggle?.addEventListener("click", () => {
     if (elements.quizRangeFrom) elements.quizRangeFrom.value = "";
     if (elements.quizRangeTo) elements.quizRangeTo.value = "";
   }
+  renderQuiz();
 });
 [elements.quizRangeFrom, elements.quizRangeTo].forEach((input) => {
-  input?.addEventListener("input", () => input.setCustomValidity(""));
+  input?.addEventListener("input", () => {
+    input.setCustomValidity("");
+    renderQuiz();
+  });
   input?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
@@ -20250,6 +20370,7 @@ elements.deleteSelectedButton?.addEventListener("click", () => {
   targets.forEach((word) => recordDeletion(word));
   appState.words = appState.words.filter((word) => !idSet.has(word.id));
   ids.forEach((id) => dropWordFromReviewSession(id)); // 復習セッション中の未回答語なら total ごと取り除く
+  ids.forEach((id) => dropWordFromFlashcardSession(id));
   if (currentQuiz && idSet.has(currentQuiz.answer.id)) currentQuiz = null;
   selectedIds.clear();
   saveState();
@@ -20553,7 +20674,15 @@ elements.clearAllButton.addEventListener("click", () => {
   appState.deletions = deletions;
   appState.trash = sanitizeTrash(trash, deletedAt);
   candidates = [];
+  clearAutoNextTimer();
+  clearSavedReviewProgress();
+  reviewSession = null;
+  reviewResult = null;
+  flashcardSession = null;
+  flashcardRevealed = false;
+  quizStarted = false;
   currentQuiz = null;
+  stopQuizTimer();
   saveState();
   offerUndo(snapshot);
   say("保存データを削除しました。単語は削除済みに30日間保存されます。");
@@ -20705,6 +20834,32 @@ function shareTool() {
 }
 elements.shareToolButton?.addEventListener("click", shareTool);
 elements.shareToolHeaderButton?.addEventListener("click", shareTool);
+
+function applySafeShareCollapsed(collapsed) {
+  const isCollapsed = Boolean(collapsed);
+  if (elements.safeShareWarning) elements.safeShareWarning.hidden = isCollapsed;
+  if (elements.safeShareToggleButton) {
+    elements.safeShareToggleButton.setAttribute("aria-expanded", String(!isCollapsed));
+    elements.safeShareToggleButton.textContent = isCollapsed ? "注意を表示" : "注意を最小化";
+  }
+}
+
+let safeShareCollapsed = false;
+try {
+  safeShareCollapsed = localStorage.getItem(SAFE_SHARE_COLLAPSED_KEY) === "1";
+} catch {
+  // 保存不可環境では、初期状態の警告表示を維持する。
+}
+applySafeShareCollapsed(safeShareCollapsed);
+elements.safeShareToggleButton?.addEventListener("click", () => {
+  safeShareCollapsed = !safeShareCollapsed;
+  applySafeShareCollapsed(safeShareCollapsed);
+  try {
+    localStorage.setItem(SAFE_SHARE_COLLAPSED_KEY, safeShareCollapsed ? "1" : "0");
+  } catch {
+    // 保存不可環境では、この表示中だけ切り替える。
+  }
+});
 
 const HIACC_KEY = "wordsnap-ocr-hiacc";
 elements.hiAccToggle.checked = localStorage.getItem(HIACC_KEY) === "1";

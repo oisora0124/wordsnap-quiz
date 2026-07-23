@@ -149,6 +149,23 @@ for (const id of ["quizRangeToggle", "trashToggleButton"]) {
     /\baria-controls=["'][^"']+["']/i.test(control[0]),
   `${id} must expose both its collapsed state and controlled region`);
 }
+const tutorialDialog = staticMarkup.match(/<section\b[^>]*\bid=["']tutorialDialog["'][^>]*>/i)?.[0] || "";
+assert.match(tutorialDialog, /\brole=["']dialog["']/i,
+  "the onboarding tutorial must expose dialog semantics");
+assert.match(tutorialDialog, /\baria-modal=["']true["']/i,
+  "the onboarding tutorial must be announced as modal");
+const tutorialContent = staticMarkup.match(/<div\b[^>]*\bid=["']tutorialContent["'][^>]*>/i)?.[0] || "";
+assert.match(tutorialContent, /\baria-live=["']polite["']/i,
+  "tutorial step changes must be announced to screen readers");
+assert.match(tutorialContent, /\baria-atomic=["']true["']/i,
+  "tutorial step announcements must include the complete step");
+const safeShareToggle = staticMarkup.match(
+  /<button\b[^>]*\bid=["']safeShareToggleButton["'][^>]*>/i,
+)?.[0] || "";
+assert.match(safeShareToggle, /\baria-expanded=["']true["']/i,
+  "the safe-share warning toggle must expose its initial state");
+assert.match(safeShareToggle, /\baria-controls=["']safeShareWarning["']/i,
+  "the safe-share warning toggle must identify its controlled warning");
 for (const match of staticMarkup.matchAll(/<button\b[^>]*>/gi)) {
   assert.match(match[0], /\btype=["']button["']/i,
     "a static button is missing type=button and may submit a future form unexpectedly");
