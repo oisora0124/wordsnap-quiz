@@ -5734,6 +5734,7 @@ accurate 正確な"
                 回答の速さに応じて0.5〜1.6倍に伸縮します。よく覚えている語は間隔が伸び、
                 忘れかけている語は早めに戻ってきます。オフに戻すと、それ以降の解答は従来の
                 固定間隔で予定されます（すでに決まっている復習日はそのまま残ります）。
+                フラッシュカードで習得した語は、次の復習日に通常の4択で確認します。
               </p>
               <div class="settings-row">
                 <label class="settings-field">
@@ -10231,6 +10232,9 @@ function normalizeLearning(word) {
     const status = ["new", "review", "mastered"].includes(rawStatus) ? rawStatus : "new";
     return {
       status,
+      ...(status === "mastered" && word.learning.masteryVerify === "flashcard"
+        ? { masteryVerify: "flashcard" }
+        : {}),
       firstAttempted: Boolean(word.learning.firstAttempted),
       reviewAt: nonNegativeInteger(word.learning.reviewAt),
       blockedUntil: nonNegativeNumber(word.learning.blockedUntil), // 誤答した単語がこの時刻まで再出題されない（旧データは0=足止めなし）
@@ -10867,6 +10871,9 @@ function mergeLearningState(a, b) {
     );
     return {
       status,
+      ...(status === "mastered" && newer.masteryVerify === "flashcard"
+        ? { masteryVerify: "flashcard" }
+        : {}),
       firstAttempted: Boolean(a?.firstAttempted || b?.firstAttempted) || status !== "new",
       reviewAt: status === "review" ? Number(newer.reviewAt || 0) : 0,
       blockedUntil: Math.max(Number(a?.blockedUntil || 0), Number(b?.blockedUntil || 0)),
@@ -10895,8 +10902,16 @@ function mergeLearningState(a, b) {
       : a?.lastSrsResult === "correct" || b?.lastSrsResult === "correct"
         ? "correct"
         : "";
+  // 同時更新・旧形式同士では検証待ちを保守的に残す。明確に新しい更新がある場合は
+  // 上のLWW分岐で新しい側だけを見るため、検証済み端末へ古いマークが再伝播しない。
+  const masteryVerify =
+    status === "mastered" &&
+    (a?.masteryVerify === "flashcard" || b?.masteryVerify === "flashcard")
+      ? "flashcard"
+      : "";
   return {
     status,
+    ...(masteryVerify ? { masteryVerify } : {}),
     firstAttempted: Boolean(a?.firstAttempted || b?.firstAttempted) || status !== "new",
     reviewAt: status === "review" ? minPositiveNumber(a?.reviewAt, b?.reviewAt) : 0,
     // 5分ブロックは両端末の遅い方（＝より安全な方）を採用し、マージで足止めが消えないようにする
@@ -14412,7 +14427,10 @@ function renderQuiz() {
     elements.contextQuizButton.disabled = count === 0;
   }
   if (elements.startFlashcardButton) {
-    const count = quizSelectedDeckWords().length;
+    const count = flashcardEligibleIds(
+      quizSelectedDeckWords().map((word) => word.id),
+      appState.words,
+    ).length;
     elements.startFlashcardButton.textContent = `フラッシュカード（${count}語）`;
     elements.startFlashcardButton.disabled = count === 0;
   }
@@ -14623,6 +14641,26 @@ function buildFlashcardOrder(ids, shouldShuffle, random = Math.random) {
     [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
   }
   return ordered;
+}
+
+// フラッシュカード由来の仮習得は、SRS期限が来た回だけ通常の意味4択で検証する。
+// 期限前は既存のフラッシュカード周回を妨げず、期限到来後だけ対象から外す。
+function isMasteryVerificationDue(word, now = Date.now()) {
+  const nextReviewAt = Number(word?.learning?.nextReviewAt || 0);
+  return (
+    word?.learning?.status === "mastered" &&
+    word.learning.masteryVerify === "flashcard" &&
+    nextReviewAt > 0 &&
+    nextReviewAt <= now
+  );
+}
+
+function flashcardEligibleIds(ids, words = appState.words, now = Date.now()) {
+  const byId = new Map(words.map((word) => [word.id, word]));
+  return ids.filter((id) => {
+    const word = byId.get(id);
+    return word && !isMasteryVerificationDue(word, now);
+  });
 }
 
 // 進行中の復習/範囲クイズを保存する。ページを閉じたりリロードしても
@@ -15004,9 +15042,9 @@ function selectedFlashcardWords() {
 }
 
 function startFlashcardsFromIds(ids, options = {}) {
-  const validIds = ids.filter((id) => appState.words.some((word) => word.id === id));
+  const validIds = flashcardEligibleIds(ids, appState.words);
   if (validIds.length === 0) {
-    setStatus("フラッシュカードにできる単語がありません。");
+    setStatus("フラッシュカードにできる単語がありません。仮習得の検証待ちは通常クイズで出題します。");
     return;
   }
   clearAutoNextTimer();
@@ -15055,6 +15093,12 @@ function buildCurrentFlashcard() {
     );
     if (!answer) {
       flashcardSession.index += 1;
+      continue;
+    }
+    // セッション開始後に期限を迎えた場合も、自己申告で検証を通過させず通常クイズへ残す。
+    if (isMasteryVerificationDue(answer)) {
+      const [removedId] = flashcardSession.order.splice(flashcardSession.index, 1);
+      flashcardSession.allIds = flashcardSession.allIds.filter((id) => id !== removedId);
       continue;
     }
     const dueAt = Number(answer.learning?.nextReviewAt || 0);
@@ -17276,8 +17320,10 @@ function buildReviewQuiz() {
       Number(answer.learning.nextReviewAt) <= Date.now();
 
     // 「全部」のセッション、または「一部」で例文に割り当てた単語は空所補充で出す
+    // ただしフラッシュカード由来の仮習得は、期限到来時だけ必ず通常の意味4択で検証する。
     const useContextFormat =
-      reviewSession.context || mixedFormatUsesContext(reviewSession, answer.id);
+      !isMasteryVerificationDue(answer) &&
+      (reviewSession.context || mixedFormatUsesContext(reviewSession, answer.id));
     // 通常形式を明示選択した問題には、直前の例文フォールバック理由を持ち越さない。
     if (!useContextFormat) contextBasisFallbackNote = "";
     if (useContextFormat) {
@@ -17522,6 +17568,16 @@ function srsIntervalMs(stage, multiplier = 1) {
 function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.now(), options = {}) {
   const learning = word.learning;
   const responseMs = Number(options.responseMs);
+  const promptMode =
+    options.promptMode === "flashcard"
+      ? "flashcard"
+      : options.promptMode === "context-choice"
+        ? "context-choice"
+        : "meaning-choice";
+  const verifiesFlashcardMastery =
+    learning.masteryVerify === "flashcard" &&
+    srsDueAtStart &&
+    promptMode === "meaning-choice";
   // 「意味は選べたが即答できない」正解は未定着とみなす。ただし例文モード等
   // （skipSpeedGate）は文を読む時間が乗るので速度判定を無効化する。
   const slowCorrect =
@@ -17586,6 +17642,7 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
       if (learning.correctStreak >= 2) {
         learning.status = "mastered";
         learning.reviewAt = 0;
+        if (promptMode === "flashcard") learning.masteryVerify = "flashcard";
       } else {
         // 1回目の正解：まだ習得とせず、数問後にもう一度出して連続正解を確認する
         scheduleReview(word);
@@ -17600,7 +17657,11 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
     learning.nextReviewAt = now + SRS_DAY_MS;
     learning.correctStreak = 0;
     scheduleReview(word);
+    // 不正解で習得自体を取り消したため、検証待ちマークも同時に不要になる。
+    if (learning.masteryVerify === "flashcard") delete learning.masteryVerify;
   }
+  // 期限到来後の通常4択に正解した時点で、仮習得を本習得へ確定する。
+  if (isCorrect && verifiesFlashcardMastery) delete learning.masteryVerify;
   // 呼び出し側（フィードバック表示）向けの読み取り専用情報。学習状態そのものは上で更新済み。
   return { advanced: srsAdvanced, multiplier: srsMultiplier, nextReviewAt: learning.nextReviewAt };
 }
@@ -18381,6 +18442,11 @@ function gradeQuiz(choiceId, dontKnow = false) {
     responseMs,
     skipSpeedGate,
     historyBeforeAnswer,
+    promptMode: currentQuiz.flashcard
+      ? "flashcard"
+      : currentQuiz.context
+        ? "context-choice"
+        : "meaning-choice",
   });
   // セッション集計（復習セッションの解答はデイリーゴールにのみ計上済み）
   if (!reviewSession && !currentQuiz.flashcard) {

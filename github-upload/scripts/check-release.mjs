@@ -391,6 +391,8 @@ assert.equal(learningWord.learning.nextReviewAt, now + 86_400_000,
   "the first correct answer must start the one-day SRS stage");
 learningSandbox.__learning.applyLearningResult(learningWord, true, false, now + 1000, { responseMs: 1000 });
 assert.equal(learningWord.learning.status, "mastered", "two consecutive fast correct answers must master a word");
+assert.equal(Object.hasOwn(learningWord.learning, "masteryVerify"), false,
+  "ordinary multiple-choice mastery must not acquire a flashcard verification marker");
 
 learningWord.learning.srsStage = 5;
 learningSandbox.__learning.applyLearningResult(learningWord, false, true, now + 2000, { responseMs: 1000 });

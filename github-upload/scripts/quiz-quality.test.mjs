@@ -75,6 +75,8 @@ function buildSandbox() {
     extractFunction("normalizeSpeechRate"),
     extractFunction("normalizeSpeechVoiceUri"),
     extractFunction("buildFlashcardOrder"),
+    extractFunction("isMasteryVerificationDue"),
+    extractFunction("flashcardEligibleIds"),
     extractConst("CEFR_ORDER"),
     extractFunction("cefrRankOfLevel"),
     extractConst("DAILY_GOAL_CHOICES"),
@@ -93,6 +95,7 @@ function buildSandbox() {
       " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
       " normalizeQuizTimeLimit, cefrRankOfLevel, normalizeDailyGoal," +
       " normalizeSpeechRate, normalizeSpeechVoiceUri, buildFlashcardOrder," +
+      " isMasteryVerificationDue, flashcardEligibleIds," +
       " wordAccuracyFactor, personalAccuracyFactor, adaptiveSrsMultiplier, srsIntervalMs, SRS_INTERVAL_DAYS, SRS_DAY_MS };",
   ];
   const sandbox = {};
@@ -218,6 +221,91 @@ test("flashcard order preserves source order or performs a deterministic shuffle
   assert.deepEqual(ids, ["a", "b", "c", "d"], "the input array must not be mutated");
 });
 
+test("due provisional mastery is excluded from flashcards but remains eligible before its due time", () => {
+  const NOW = 1_700_000_000_000;
+  const due = {
+    id: "due",
+    learning: {
+      status: "mastered",
+      masteryVerify: "flashcard",
+      nextReviewAt: NOW - 1,
+    },
+  };
+  const future = {
+    id: "future",
+    learning: {
+      status: "mastered",
+      masteryVerify: "flashcard",
+      nextReviewAt: NOW + 1,
+    },
+  };
+  const ordinary = {
+    id: "ordinary",
+    learning: { status: "mastered", nextReviewAt: NOW - 1 },
+  };
+  assert.equal(q.isMasteryVerificationDue(due, NOW), true);
+  assert.equal(q.isMasteryVerificationDue(future, NOW), false);
+  assert.equal(q.isMasteryVerificationDue(ordinary, NOW), false);
+  assert.deepEqual(
+    [...q.flashcardEligibleIds(["due", "future", "ordinary"], [due, future, ordinary], NOW)],
+    ["future", "ordinary"],
+  );
+});
+
+test("due provisional mastery bypasses context formats in the actual review quiz builder", () => {
+  const build = (session) => {
+    const answer = {
+      id: "answer",
+      term: "answer",
+      meaning: "答え",
+      learning: {
+        status: "mastered",
+        masteryVerify: "flashcard",
+        nextReviewAt: 1,
+      },
+    };
+    const distractors = [
+      { id: "d1", term: "one", meaning: "一" },
+      { id: "d2", term: "two", meaning: "二" },
+      { id: "d3", term: "three", meaning: "三" },
+    ];
+    const pieces = [
+      `const appState = { words: ${JSON.stringify([answer, ...distractors])} };`,
+      `const reviewSession = ${JSON.stringify({
+        allIds: [answer.id, ...distractors.map((word) => word.id)],
+        queue: [answer.id],
+        ...session,
+      })};`,
+      "const elements = { quizFeedback: { textContent: '' } };",
+      "let contextBasisFallbackNote = '';",
+      "const mixedFormatUsesContext = () => { throw new Error('due verification must short-circuit mixed context'); };",
+      "const contextItemFor = () => { throw new Error('due verification must not load a context item'); };",
+      "const contextAttempted = () => false;",
+      "const ensureContextItem = () => Promise.resolve(null);",
+      "const prefetchNextContextItem = () => {};",
+      "const buildContextChoices = () => [];",
+      "const pickDistractors = (pool) => pool.slice(0, 3);",
+      "const shuffle = (items) => items;",
+      "const choiceCountNote = () => '';",
+      extractFunction("isMasteryVerificationDue"),
+      extractFunction("buildReviewQuiz"),
+      "globalThis.__quiz = buildReviewQuiz();",
+    ];
+    const sandbox = {};
+    new Script(pieces.join("\n\n"), { filename: "mastery-review-format-check.js" })
+      .runInNewContext(sandbox);
+    return sandbox.__quiz;
+  };
+
+  const allContext = build({ context: true, mixFormat: false });
+  assert.equal(allContext.context, null);
+  assert.equal(allContext.choices.length, 4);
+
+  const mixedContext = build({ context: false, mixFormat: true });
+  assert.equal(mixedContext.context, null);
+  assert.equal(mixedContext.choices.length, 4);
+});
+
 test("adaptive SRS: word accuracy factor is a bounded step function (neutral under 3 tries)", () => {
   const hist = (correct, wrong) =>
     [...Array(correct).fill({ at: "2026-07-01T00:00:00Z", correct: true }),
@@ -303,6 +391,180 @@ function buildLearningSandbox() {
   return sandbox.__l;
 }
 
+function buildLearningPersistenceSandbox() {
+  const pieces = [
+    "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];",
+    extractFunction("nonNegativeNumber"),
+    extractFunction("nonNegativeInteger"),
+    extractFunction("normalizeLearning"),
+    extractFunction("minPositiveNumber"),
+    extractFunction("mergeLearningState"),
+    "globalThis.__p = { normalizeLearning, mergeLearningState };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "learning-persistence-check.js" }).runInNewContext(sandbox);
+  return sandbox.__p;
+}
+
+test("provisional mastery survives normalize/save/reload while legacy learning stays field-free", () => {
+  const P = buildLearningPersistenceSandbox();
+  const raw = {
+    learning: {
+      status: "mastered",
+      masteryVerify: "flashcard",
+      firstAttempted: true,
+      correctStreak: 2,
+      srsStage: 2,
+      nextReviewAt: 1_700_086_400_000,
+      srsUpdatedAt: 1_700_000_000_000,
+      lastSrsResult: "correct",
+    },
+  };
+  const first = P.normalizeLearning(raw);
+  const reloaded = P.normalizeLearning({ learning: JSON.parse(JSON.stringify(first)) });
+  assert.equal(reloaded.masteryVerify, "flashcard",
+    "the optional marker must survive the old-data read/save/reload path");
+
+  const legacy = P.normalizeLearning({
+    learning: { ...raw.learning, masteryVerify: undefined },
+  });
+  assert.equal(Object.hasOwn(legacy, "masteryVerify"), false,
+    "learning without the marker must keep the existing field-free shape");
+  const invalid = P.normalizeLearning({
+    learning: { ...raw.learning, masteryVerify: "unknown" },
+  });
+  assert.equal(Object.hasOwn(invalid, "masteryVerify"), false,
+    "unknown marker values must not enter saved learning state");
+});
+
+test("learning merge preserves the marker and does not re-propagate it over a newer verified state", () => {
+  const P = buildLearningPersistenceSandbox();
+  const now = Date.now();
+  const marked = {
+    status: "mastered",
+    masteryVerify: "flashcard",
+    firstAttempted: true,
+    correctStreak: 2,
+    srsStage: 2,
+    nextReviewAt: now + 86_400_000,
+    srsUpdatedAt: now - 2_000,
+    lastSrsResult: "correct",
+  };
+  const sameUpdate = P.mergeLearningState(marked, { ...marked });
+  assert.equal(sameUpdate.masteryVerify, "flashcard",
+    "normal synchronization must not drop a pending verification");
+
+  const verifiedNewer = {
+    ...marked,
+    srsUpdatedAt: now - 1_000,
+  };
+  delete verifiedNewer.masteryVerify;
+  const verifiedMerge = P.mergeLearningState(marked, verifiedNewer);
+  assert.equal(Object.hasOwn(verifiedMerge, "masteryVerify"), false,
+    "an older pending marker must not spread back over a newer verified answer");
+
+  const ordinaryA = { ...marked };
+  const ordinaryB = { ...marked };
+  delete ordinaryA.masteryVerify;
+  delete ordinaryB.masteryVerify;
+  const ordinaryMerge = P.mergeLearningState(ordinaryA, ordinaryB);
+  assert.equal(Object.hasOwn(ordinaryMerge, "masteryVerify"), false,
+    "two ordinary mastered states must not acquire a marker during merge");
+});
+
+test("flashcard promotion is provisional and its next due meaning-choice verifies or demotes it", () => {
+  const L = buildLearningSandbox();
+  const NOW = 1_700_000_000_000;
+  const learning = (over = {}) => ({
+    status: "new",
+    firstAttempted: false,
+    reviewAt: 0,
+    blockedUntil: 0,
+    correctStreak: 0,
+    srsStage: 0,
+    nextReviewAt: 0,
+    srsUpdatedAt: 0,
+    lastSrsResult: "",
+    ...over,
+  });
+
+  const promoted = { learning: learning(), history: [] };
+  L.applyLearningResult(promoted, true, false, NOW, {
+    responseMs: 1000,
+    skipSpeedGate: true,
+    promptMode: "flashcard",
+  });
+  const firstDueAt = promoted.learning.nextReviewAt;
+  assert.equal(promoted.learning.status, "review");
+  assert.equal(promoted.learning.correctStreak, 1);
+  assert.equal(firstDueAt, NOW + 86_400_000);
+
+  L.applyLearningResult(promoted, true, false, NOW + 1000, {
+    responseMs: 1000,
+    skipSpeedGate: true,
+    promptMode: "flashcard",
+  });
+  assert.equal(promoted.learning.status, "mastered");
+  assert.equal(promoted.learning.masteryVerify, "flashcard",
+    "the second consecutive flashcard self-report must mark mastery as provisional");
+  assert.equal(promoted.learning.nextReviewAt, firstDueAt,
+    "promotion before the SRS due time must keep the existing next review date");
+
+  const verified = {
+    learning: structuredClone(promoted.learning),
+    history: [],
+  };
+  verified.learning.nextReviewAt = NOW - 1;
+  L.applyLearningResult(verified, true, true, NOW + 1000, {
+    responseMs: 1000,
+    promptMode: "meaning-choice",
+  });
+  assert.equal(verified.learning.status, "mastered");
+  assert.equal(Object.hasOwn(verified.learning, "masteryVerify"), false,
+    "a correct due meaning-choice must confirm full mastery");
+
+  const demoted = {
+    learning: { ...structuredClone(promoted.learning), srsStage: 5, nextReviewAt: NOW - 1 },
+    history: [],
+  };
+  L.applyLearningResult(demoted, false, true, NOW + 2000, {
+    responseMs: 1000,
+    promptMode: "meaning-choice",
+  });
+  assert.equal(demoted.learning.status, "review");
+  assert.equal(demoted.learning.srsStage, 3);
+  assert.equal(demoted.learning.nextReviewAt, NOW + 2000 + 86_400_000);
+  assert.equal(demoted.learning.correctStreak, 0);
+  assert.equal(Object.hasOwn(demoted.learning, "masteryVerify"), false,
+    "a wrong verification must clear provisional mastery while using the existing wrong path");
+});
+
+test("ordinary meaning-choice mastery keeps the legacy path and never gains a marker", () => {
+  const L = buildLearningSandbox();
+  const NOW = 1_700_000_000_000;
+  const word = {
+    learning: {
+      status: "review",
+      firstAttempted: true,
+      reviewAt: 0,
+      blockedUntil: 0,
+      correctStreak: 1,
+      srsStage: 1,
+      nextReviewAt: NOW - 1,
+      srsUpdatedAt: NOW - 10,
+      lastSrsResult: "correct",
+    },
+    history: [],
+  };
+  L.applyLearningResult(word, true, true, NOW, {
+    responseMs: 1000,
+    promptMode: "meaning-choice",
+  });
+  assert.equal(word.learning.status, "mastered");
+  assert.equal(word.learning.correctStreak, 2);
+  assert.equal(Object.hasOwn(word.learning, "masteryVerify"), false);
+});
+
 test("adaptive SRS ON/OFF: only nextReviewAt scales; status/stage/streak are identical", () => {
   const L = buildLearningSandbox();
   const NOW = 1_700_000_000_000;
@@ -318,6 +580,8 @@ test("adaptive SRS ON/OFF: only nextReviewAt scales; status/stage/streak are ide
     ["遅い正解(固定1日)", freshLearning({ srsStage: 2, nextReviewAt: NOW - 1000, status: "review" }), true, true, { responseMs: 9000 }, false],
     ["誤答(固定1日・2段階降格)", freshLearning({ srsStage: 5, nextReviewAt: NOW - 1000, status: "review" }), false, true, { responseMs: 1000 }, false],
     ["習得済みの前進", freshLearning({ status: "mastered", srsStage: 3, nextReviewAt: NOW - 1000, correctStreak: 2 }), true, true, { responseMs: 1000 }, true],
+    ["仮習得の検証正解", freshLearning({ status: "mastered", masteryVerify: "flashcard", srsStage: 3, nextReviewAt: NOW - 1000, correctStreak: 2 }), true, true, { responseMs: 1000, promptMode: "meaning-choice" }, true],
+    ["仮習得の検証誤答", freshLearning({ status: "mastered", masteryVerify: "flashcard", srsStage: 5, nextReviewAt: NOW - 1000, correctStreak: 2 }), false, true, { responseMs: 1000, promptMode: "meaning-choice" }, false],
   ];
   const MULT = 1.2 * 1.1 * 1.1; // スタブ係数×速い正解
   for (const [label, base, isCorrect, dueAtStart, options, advances] of scenarios) {
@@ -335,7 +599,7 @@ test("adaptive SRS ON/OFF: only nextReviewAt scales; status/stage/streak are ide
     assert.equal(offRun.res.advanced, advances, `${label}: advanced flag (OFF)`);
     assert.equal(onRun.res.advanced, advances, `${label}: advanced flag (ON)`);
     // 保護フィールド: 倍率が何であれ一致しなければならない
-    for (const key of ["status", "srsStage", "correctStreak", "reviewAt", "firstAttempted", "lastSrsResult", "blockedUntil"]) {
+    for (const key of ["status", "masteryVerify", "srsStage", "correctStreak", "reviewAt", "firstAttempted", "lastSrsResult", "blockedUntil"]) {
       assert.deepEqual(on[key], off[key], `${label}: ${key} must not differ by adaptive mode`);
     }
     if (advances) {
