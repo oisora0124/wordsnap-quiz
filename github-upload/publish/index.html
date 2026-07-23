@@ -20300,6 +20300,13 @@ elements.quizSetupHintToggle?.addEventListener("click", () => {
   elements.quizSetupHintToggle.setAttribute("aria-expanded", String(show));
   elements.quizSetupHintToggle.textContent = show ? "閉じる" : "？ 詳しく";
 });
+elements.quizSetupHintToggle?.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || elements.quizSetupDetails?.hidden) return;
+  event.preventDefault();
+  elements.quizSetupDetails.hidden = true;
+  elements.quizSetupHintToggle.setAttribute("aria-expanded", "false");
+  elements.quizSetupHintToggle.textContent = "？ 詳しく";
+});
 [elements.quizRangeFrom, elements.quizRangeTo].forEach((input) => {
   input?.addEventListener("input", () => {
     input.setCustomValidity("");
