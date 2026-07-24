@@ -13508,7 +13508,9 @@ function applyPerspective(src, v, h, mesh = 18) {
   return out;
 }
 
-const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"];
+// 優先順。キーごとの一覧GETで実際に使えるものを選ぶため、最新が無料枠に
+// 未開放でも下位へ自動フォールバックする。
+const GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"];
 const GEMINI_MODEL_PREF_KEY = "wordsnap-gemini-model:v1";
 const GEMINI_MODEL_DISCOVERY_FAILURE_KEY = "wordsnap-gemini-model-discovery-failure:v1";
 const GEMINI_MODEL_DISCOVERY_BACKOFF_MS = 3 * 60 * 1000;
@@ -13709,7 +13711,8 @@ function aiPrompt() {
 const AI_PROVIDERS = [
   {
     id: "gemini",
-    name: "Google Gemini 3.5 Flash（無料枠）",
+    // モデルはキーごとに使える最新Flash（3.6→3.5→2.5）を自動選択するため、名前に版を固定しない
+    name: "Google Gemini Flash（無料枠・最新版を自動選択）",
     placeholder: "AIza… を貼り付け",
     keyUrl: "https://aistudio.google.com/apikey",
     extract: extractWithGemini,
