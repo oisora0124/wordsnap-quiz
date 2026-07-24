@@ -296,12 +296,59 @@ const DUMMY_ROOM_ID = `wr_${"0".repeat(32)}`;
 const DUMMY_ROOM_SECRET = `wk_${"0".repeat(60)}`;
 const DUMMY_AUTH_HASH = "0".repeat(64);
 const CREATE_BATCH_RETRIES = 3;
+const V2_RATE_LIMITS = {
+  "v2-create": { limit: 10, windowMs: 60 * 60 * 1000 },
+  "v2-upgrade": { limit: 20, windowMs: 60 * 60 * 1000 },
+  "v2-auth-fail": { limit: 30, windowMs: 10 * 60 * 1000 },
+};
 
 function v2Unavailable() {
   return json({ error: "sync v2 unavailable" }, 503);
 }
 
-function v2Forbidden() {
+function v2RateLimited() {
+  return json({ error: "rate limited", code: "rate-limited" }, 429);
+}
+
+async function consumeV2RateLimit(db, request, operation) {
+  const rule = V2_RATE_LIMITS[operation];
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const rateLimitKey = `${operation}:${ip}`;
+  const now = Date.now();
+  try {
+    const current = await db
+      .prepare("SELECT window_start, count FROM rate_limits WHERE rl_key = ?")
+      .bind(rateLimitKey)
+      .first();
+    const expired = !current || now >= Number(current.window_start) + rule.windowMs;
+    if (!expired && Number(current.count) >= rule.limit) return true;
+
+    const expiryCutoff = now - rule.windowMs;
+    const result = await db
+      .prepare(
+        `INSERT INTO rate_limits (rl_key, window_start, count) VALUES (?, ?, 1)
+         ON CONFLICT(rl_key) DO UPDATE SET
+           window_start = CASE
+             WHEN rate_limits.window_start <= ? THEN excluded.window_start
+             ELSE rate_limits.window_start
+           END,
+           count = CASE
+             WHEN rate_limits.window_start <= ? THEN 1
+             ELSE rate_limits.count + 1
+           END
+         WHERE rate_limits.window_start <= ? OR rate_limits.count < ?`,
+      )
+      .bind(rateLimitKey, now, expiryCutoff, expiryCutoff, expiryCutoff, rule.limit)
+      .run();
+    return Number(result?.meta?.changes) === 0;
+  } catch {
+    // 補助テーブル未作成や一時的なD1障害では、V2本来の処理を優先してfail-openにする。
+    return false;
+  }
+}
+
+async function v2AuthFailure(db, request) {
+  if (await consumeV2RateLimit(db, request, "v2-auth-fail")) return v2RateLimited();
   return json({ error: "forbidden" }, 403);
 }
 
@@ -391,9 +438,9 @@ async function verifyRoomSecret(db, room, roomId, roomSecret, keyRing) {
   return true;
 }
 
-async function rejectInvalidV2Credential(keyRing) {
+async function rejectInvalidV2Credential(db, request, keyRing) {
   await verifyRoomSecret(null, null, DUMMY_ROOM_ID, DUMMY_ROOM_SECRET, keyRing);
-  return v2Forbidden();
+  return v2AuthFailure(db, request);
 }
 
 async function selectRoomById(db, roomId) {
@@ -486,7 +533,7 @@ async function createV2Room(request, env, roomId, roomSecret, keyRing) {
   const existing = await selectRoomById(env.DB, roomId);
   if (existing) {
     if (!(await verifyRoomSecret(env.DB, existing, roomId, roomSecret, keyRing))) {
-      return v2Forbidden();
+      return v2AuthFailure(env.DB, request);
     }
     const current = await readRow(env.DB, existing.state_key, false);
     return json({ ok: true, syncId: roomId, stateRev: current.rev });
@@ -516,7 +563,7 @@ async function createV2Room(request, env, roomId, roomSecret, keyRing) {
       const racedRoom = await selectRoomById(env.DB, roomId);
       if (racedRoom) {
         if (!(await verifyRoomSecret(env.DB, racedRoom, roomId, roomSecret, keyRing))) {
-          return v2Forbidden();
+          return v2AuthFailure(env.DB, request);
         }
         const current = await readRow(env.DB, racedRoom.state_key, false);
         return json({ ok: true, syncId: roomId, stateRev: current.rev });
@@ -581,11 +628,17 @@ async function handleV2RoomRequest(context, url) {
   if (url.searchParams.get("create") === "1" && env.SYNC_V2_ENABLED !== "1") {
     return v2Unavailable();
   }
+  if (
+    url.searchParams.get("create") === "1"
+    && await consumeV2RateLimit(env.DB, request, "v2-create")
+  ) {
+    return v2RateLimited();
+  }
 
   const roomId = url.searchParams.get("room");
   const roomSecret = request.headers.get("x-room-key");
   if (!ROOM_ID_PATTERN.test(roomId || "") || !ROOM_SECRET_PATTERN.test(roomSecret || "")) {
-    return rejectInvalidV2Credential(keyRing);
+    return rejectInvalidV2Credential(env.DB, request, keyRing);
   }
 
   try {
@@ -596,7 +649,7 @@ async function handleV2RoomRequest(context, url) {
 
     const room = await selectRoomById(env.DB, roomId);
     if (!(await verifyRoomSecret(env.DB, room, roomId, roomSecret, keyRing))) {
-      return v2Forbidden();
+      return v2AuthFailure(env.DB, request);
     }
     if (
       request.method === "PUT"
@@ -627,12 +680,12 @@ function upgradeConflict(code) {
   return json({ error: "conflict", code }, 409);
 }
 
-async function classifyExistingUpgrade(db, legacyKey, roomId, roomSecret, keyRing) {
+async function classifyExistingUpgrade(db, request, legacyKey, roomId, roomSecret, keyRing) {
   const byRoom = await selectRoomById(db, roomId);
   if (byRoom) {
     if (byRoom.state_key !== legacyKey) return upgradeConflict("room-taken");
     if (!(await verifyRoomSecret(db, byRoom, roomId, roomSecret, keyRing))) {
-      return v2Forbidden();
+      return v2AuthFailure(db, request);
     }
     return json({ ok: true, syncId: roomId });
   }
@@ -647,6 +700,7 @@ async function handleV2UpgradeRequest(context, url) {
   if (!keyRing) return v2Unavailable();
   if (env.SYNC_V2_ENABLED !== "1") return v2Unavailable();
   if (request.method !== "PUT") return methodNotAllowed();
+  if (await consumeV2RateLimit(env.DB, request, "v2-upgrade")) return v2RateLimited();
 
   const legacyKey = cleanSyncId(url.searchParams.get("sync"));
   if (!legacyKey) return json({ error: "sync id required" }, 400);
@@ -667,11 +721,18 @@ async function handleV2UpgradeRequest(context, url) {
   const roomId = body && typeof body === "object" && !Array.isArray(body) ? body.roomId : null;
   const roomSecret = request.headers.get("x-room-key");
   if (!ROOM_ID_PATTERN.test(roomId || "") || !ROOM_SECRET_PATTERN.test(roomSecret || "")) {
-    return rejectInvalidV2Credential(keyRing);
+    return rejectInvalidV2Credential(env.DB, request, keyRing);
   }
 
   try {
-    const existing = await classifyExistingUpgrade(env.DB, legacyKey, roomId, roomSecret, keyRing);
+    const existing = await classifyExistingUpgrade(
+      env.DB,
+      request,
+      legacyKey,
+      roomId,
+      roomSecret,
+      keyRing,
+    );
     if (existing) return existing;
 
     const currentKey = keyRing[0];
@@ -685,7 +746,14 @@ async function handleV2UpgradeRequest(context, url) {
         .run();
       return json({ ok: true, syncId: roomId });
     } catch {
-      const raced = await classifyExistingUpgrade(env.DB, legacyKey, roomId, roomSecret, keyRing);
+      const raced = await classifyExistingUpgrade(
+        env.DB,
+        request,
+        legacyKey,
+        roomId,
+        roomSecret,
+        keyRing,
+      );
       if (raced) return raced;
       return json({ error: "storage unavailable" }, 500);
     }

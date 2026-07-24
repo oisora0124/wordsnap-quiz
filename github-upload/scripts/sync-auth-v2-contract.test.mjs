@@ -65,6 +65,13 @@ class FakeD1Statement {
 
   async first() {
     const rows = this.db.rows;
+    if (/^SELECT window_start, count FROM rate_limits WHERE rl_key = \?$/i.test(this.sql)) {
+      if (!this.db.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+      const key = this.args[0];
+      this.db.rateLimitReads.set(key, (this.db.rateLimitReads.get(key) || 0) + 1);
+      const rateLimit = this.db.rateLimits.get(key);
+      return rateLimit ? { ...rateLimit } : null;
+    }
     if (/^SELECT room_id, state_key, auth_hash, auth_kid, created_at, upgraded_from_legacy FROM rooms WHERE room_id = \?$/i.test(this.sql)) {
       const room = this.db.rooms.get(this.args[0]);
       return room ? { ...room } : null;
@@ -127,6 +134,22 @@ class FakeD1Statement {
   }
 
   async run() {
+    if (/^INSERT INTO rate_limits \(rl_key, window_start, count\) VALUES \(\?, \?, 1\) ON CONFLICT\(rl_key\) DO UPDATE SET window_start = CASE WHEN rate_limits\.window_start <= \? THEN excluded\.window_start ELSE rate_limits\.window_start END, count = CASE WHEN rate_limits\.window_start <= \? THEN 1 ELSE rate_limits\.count \+ 1 END WHERE rate_limits\.window_start <= \? OR rate_limits\.count < \?$/i.test(this.sql)) {
+      if (!this.db.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+      const [rl_key, now, expiryCutoff, secondCutoff, thirdCutoff, limit] = this.args;
+      assert.equal(secondCutoff, expiryCutoff);
+      assert.equal(thirdCutoff, expiryCutoff);
+      const current = this.db.rateLimits.get(rl_key);
+      if (!current || current.window_start <= expiryCutoff) {
+        this.db.rateLimits.set(rl_key, { window_start: now, count: 1 });
+        return { success: true, meta: { changes: 1 } };
+      }
+      if (current.count < limit) {
+        current.count += 1;
+        return { success: true, meta: { changes: 1 } };
+      }
+      return { success: true, meta: { changes: 0 } };
+    }
     if (/^INSERT INTO states \(key, state, rev, updatedAt\) VALUES \(\?, \?, 1, \?\)$/i.test(this.sql)) {
       const [key, state, updatedAt] = this.args;
       if (this.db.rows.has(key)) throw new Error("UNIQUE constraint failed: states.key");
@@ -179,10 +202,20 @@ class FakeD1Statement {
 }
 
 class FakeD1 {
-  constructor(seed = [], { failRoomInserts = 0, racingRoomAfterRollback = null } = {}) {
+  constructor(
+    seed = [],
+    {
+      failRoomInserts = 0,
+      racingRoomAfterRollback = null,
+      rateLimitsTableExists = true,
+    } = {},
+  ) {
     this.rows = new Map(seed);
     this.revisions = new Map();
     this.rooms = new Map();
+    this.rateLimits = new Map();
+    this.rateLimitReads = new Map();
+    this.rateLimitsTableExists = rateLimitsTableExists;
     this.failRoomInserts = failRoomInserts;
     this.racingRoomAfterRollback = racingRoomAfterRollback;
     this.rolledBackStateKeys = [];
@@ -241,12 +274,14 @@ async function requestV2(
     query = {},
     body,
     env = {},
+    ip,
   } = {},
 ) {
   const url = new URL(API_URL);
   url.searchParams.set("room", room);
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
   const headers = secret === null ? {} : { "x-room-key": secret };
+  if (ip !== undefined) headers["CF-Connecting-IP"] = ip;
   const init = { method, headers };
   if (body !== undefined) init.body = typeof body === "string" ? body : JSON.stringify(body);
   const response = await onRequest({
@@ -263,15 +298,18 @@ async function requestUpgrade(
     roomId = ROOM_ID,
     secret = ROOM_SECRET,
     env = {},
+    ip,
   } = {},
 ) {
   const url = new URL(API_URL);
   url.searchParams.set("sync", legacyKey);
   url.searchParams.set("op", "upgrade");
+  const headers = { "x-room-key": secret };
+  if (ip !== undefined) headers["CF-Connecting-IP"] = ip;
   const response = await onRequest({
     request: new Request(url, {
       method: "PUT",
-      headers: { "x-room-key": secret },
+      headers,
       body: JSON.stringify({ roomId }),
     }),
     env: { DB: db, SYNC_AUTH_SECRETS: AUTH_ENV, SYNC_V2_ENABLED: "1", ...env },
@@ -516,6 +554,132 @@ test("V2認可は誤secret・未存在room・形式不正を同じ403にする",
     assert.deepEqual(result.data, { error: "forbidden" });
   }
   assert.ok(timingSafeEqualCalls >= 4, "全認可失敗で固定長byte列のtiming-safe比較を実行する");
+});
+
+test("V2 createはIP別の固定窓で10回を許可し、超過後429・窓経過後に回復する", async () => {
+  const originalNow = Date.now;
+  let now = FIXED_NOW;
+  Date.now = () => now;
+  try {
+    const db = new FakeD1();
+    const ip = "203.0.113.10";
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const allowed = await requestV2(db, {
+        method: "PUT",
+        query: { create: 1 },
+        body: { state: sampleState(`rate-create-${attempt}`) },
+        ip,
+      });
+      assert.equal(allowed.response.status, 200);
+    }
+
+    const limited = await requestV2(db, {
+      method: "PUT",
+      query: { create: 1 },
+      body: { state: sampleState("rate-create-limited") },
+      ip,
+    });
+    assert.equal(limited.response.status, 429);
+    assert.deepEqual(limited.data, { error: "rate limited", code: "rate-limited" });
+    assert.equal(db.rateLimits.get(`v2-create:${ip}`).count, 10);
+
+    now += 60 * 60 * 1000;
+    const recovered = await requestV2(db, {
+      method: "PUT",
+      query: { create: 1 },
+      body: { state: sampleState("rate-create-recovered") },
+      ip,
+    });
+    assert.equal(recovered.response.status, 200);
+    assert.deepEqual(db.rateLimits.get(`v2-create:${ip}`), {
+      window_start: now,
+      count: 1,
+    });
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("V2 createの並行試行でも条件付きUPSERTが上限超過を原子的に拒否する", async () => {
+  const db = new FakeD1();
+  const ip = "203.0.113.11";
+  const created = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1 },
+    body: { state: sampleState("rate-create-concurrent") },
+    ip,
+  });
+  assert.equal(created.response.status, 200);
+
+  const rateLimitKey = `v2-create:${ip}`;
+  db.rateLimits.get(rateLimitKey).count = 9;
+  const results = await Promise.all(
+    Array.from({ length: 5 }, () => requestV2(db, {
+      method: "PUT",
+      query: { create: 1 },
+      body: { state: sampleState("rate-create-concurrent-retry") },
+      ip,
+    })),
+  );
+  assert.equal(results.filter((result) => result.response.status === 200).length, 1);
+  assert.equal(results.filter((result) => result.response.status === 429).length, 4);
+  assert.equal(db.rateLimits.get(rateLimitKey).count, 10);
+});
+
+test("V2認証失敗は30回後に429へ切り替わり、認可成功は超過バケツを参照しない", async () => {
+  const db = new FakeD1();
+  const ip = "203.0.113.20";
+  const created = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1 },
+    body: { state: sampleState("rate-auth") },
+    ip,
+  });
+  assert.equal(created.response.status, 200);
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const forbidden = await requestV2(db, { secret: WRONG_ROOM_SECRET, ip });
+    assert.equal(forbidden.response.status, 403);
+    assert.deepEqual(forbidden.data, { error: "forbidden" });
+  }
+  const limited = await requestV2(db, { secret: WRONG_ROOM_SECRET, ip });
+  assert.equal(limited.response.status, 429);
+  assert.deepEqual(limited.data, { error: "rate limited", code: "rate-limited" });
+
+  const authFailKey = `v2-auth-fail:${ip}`;
+  assert.equal(db.rateLimits.get(authFailKey).count, 30);
+  const readsBeforeSuccess = db.rateLimitReads.get(authFailKey);
+  const authorized = await requestV2(db, { ip });
+  assert.equal(authorized.response.status, 200);
+  assert.equal(authorized.data.syncId, ROOM_ID);
+  assert.equal(db.rateLimitReads.get(authFailKey), readsBeforeSuccess);
+});
+
+test("V2 upgradeはIP別に20回を許可し、超過中は書き込まず429にする", async () => {
+  const db = new FakeD1();
+  const ip = "203.0.113.30";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const allowed = await requestUpgrade(db, { ip });
+    assert.equal(allowed.response.status, 200);
+  }
+  const limited = await requestUpgrade(db, { ip });
+  assert.equal(limited.response.status, 429);
+  assert.deepEqual(limited.data, { error: "rate limited", code: "rate-limited" });
+  assert.equal(db.rateLimits.get(`v2-upgrade:${ip}`).count, 20);
+});
+
+test("rate_limits未作成でもV2の本来の成功・認証失敗応答をfail-openで維持する", async () => {
+  const db = new FakeD1([], { rateLimitsTableExists: false });
+  const created = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1 },
+    body: { state: sampleState("rate-table-missing") },
+  });
+  assert.equal(created.response.status, 200);
+
+  const forbidden = await requestV2(db, { secret: WRONG_ROOM_SECRET });
+  assert.equal(forbidden.response.status, 403);
+  assert.deepEqual(forbidden.data, { error: "forbidden" });
 });
 
 test("鍵リングは全kidを検証し、旧kid一致後に現行kidへlazy re-hashする", async () => {

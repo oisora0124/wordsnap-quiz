@@ -93,7 +93,8 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 ## リリース前提条件（コード外）
 
-- Cloudflareダッシュボードでのレート制限（V2作成・認証失敗・upgrade）。**これが未設定の間は `SYNC_V2_ENABLED` を有効化しない**（フラグ既定OFFにより、設定漏れでも受付は開かない）
+- レート制限（V2作成・認証失敗・upgrade）。**これが未整備の間は `SYNC_V2_ENABLED` を有効化しない**（フラグ既定OFFにより、設定漏れでも受付は開かない）
+  - 【2026-07-25更新】公開ドメインが pages.dev（Cloudflare所有ゾーン）のためWAFレート制限は適用不可。代わりに**アプリ内レート制限**を実装した: D1テーブル `rate_limits`（0005）・固定窓・条件付き原子UPSERT。v2-create 10回/時・v2-upgrade 20回/時・v2-auth-fail 30回/10分（IP単位、403応答時のみカウント、認可成功時は不参照）。上限超過中は読み1回で429を返し書き込まない。テーブル未作成・D1障害時はfail-open（0005適用がフラグON前の必須手順）
 - `SYNC_AUTH_SECRETS` の設定と、鍵ローテーション手順書（漏洩時: 新kid追加→lazy rehash進行→旧kid削除は十分期間後）
 
 ## テスト計画
