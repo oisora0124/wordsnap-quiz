@@ -11176,6 +11176,10 @@ async function upgradeToV2() {
         credential = writeV2Credential(generateV2Credential(credential.secret));
         continue;
       }
+      if (response.status === 429) {
+        setV2Status("短時間に操作が集中したため制限中です。1時間ほどおいて再試行してください（資格情報は保存済みです）。", "error");
+        return;
+      }
       if (response.status >= 500) {
         setV2Status("サーバーで一時的な問題が起きました。資格情報は保存済みなので再試行できます。", "error");
         return;
@@ -11250,6 +11254,10 @@ async function createV2Room() {
         credential = writeV2Credential(generateV2Credential(credential.secret));
         continue;
       }
+      if (response.status === 429) {
+        setV2Status("短時間に操作が集中したため制限中です。1時間ほどおいて再試行してください（資格情報は保存済みです）。", "error");
+        return;
+      }
       if (response.status >= 500) {
         setV2Status("サーバーで一時的な問題が起きました。資格情報は保存済みなので再試行できます。", "error");
         return;
@@ -11321,12 +11329,13 @@ async function joinV2Room() {
       response.status !== 200 ||
       !validSyncGetResponse(data, null, credential.roomId)
     ) {
-      setV2Status(
-        response.status === 403
-          ? "引き継ぎコードを確認できませんでした。コード全体をもう一度確認してください。"
-          : "同期先の応答を安全に確認できなかったため、合流しませんでした。",
-        "error",
-      );
+      let joinFailMessage = "同期先の応答を安全に確認できなかったため、合流しませんでした。";
+      if (response.status === 403) {
+        joinFailMessage = "引き継ぎコードを確認できませんでした。コード全体をもう一度確認してください。";
+      } else if (response.status === 429) {
+        joinFailMessage = "短時間に操作が集中したため制限中です。1時間ほどおいて再試行してください。";
+      }
+      setV2Status(joinFailMessage, "error");
       return;
     }
 
