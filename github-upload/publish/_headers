@@ -11,7 +11,19 @@
 # 画像: 同一オリジンのアイコン、blob:のユーザー画像、data:のCanvasプレビュー/保存版埋め込みを使う。
 # 音声はWeb Audioの合成音とspeechSynthesisのみで外部取得なし。フォントもシステムフォントのみ。
 # 外部リンク（AIキー取得、語源検索、公開URL案内）はナビゲーションだけで、リソース取得には使わない。
+# 追加の防御ヘッダ（2026-07-25）:
+# - script-srcはビルド時（scripts/sync-html.mjs）にインラインscriptのSHA-256へ自動更新される。
+#   'unsafe-inline' は廃止済み。HTMLを変えるとハッシュも変わるが、npm run sync:html が追従する。
+# - Permissions-Policy: このアプリが使わない強力なAPIを明示的に無効化（将来のXSSの威力も削ぐ）。
+#   クイズ読み上げ(speechSynthesis)・Web Audio・OCR(ファイル選択)はこの指定の影響を受けない。
+# - COOP: 別オリジンのポップアップからwindow参照を切り、タブ乗っ取り系の攻撃面を除去。
+# - X-Frame-Options: frame-ancestorsを解さない古い環境向けの二重防御。
+# - CORP: 静的アセットの他オリジンからの埋め込み読み込みを拒否。
 /*
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.datamuse.com https://api.dictionaryapi.dev https://translate.googleapis.com https://api.mymemory.translated.net https://generativelanguage.googleapis.com https://api.groq.com https://cdn.jsdelivr.net https://tessdata.projectnaptha.com; img-src 'self' data: blob:; media-src 'self' data: blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; manifest-src 'self'
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), midi=(), magnetometer=(), gyroscope=(), accelerometer=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  X-Frame-Options: DENY
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-0T6dfZ1sLAQk6ny2337Nexz0o4EMNZPAe/jeu9Egsg8=' 'sha256-ibeqat9+Wak18ZIAZ+ujRG18RJlpFZLjUbAh3WChvOM=' 'sha256-vu4SX1e21a3f+3jacTrQ6lVj77xBysNRqf6Fkyik4T4=' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.datamuse.com https://api.dictionaryapi.dev https://translate.googleapis.com https://api.mymemory.translated.net https://generativelanguage.googleapis.com https://api.groq.com https://cdn.jsdelivr.net https://tessdata.projectnaptha.com; img-src 'self' data: blob:; media-src 'self' data: blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; manifest-src 'self'

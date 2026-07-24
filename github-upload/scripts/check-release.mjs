@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Script } from "node:vm";
+import { inlineScriptHashes } from "./csp-hashes.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectDir = resolve(scriptDir, "..");
@@ -107,6 +108,24 @@ assert.ok(scriptSources.has("https://cdn.jsdelivr.net"),
   "Tesseract.js CDN must be allowed by script-src");
 assert.ok(scriptSources.has("'wasm-unsafe-eval'"),
   "Tesseract WebAssembly compilation must be allowed by script-src");
+// ハッシュ型CSP: 'unsafe-inline' は禁止。全インラインscriptのSHA-256が
+// script-src に列挙されていること（sync-html.mjs が自動生成、ここで照合）。
+assert.ok(!scriptSources.has("'unsafe-inline'"),
+  "script-src must not fall back to 'unsafe-inline'; use per-script SHA-256 hashes");
+const inlineHashes = inlineScriptHashes(publicHtml);
+assert.ok(inlineHashes.length > 0, "expected at least one inline script to hash");
+for (const hash of inlineHashes) {
+  assert.ok(scriptSources.has(hash),
+    `inline script hash is missing from script-src (run npm run sync:html): ${hash}`);
+}
+for (const header of [
+  /^\s*Permissions-Policy:\s*camera=\(\)/mi,
+  /^\s*Cross-Origin-Opener-Policy:\s*same-origin\s*$/mi,
+  /^\s*Cross-Origin-Resource-Policy:\s*same-origin\s*$/mi,
+  /^\s*X-Frame-Options:\s*DENY\s*$/mi,
+]) {
+  assert.match(headers, header, `Cloudflare static responses must include hardening header ${header}`);
+}
 const workerSources = new Set(cspDirectives.get("worker-src") || []);
 assert.ok(workerSources.has("'self'") && workerSources.has("blob:"),
   "Service Worker and Tesseract blob workers must be allowed by worker-src");
