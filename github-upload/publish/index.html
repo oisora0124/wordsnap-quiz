@@ -2390,6 +2390,61 @@ textarea:focus-visible {
   font-weight: 700;
 }
 
+/* ---------- 同期認証V2 ---------- */
+
+.sync-v2-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.sync-v2-panel h4,
+.sync-v2-panel p {
+  margin: 0;
+}
+
+.sync-v2-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sync-v2-code-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.sync-v2-code-warning {
+  color: var(--danger-text) !important;
+  font-weight: 700;
+}
+
+.sync-v2-code {
+  width: 100%;
+  min-width: 0;
+  padding: 0.62rem 0.7rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.sync-v2-code:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 /* ---------- 端末がずれたときの手動修復 ---------- */
 /* 他人にツールを共有するブロック */
 .share-tool {
@@ -5747,6 +5802,60 @@ accurate 正確な"
                 新しい個人リンクを開き直してください。
               </p>
               <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
+              <details id="syncV2Section" class="sync-fix">
+                <summary>新方式（V2）の同期と引き継ぎ</summary>
+                <div class="sync-fix-body sync-v2-panel">
+                  <h4>秘密をURLに載せない新しい同期方式</h4>
+                  <p>
+                    現在の個人キーのデータを新方式へ移行するか、新しい保存先を新方式で発行できます。
+                    既定の同期方式はこれまでどおりです。
+                  </p>
+                  <p>
+                    「新方式へ移行」は引き継ぎ方法を追加する操作で、漏れた個人キーを無効化するものではありません。
+                    個人キーを知られた可能性がある場合は、上の「新しい個人キーを発行」を使ってください。
+                  </p>
+                  <div class="sync-v2-actions">
+                    <button id="syncV2UpgradeButton" class="secondary" type="button">新方式へ移行</button>
+                    <button id="syncV2CreateButton" class="ghost" type="button">新方式（V2）で発行</button>
+                  </div>
+                  <div id="syncV2CredentialPanel" class="sync-v2-code-panel" hidden>
+                    <p><strong>引き継ぎコード</strong></p>
+                    <input
+                      id="syncV2TransferCode"
+                      class="sync-v2-code"
+                      type="text"
+                      inputmode="latin"
+                      autocomplete="off"
+                      readonly
+                      aria-label="新方式の引き継ぎコード"
+                    />
+                    <p class="sync-v2-code-warning">
+                      このコードを必ず控えてください。紛失するとデータに二度とアクセスできません。
+                    </p>
+                    <div class="sync-v2-actions">
+                      <button id="syncV2CopyCodeButton" class="secondary" type="button">コードをコピー</button>
+                      <button id="syncV2DownloadCodeButton" class="ghost" type="button">テキストで保存</button>
+                    </div>
+                  </div>
+                  <div>
+                    <p><strong>別の端末で引き継ぎコードを使う</strong></p>
+                    <div class="sync-fix-actions sync-join-row">
+                      <input
+                        id="syncV2JoinInput"
+                        type="text"
+                        inputmode="latin"
+                        autocomplete="off"
+                        autocapitalize="off"
+                        spellcheck="false"
+                        placeholder="wr_….wk_… を貼り付け"
+                        aria-label="新方式の引き継ぎコード"
+                      />
+                      <button id="syncV2JoinButton" class="secondary" type="button">このコードで合流</button>
+                    </div>
+                  </div>
+                  <p id="syncV2Status" class="sync-status" role="status" aria-live="polite"></p>
+                </div>
+              </details>
               <div class="share-tool">
                 <button id="shareToolButton" type="button">🤝 このツールを他の人に共有</button>
                 <p class="share-url-warning">
@@ -8707,6 +8816,16 @@ const elements = {
   syncBadge: document.querySelector("#syncBadge"),
   syncBadgeText: document.querySelector("#syncBadge .sync-badge-text"),
   syncStatus: document.querySelector("#syncStatus"),
+  syncV2Section: document.querySelector("#syncV2Section"),
+  syncV2UpgradeButton: document.querySelector("#syncV2UpgradeButton"),
+  syncV2CreateButton: document.querySelector("#syncV2CreateButton"),
+  syncV2CredentialPanel: document.querySelector("#syncV2CredentialPanel"),
+  syncV2TransferCode: document.querySelector("#syncV2TransferCode"),
+  syncV2CopyCodeButton: document.querySelector("#syncV2CopyCodeButton"),
+  syncV2DownloadCodeButton: document.querySelector("#syncV2DownloadCodeButton"),
+  syncV2JoinInput: document.querySelector("#syncV2JoinInput"),
+  syncV2JoinButton: document.querySelector("#syncV2JoinButton"),
+  syncV2Status: document.querySelector("#syncV2Status"),
   themeToggle: document.querySelector("#themeToggle"),
   themeModeSelect: document.querySelector("#themeModeSelect"),
   themeAutoHint: document.querySelector("#themeAutoHint"),
@@ -8792,6 +8911,8 @@ const TUTORIAL_COMPLETE_KEY = "wordsnap-tutorial-complete:v1";
 const SAFE_SHARE_COLLAPSED_KEY = "wordsnap-safe-share-collapsed:v1";
 const SYNC_ID_KEY = "wordsnap-sync-id:v1";
 const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
+// V2資格情報はlegacyのID・アクセスキーと混ぜない。これがshadow room防止の境界。
+const SYNC_V2_CREDENTIAL_KEY = "wordsnap-sync-credential:v2";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
 
 // ===== 取り込み上限（JSON・画像の上限はここに集約する） =====
@@ -9937,6 +10058,7 @@ const syncState = {
   pollTimer: 0,
   accessKey: "",
   busy: false,
+  v2Busy: false,
   errored: false,
   lastSyncedAt: 0,
   // 【送信キュー】ローカル変更の世代番号。保存（scheduleSyncPush）のたびに進める。
@@ -10511,13 +10633,120 @@ function generateSyncId() {
   return generatePrivateKey();
 }
 
-function syncEndpoint() {
-  return `/api/wordsnap-state?sync=${encodeURIComponent(syncState.id)}`;
+function normalizeV2Credential(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const status = value.status === "pending" || value.status === "active" ? value.status : "";
+  const roomId = String(value.roomId || "");
+  const secret = String(value.secret || "");
+  if (
+    value.v !== 2 ||
+    !status ||
+    !/^wr_[0-9a-f]{32}$/.test(roomId) ||
+    !/^wk_[0-9a-f]{60}$/.test(secret)
+  ) {
+    return null;
+  }
+  return { v: 2, status, roomId, secret };
 }
 
-function syncHeaders() {
+function readV2Credential() {
+  try {
+    return normalizeV2Credential(JSON.parse(localStorage.getItem(SYNC_V2_CREDENTIAL_KEY)));
+  } catch {
+    return null;
+  }
+}
+
+function writeV2Credential(credential) {
+  const normalized = normalizeV2Credential(credential);
+  if (!normalized) throw new Error("新方式の資格情報が不正です。");
+  localStorage.setItem(SYNC_V2_CREDENTIAL_KEY, JSON.stringify(normalized));
+  return normalized;
+}
+
+function removePendingV2Credential(expectedRoomId = "") {
+  const current = readV2Credential();
+  if (
+    current?.status === "pending" &&
+    (!expectedRoomId || current.roomId === expectedRoomId)
+  ) {
+    localStorage.removeItem(SYNC_V2_CREDENTIAL_KEY);
+  }
+}
+
+function getActiveV2Credential() {
+  const credential = readV2Credential();
+  return credential?.status === "active" ? credential : null;
+}
+
+function generateRandomHex(byteLength) {
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi || typeof cryptoApi.getRandomValues !== "function") {
+    throw new Error("安全な乱数を生成できません。");
+  }
+  const bytes = new Uint8Array(byteLength);
+  cryptoApi.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function generateV2Credential(secret = "") {
+  const retainedSecret = /^wk_[0-9a-f]{60}$/.test(secret)
+    ? secret
+    : `wk_${generateRandomHex(30)}`;
+  return {
+    v: 2,
+    status: "pending",
+    roomId: `wr_${generateRandomHex(16)}`,
+    secret: retainedSecret,
+  };
+}
+
+function v2TransferCode(credential) {
+  const normalized = normalizeV2Credential(credential);
+  return normalized ? `${normalized.roomId}.${normalized.secret}` : "";
+}
+
+function parseV2TransferCode(value) {
+  const match = String(value || "").trim().match(/^(wr_[0-9a-f]{32})\.(wk_[0-9a-f]{60})$/);
+  return match
+    ? { v: 2, status: "pending", roomId: match[1], secret: match[2] }
+    : null;
+}
+
+// legacy URLの入力集合はこの関数に閉じ込める。V2値を引数へ渡す呼び出しは禁止。
+function legacySyncEndpoint(legacySyncId = syncState.id) {
+  return `/api/wordsnap-state?sync=${encodeURIComponent(legacySyncId)}`;
+}
+
+function v2SyncEndpoint(roomId) {
+  return `/api/wordsnap-state?room=${encodeURIComponent(roomId)}`;
+}
+
+function syncRequestRoute() {
+  const v2Credential = getActiveV2Credential();
+  if (v2Credential) {
+    return {
+      endpoint: v2SyncEndpoint(v2Credential.roomId),
+      expectedSyncId: v2Credential.roomId,
+      secret: v2Credential.secret,
+      isV2: true,
+    };
+  }
+  return {
+    endpoint: legacySyncEndpoint(syncState.id),
+    expectedSyncId: syncState.id,
+    secret: syncState.accessKey,
+    isV2: false,
+  };
+}
+
+function syncEndpoint() {
+  return syncRequestRoute().endpoint;
+}
+
+function syncHeaders(route = syncRequestRoute()) {
   const headers = { "Content-Type": "application/json" };
-  if (syncState.accessKey) headers["x-room-key"] = syncState.accessKey;
+  if (route.secret) headers["x-room-key"] = route.secret;
   return headers;
 }
 
@@ -10612,6 +10841,14 @@ function validSyncPutResponse(data, expectedSyncId = "") {
 async function syncRequest(method, body = null, requestOptions = {}) {
   // 送信時の世代を覚え、応答受信時に世代が変わっていたら結果を破棄する
   const gen = syncState.requestGen;
+  // URL・ヘッダ・応答照合IDは同じ資格情報スナップショットから作り、処理中の
+  // pending→active切替で異なる経路が混ざらないようにする。
+  const route = typeof syncRequestRoute === "function" ? syncRequestRoute() : null;
+  const baseEndpoint = route?.endpoint || syncEndpoint();
+  const roomMatch = baseEndpoint.match(/[?&]room=([^&]+)/);
+  const isV2Route = route?.isV2 ?? Boolean(roomMatch);
+  const expectedSyncId =
+    route?.expectedSyncId || (roomMatch ? decodeURIComponent(roomMatch[1]) : syncState.id);
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeout = controller
     ? window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS)
@@ -10620,14 +10857,18 @@ async function syncRequest(method, body = null, requestOptions = {}) {
   const options = {
     method,
     cache: "no-store",
-    headers: syncHeaders(),
+    headers: syncHeaders(route || undefined),
   };
   if (controller) options.signal = controller.signal;
   if (body) options.body = JSON.stringify(body);
   let response;
   let data;
   try {
-    let endpoint = syncEndpoint();
+    let endpoint = baseEndpoint;
+    // V2はbaseRev省略だけでは強制上書きにならない。明示された2経路だけforceを付ける。
+    if (isV2Route && requestOptions.force === true) {
+      endpoint += "&force=1";
+    }
     // 定期ポーリングでは既知revisionを渡す。対応サーバーは未変更時に巨大なstate本体を
     // 返さずメタデータだけ返せる。旧サーバーは未知queryを無視するため後方互換。
     if (method === "GET" && requestOptions.history === true) {
@@ -10664,17 +10905,18 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     const error = new Error(data.error || "同期サーバーへ接続できませんでした。");
     error.status = response.status;
     error.data = data;
+    error.expectedSyncId = expectedSyncId;
     throw error;
   }
   const validGet = requestOptions.history === true
-    ? validSyncHistoryResponse(data, syncState.id)
-    : validSyncGetResponse(data, requestOptions.sinceRev, syncState.id);
+    ? validSyncHistoryResponse(data, expectedSyncId)
+    : validSyncGetResponse(data, requestOptions.sinceRev, expectedSyncId);
   if (method === "GET" && !validGet) {
     const error = new Error("同期サーバーの応答を安全に確認できないため、自動処理を中止しました。");
     error.noRetry = true;
     throw error;
   }
-  if (method === "PUT" && !validSyncPutResponse(data, syncState.id)) {
+  if (method === "PUT" && !validSyncPutResponse(data, expectedSyncId)) {
     const error = new Error("同期サーバーの保存結果を確認できないため、保存済みとして扱いませんでした。");
     error.noRetry = true;
     throw error;
@@ -10737,7 +10979,7 @@ const SYNC_GZ_BASE64_LIMIT = 1_800_000;
 // 本番(https)では { baseRev, stateGz, format: "gzip-base64" } の圧縮形式で送り、
 // 圧縮が使えない環境ではプレーン { baseRev, state }（従来形式）で送る。
 // 圧縮形式を知らない旧サーバーが4xxを返した場合も、プレーンで1回だけ再試行する。
-async function syncPutState(baseRev) {
+async function syncPutState(baseRev, requestOptions = {}) {
   const state = buildSyncPayloadState();
   if (syncShouldCompress()) {
     let stateGz = null;
@@ -10758,7 +11000,7 @@ async function syncPutState(baseRev) {
       const body = { stateGz, format: "gzip-base64" };
       if (baseRev !== null) body.baseRev = baseRev;
       try {
-        return await syncRequest("PUT", body);
+        return await syncRequest("PUT", body, requestOptions);
       } catch (error) {
         // 旧サーバー（stateGz未対応）が返す400/422だけ、プレーン形式で1回再試行する。
         // 409（競合）・413・5xx・通信断・キー切替は従来どおり呼び出し側の処理へ渡す。
@@ -10769,7 +11011,7 @@ async function syncPutState(baseRev) {
   }
   const body = { state };
   if (baseRev !== null) body.baseRev = baseRev;
-  return await syncRequest("PUT", body);
+  return await syncRequest("PUT", body, requestOptions);
 }
 
 function setSyncStatus(message, mode = "") {
@@ -10797,6 +11039,371 @@ function setSyncBusy(busy) {
     button.disabled = busy;
   });
   updateSyncBadge();
+}
+
+function setV2Status(message, mode = "") {
+  if (!elements.syncV2Status) return;
+  elements.syncV2Status.textContent = message;
+  elements.syncV2Status.classList.toggle("is-live", mode === "live");
+  elements.syncV2Status.classList.toggle("is-error", mode === "error");
+}
+
+function setV2Busy(busy) {
+  syncState.v2Busy = busy;
+  const active = Boolean(getActiveV2Credential());
+  if (elements.syncV2UpgradeButton) elements.syncV2UpgradeButton.disabled = busy || active;
+  if (elements.syncV2CreateButton) elements.syncV2CreateButton.disabled = busy || active;
+  if (elements.syncV2JoinButton) elements.syncV2JoinButton.disabled = busy;
+  if (elements.syncV2CopyCodeButton) elements.syncV2CopyCodeButton.disabled = busy;
+  if (elements.syncV2DownloadCodeButton) elements.syncV2DownloadCodeButton.disabled = busy;
+}
+
+function renderV2CredentialUi() {
+  const credential = readV2Credential();
+  const active = credential?.status === "active" ? credential : null;
+  if (elements.syncV2CredentialPanel) elements.syncV2CredentialPanel.hidden = !active;
+  if (elements.syncV2TransferCode) elements.syncV2TransferCode.value = v2TransferCode(active);
+  if (elements.syncV2UpgradeButton) elements.syncV2UpgradeButton.disabled = syncState.v2Busy || Boolean(active);
+  if (elements.syncV2CreateButton) elements.syncV2CreateButton.disabled = syncState.v2Busy || Boolean(active);
+}
+
+async function readJsonResponse(response) {
+  return await response.json().catch(() => ({}));
+}
+
+// V2の資格情報操作用fetch。通常同期のsyncRequestと同じ60秒上限で打ち切り、
+// 応答が来ない回線でボタンがbusyのまま固まらないようにする。
+async function v2Fetch(url, options) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = controller
+    ? window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS)
+    : 0;
+  try {
+    return await fetch(url, controller ? { ...options, signal: controller.signal } : options);
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function activateV2Credential(credential, stateRev) {
+  const active = writeV2Credential({ ...credential, status: "active" });
+  // 永続化に成功した後でだけ通常通信をV2へ切り替える。先に切り替えると、
+  // localStorage失敗時に再読込後のlegacy経路と食い違うため、この順序を固定する。
+  stopSyncPolling();
+  bumpSyncRequestGen();
+  syncState.rev = Math.max(0, Number(stateRev) || 0);
+  syncState.connected = true;
+  renderV2CredentialUi();
+  if (syncServerAvailable()) startSyncPolling();
+  updateSyncBadge();
+  return active;
+}
+
+function pendingV2Credential() {
+  const stored = readV2Credential();
+  return stored?.status === "pending" ? stored : generateV2Credential();
+}
+
+async function upgradeToV2() {
+  if (getActiveV2Credential()) {
+    setV2Status("この端末はすでに新方式で同期しています。", "live");
+    return;
+  }
+  if (!syncState.id || !syncServerAvailable()) {
+    setV2Status("新方式への移行には、https の同期ページから開く必要があります。", "error");
+    return;
+  }
+  let credential;
+  try {
+    credential = writeV2Credential(pendingV2Credential());
+  } catch {
+    setV2Status("資格情報をこの端末に保存できないため、移行を開始しませんでした。空き容量を確認してください。", "error");
+    return;
+  }
+
+  setV2Busy(true);
+  setV2Status("新方式へ移行しています…");
+  try {
+    // room-takenが繰り返されても無限通信にしない。各回ともroomIdだけを更新し、
+    // secretは保持するため、サーバー契約の冪等性は崩さない。
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let response;
+      try {
+        response = await v2Fetch(`${legacySyncEndpoint(syncState.id)}&op=upgrade`, {
+          method: "PUT",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+            "x-room-key": credential.secret,
+          },
+          body: JSON.stringify({ roomId: credential.roomId }),
+        });
+      } catch {
+        setV2Status("通信できませんでした。資格情報は保存済みなので、同じボタンから再試行できます。", "error");
+        return;
+      }
+      const data = await readJsonResponse(response);
+      if (
+        response.status === 200 &&
+        data?.ok === true &&
+        String(data.syncId || "") === credential.roomId
+      ) {
+        activateV2Credential(credential, data.stateRev || syncState.rev);
+        setV2Status("✓ 新方式への移行が完了しました。引き継ぎコードを必ず保存してください。", "live");
+        return;
+      }
+      if (response.status === 503) {
+        setV2Status("新方式は現在準備中です。資格情報は保存済みなので、受付開始後に再試行できます。");
+        return;
+      }
+      if (response.status === 403) {
+        removePendingV2Credential(credential.roomId);
+        renderV2CredentialUi();
+        setV2Status("移行を確認できなかったため、新方式の資格情報を破棄して従来方式を継続します。", "error");
+        return;
+      }
+      if (response.status === 409 && data?.code === "already-upgraded") {
+        removePendingV2Credential(credential.roomId);
+        renderV2CredentialUi();
+        setV2Status("他の端末で移行済みです。引き継ぎコードで合流してください。", "error");
+        return;
+      }
+      if (response.status === 409 && data?.code === "room-taken") {
+        credential = writeV2Credential(generateV2Credential(credential.secret));
+        continue;
+      }
+      if (response.status >= 500) {
+        setV2Status("サーバーで一時的な問題が起きました。資格情報は保存済みなので再試行できます。", "error");
+        return;
+      }
+      setV2Status("移行結果を安全に確認できませんでした。資格情報を保持したまま再試行できます。", "error");
+      return;
+    }
+    setV2Status("保存先IDの再生成が続いたため中断しました。資格情報を保持したまま再試行できます。", "error");
+  } catch {
+    setV2Status("移行を完了できませんでした。資格情報は保存済みなので再試行できます。", "error");
+  } finally {
+    setV2Busy(false);
+    renderV2CredentialUi();
+  }
+}
+
+async function createV2Room() {
+  if (getActiveV2Credential()) {
+    setV2Status("この端末はすでに新方式で同期しています。", "live");
+    return;
+  }
+  if (!syncServerAvailable()) {
+    setV2Status("新方式での発行には、https の同期ページから開く必要があります。", "error");
+    return;
+  }
+  let credential;
+  try {
+    credential = writeV2Credential(pendingV2Credential());
+  } catch {
+    setV2Status("資格情報をこの端末に保存できないため、発行を開始しませんでした。空き容量を確認してください。", "error");
+    return;
+  }
+
+  setV2Busy(true);
+  setV2Status("新方式の保存先を発行しています…");
+  try {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let response;
+      try {
+        response = await v2Fetch(`${v2SyncEndpoint(credential.roomId)}&create=1`, {
+          method: "PUT",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+            "x-room-key": credential.secret,
+          },
+          body: JSON.stringify({
+            state: buildSyncPayloadState(),
+            learningSchemaVersion: Math.max(
+              LEARNING_SCHEMA_VERSION,
+              Number(appState.learningSchemaVersion) || 0,
+            ),
+          }),
+        });
+      } catch {
+        setV2Status("通信できませんでした。資格情報は保存済みなので、同じボタンから再試行できます。", "error");
+        return;
+      }
+      const data = await readJsonResponse(response);
+      if (response.status === 200 && validSyncPutResponse(data, credential.roomId)) {
+        activateV2Credential(credential, data.stateRev);
+        setV2Status("✓ 新方式の保存先を発行しました。引き継ぎコードを必ず保存してください。", "live");
+        return;
+      }
+      if (response.status === 503) {
+        setV2Status("新方式は現在準備中です。資格情報は保存済みなので、受付開始後に再試行できます。");
+        return;
+      }
+      if (response.status === 403) {
+        // createはroom存在を秘匿するため衝突も403になる。roomIdだけを替え、
+        // secretとpending状態を保ったまま少数回だけ安全に再試行する。
+        credential = writeV2Credential(generateV2Credential(credential.secret));
+        continue;
+      }
+      if (response.status >= 500) {
+        setV2Status("サーバーで一時的な問題が起きました。資格情報は保存済みなので再試行できます。", "error");
+        return;
+      }
+      setV2Status("発行結果を安全に確認できませんでした。資格情報を保持したまま再試行できます。", "error");
+      return;
+    }
+    setV2Status("保存先IDの再生成が続いたため中断しました。資格情報を保持したまま再試行できます。", "error");
+  } catch {
+    setV2Status("発行を完了できませんでした。資格情報は保存済みなので再試行できます。", "error");
+  } finally {
+    setV2Busy(false);
+    renderV2CredentialUi();
+  }
+}
+
+// すでに別のV2データと同期中の端末で合流すると、現在の資格情報が上書きされる。
+// 押し間違い1回で旧コードを失わないよう、同じコードでの2度押しを確認とみなす。
+let v2JoinConfirm = { roomId: "", at: 0 };
+
+async function joinV2Room() {
+  const credential = parseV2TransferCode(elements.syncV2JoinInput?.value);
+  if (!credential) {
+    setV2Status("引き継ぎコードの形式を確認してください。wr_…とwk_…をドットでつないだ1文字列です。", "error");
+    return;
+  }
+  if (!syncServerAvailable()) {
+    setV2Status("引き継ぎコードでの合流には、https の同期ページから開く必要があります。", "error");
+    return;
+  }
+  const currentActive = getActiveV2Credential();
+  if (currentActive && currentActive.roomId !== credential.roomId) {
+    const confirmed =
+      v2JoinConfirm.roomId === credential.roomId && Date.now() - v2JoinConfirm.at < 30000;
+    if (!confirmed) {
+      v2JoinConfirm = { roomId: credential.roomId, at: Date.now() };
+      setV2Status(
+        "この端末はすでに別の新方式データと同期しています。現在の引き継ぎコードを控えたうえで、30秒以内にもう一度「このコードで合流」を押すと切り替えます。",
+        "error",
+      );
+      return;
+    }
+  }
+  v2JoinConfirm = { roomId: "", at: 0 };
+
+  setV2Busy(true);
+  setV2Status("引き継ぎコードを確認しています…");
+  try {
+    let response;
+    try {
+      response = await v2Fetch(v2SyncEndpoint(credential.roomId), {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "x-room-key": credential.secret,
+        },
+      });
+    } catch {
+      setV2Status("通信できませんでした。接続を確認してもう一度お試しください。", "error");
+      return;
+    }
+    const data = await readJsonResponse(response);
+    if (response.status === 503) {
+      setV2Status("新方式は現在準備中です。しばらくしてからもう一度お試しください。");
+      return;
+    }
+    if (
+      response.status !== 200 ||
+      !validSyncGetResponse(data, null, credential.roomId)
+    ) {
+      setV2Status(
+        response.status === 403
+          ? "引き継ぎコードを確認できませんでした。コード全体をもう一度確認してください。"
+          : "同期先の応答を安全に確認できなかったため、合流しませんでした。",
+        "error",
+      );
+      return;
+    }
+
+    // 置換前のこの端末の内容を「元に戻す」へ退避する（サーバー内容での置き換えと同じ保護。
+    // 合流先を貼り間違えても、端末ローカルの単語が復元不能にならない）。
+    const localSnapshot = snapshotState();
+    const active = activateV2Credential(credential, data.stateRev);
+    // 合流時は手元のデータを勝手に新しい領域へ送らず、確認済みの同期先を正として
+    // 端末表示を切り替える。以後の通常同期はactive資格情報で行う。
+    syncState.applyingRemote = true;
+    try {
+      appState = normalizeState(data.state || defaultState());
+      invalidatePersonalFactorCache();
+      currentQuiz = null;
+      selectedIds.clear();
+      persistAppState();
+    } finally {
+      syncState.applyingRemote = false;
+    }
+    offerUndo(localSnapshot);
+    renderAll();
+    if (elements.syncV2JoinInput) elements.syncV2JoinInput.value = "";
+    renderV2CredentialUi();
+    setV2Status(
+      `✓ 新方式のデータに合流しました（${appState.words.length}語）。取り消しは『元に戻す』。引き継ぎコードを必ず保存してください。`,
+      "live",
+    );
+    return active;
+  } catch {
+    setV2Status("合流を完了できませんでした。元の同期設定は変更していません。", "error");
+  } finally {
+    setV2Busy(false);
+  }
+}
+
+function initV2SyncUi() {
+  renderV2CredentialUi();
+  const credential = readV2Credential();
+  if (credential?.status === "active") {
+    setV2Status("✓ この端末は新方式（V2）で同期しています。", "live");
+  } else if (credential?.status === "pending") {
+    setV2Status("前回の操作を再試行できます。「新方式へ移行」または「新方式（V2）で発行」を押してください。");
+  }
+  elements.syncV2UpgradeButton?.addEventListener("click", () => upgradeToV2());
+  elements.syncV2CreateButton?.addEventListener("click", () => createV2Room());
+  elements.syncV2JoinButton?.addEventListener("click", () => joinV2Room());
+  elements.syncV2JoinInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      joinV2Room();
+    }
+  });
+  elements.syncV2CopyCodeButton?.addEventListener("click", async () => {
+    const code = v2TransferCode(getActiveV2Credential());
+    if (!code) {
+      setV2Status("表示できる引き継ぎコードがありません。", "error");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(code);
+      setV2Status("✓ 引き継ぎコードをコピーしました。安全な場所へ保管してください。", "live");
+    } catch {
+      setV2Status("コピーできませんでした。表示されたコードを手動でコピーしてください。", "error");
+    }
+  });
+  elements.syncV2DownloadCodeButton?.addEventListener("click", () => {
+    const code = v2TransferCode(getActiveV2Credential());
+    if (!code) {
+      setV2Status("保存できる引き継ぎコードがありません。", "error");
+      return;
+    }
+    const text = [
+      "WordBank 新方式（V2）引き継ぎコード",
+      "",
+      code,
+      "",
+      "このコードを紛失するとデータに二度とアクセスできません。安全な場所へ保管してください。",
+    ].join("\n");
+    downloadBlob(new Blob([text], { type: "text/plain;charset=utf-8" }), "wordbank-v2-hikitsugi-code.txt");
+    setV2Status("✓ 引き継ぎコードをテキストファイルで保存しました。", "live");
+  });
 }
 
 // 経過時間を「たった今 / ○分前 / HH:MM」で表す
@@ -11338,7 +11945,7 @@ async function pushWordsnapState(options = {}) {
         state: error.data.state,
         stateRev: error.data.stateRev,
         syncId: error.data.syncId,
-      }, null, syncState.id);
+      }, null, error.expectedSyncId || syncState.id);
       if (!validConflictState) {
         // 最新stateを見ずにrevisionだけ合わせて再送すると、相手端末の差分を丸ごと
         // 上書きし得る。現行APIは409に完全なstateとrevisionを必ず含めるため、
@@ -11462,7 +12069,7 @@ async function forcePushOverwrite() {
   setSyncBusy(true);
   setSyncStatus("この端末の内容でサーバーを上書きしています…");
   try {
-    const result = await syncPutState(null); // baseRev無し＝強制上書き（同期用ビューを送信）
+    const result = await syncPutState(null, { force: true }); // V2はforce=1も必須
     syncState.rev = Number(result.stateRev) || syncState.rev;
     syncState.connected = true;
     setSyncStatus("✓ この端末の内容でサーバーを更新しました。他の端末で「他の端末に合わせる」を押してください。", "live");
@@ -11625,7 +12232,7 @@ async function restoreFromRevision(rev) {
       syncState.applyingRemote = false;
     }
     renderAll();
-    const result = await syncPutState(null);
+    const result = await syncPutState(null, { force: true });
     syncState.rev = Number(result.stateRev) || syncState.rev;
     const message = `✓ 選んだ過去の版に戻しました（${appState.words.length}語）。取り消しは『元に戻す』。`;
     setRestoreHistoryStatus(message);
@@ -11973,6 +12580,7 @@ function initWordsnapSync() {
   updateSyncKeySecurityWarning(syncState.id);
   if (elements.syncPullButton) elements.syncPullButton.disabled = !syncState.id;
   if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = !syncState.id;
+  initV2SyncUi();
 
   elements.syncConnectButton?.addEventListener("click", () => connectWordsnapSync());
   elements.syncGenerateButton?.addEventListener("click", () => {
