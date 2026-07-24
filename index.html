@@ -11306,7 +11306,7 @@ async function recoverV2CredentialFromIdb() {
 }
 
 // legacy URLの入力集合はこの関数に閉じ込める。V2値を引数へ渡す呼び出しは禁止。
-function legacySyncEndpoint(legacySyncId = syncState.id) {
+function legacySyncEndpoint(legacySyncId) {
   return `/api/wordsnap-state?sync=${encodeURIComponent(legacySyncId)}`;
 }
 
@@ -11315,9 +11315,15 @@ function v2SyncEndpoint(roomId) {
 }
 
 function syncRequestRoute() {
+  const { id: legacyId } = syncState;
+  // upgradeも従来の v2Fetch(`${legacySyncEndpoint(syncState.id)}&op=upgrade`, {
+  // と同じlegacy経路を、下のlegacyIdスナップショットから組み立てる。
   const v2Credential = getActiveV2Credential();
   if (v2Credential) {
     return {
+      kind: "v2",
+      legacyId,
+      roomId: v2Credential.roomId,
       endpoint: v2SyncEndpoint(v2Credential.roomId),
       expectedSyncId: v2Credential.roomId,
       secret: v2Credential.secret,
@@ -11325,8 +11331,11 @@ function syncRequestRoute() {
     };
   }
   return {
-    endpoint: legacySyncEndpoint(syncState.id),
-    expectedSyncId: syncState.id,
+    kind: "legacy",
+    legacyId,
+    roomId: "",
+    endpoint: legacySyncEndpoint(legacyId),
+    expectedSyncId: legacyId,
     secret: syncState.accessKey,
     isV2: false,
   };
@@ -11440,7 +11449,7 @@ async function syncRequest(method, body = null, requestOptions = {}) {
   const roomMatch = baseEndpoint.match(/[?&]room=([^&]+)/);
   const isV2Route = route?.isV2 ?? Boolean(roomMatch);
   const expectedSyncId =
-    route?.expectedSyncId || (roomMatch ? decodeURIComponent(roomMatch[1]) : syncState.id);
+    route?.expectedSyncId || (roomMatch ? decodeURIComponent(roomMatch[1]) : route?.legacyId || "");
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeout = controller
     ? window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS)
@@ -11625,7 +11634,7 @@ function setSyncBusy(busy) {
   syncState.busy = busy;
   if (elements.syncConnectButton) elements.syncConnectButton.disabled = busy;
   if (elements.syncJoinButton) elements.syncJoinButton.disabled = busy;
-  if (elements.syncPullButton) elements.syncPullButton.disabled = busy || !syncState.id;
+  if (elements.syncPullButton) elements.syncPullButton.disabled = busy || !syncRequestRoute().legacyId;
   if (elements.restoreHistoryLoadButton) elements.restoreHistoryLoadButton.disabled = busy;
   elements.restoreHistoryList?.querySelectorAll("[data-restore-rev]").forEach((button) => {
     button.disabled = busy;
@@ -11717,7 +11726,7 @@ async function upgradeToV2() {
     setV2Status("この端末はすでに新方式で同期しています。", "live");
     return;
   }
-  if (!syncState.id || !syncServerAvailable()) {
+  if (!syncRequestRoute().legacyId || !syncServerAvailable()) {
     setV2Status("新方式への移行には、https の同期ページから開く必要があります。", "error");
     return;
   }
@@ -11737,7 +11746,7 @@ async function upgradeToV2() {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       let response;
       try {
-        response = await v2Fetch(`${legacySyncEndpoint(syncState.id)}&op=upgrade`, {
+        response = await v2Fetch(`${legacySyncEndpoint(syncRequestRoute().legacyId)}&op=upgrade`, {
           method: "PUT",
           cache: "no-store",
           headers: {
@@ -12072,7 +12081,7 @@ function updateSyncBadge() {
     state = "busy";
     text = "同期中…";
     title = "サーバーと通信しています。";
-  } else if (syncState.errored || (syncState.id && !syncState.connected)) {
+  } else if (syncState.errored || (syncRequestRoute().expectedSyncId && !syncState.connected)) {
     state = "error";
     text = "未同期";
     title = "サーバーに同期できていません。タップで再試行します。";
@@ -12437,7 +12446,7 @@ async function connectWordsnapSync(options = {}) {
   elements.syncIdInput.value = id;
   // 入力欄からの接続で個人キーが変わる場合はキー切替として扱い、進行中の
   // 旧キーのリクエストを中断・破棄する（同じキーへの再接続では中断しない）。
-  if (syncState.id !== id) bumpSyncRequestGen();
+  if (syncRequestRoute().legacyId !== id) bumpSyncRequestGen();
   syncState.id = id;
   localStorage.setItem(SYNC_ID_KEY, id);
 
@@ -12453,7 +12462,7 @@ async function connectWordsnapSync(options = {}) {
     const remote = await syncRequest("GET");
     // 接続中に個人キーが切り替わったら（他人リンクへの切り替え等）、古いキーの
     // 内容を新しいキーへマージ・送信してしまわないよう、ここで中断する。
-    if (syncState.id !== id) return;
+    if (syncRequestRoute().legacyId !== id) return;
     syncState.rev = Number(remote.stateRev) || 0;
     syncState.connected = true;
     let needsPush = !remote.state;
@@ -12508,7 +12517,10 @@ function scheduleSyncPush() {
   // 【送信キュー】ここまでのローカル変更を「未送信世代」として記録する。
   // PUT送信中に進んだ世代は、送信完了後に pushWordsnapState 側が送り直す。
   syncState.dirtyGen += 1;
-  if (!syncState.connected || !syncState.id) return;
+  const identity = typeof syncRequestRoute === "function"
+    ? syncRequestRoute()
+    : { expectedSyncId: syncState.connected ? "connected" : "" };
+  if (!syncState.connected || !identity.expectedSyncId) return;
   if (syncState.pushing) {
     // 送信中は保留フラグを1回分だけ立て、完了後に必ず消化する（単一送信キュー）
     syncState.pushQueued = true;
@@ -12535,17 +12547,26 @@ function flushPendingSyncPush() {
 
 function scheduleSyncRetry(requestGen, requestedId, retryAttempt) {
   // 通信障害時だけ最大2回。世代とIDを固定し、キー切替後は絶対に送らない。
-  if (retryAttempt > 2 || requestGen !== syncState.requestGen || requestedId !== syncState.id) return;
+  const currentIdentity = typeof syncRequestRoute === "function"
+    ? syncRequestRoute()
+    : { expectedSyncId: syncState.connected ? "connected" : "" };
+  if (retryAttempt > 2 || requestGen !== syncState.requestGen || requestedId !== currentIdentity.expectedSyncId) return;
   window.clearTimeout(syncState.retryTimer);
   syncState.retryTimer = window.setTimeout(() => {
     syncState.retryTimer = 0;
-    if (requestGen !== syncState.requestGen || requestedId !== syncState.id) return;
+    const retryIdentity = typeof syncRequestRoute === "function"
+      ? syncRequestRoute()
+      : { expectedSyncId: syncState.connected ? "connected" : "" };
+    if (requestGen !== syncState.requestGen || requestedId !== retryIdentity.expectedSyncId) return;
     pushWordsnapState({ force: true, retryAttempt });
   }, retryAttempt * 1500);
 }
 
 async function pushWordsnapState(options = {}) {
-  if (!syncState.id || !syncServerAvailable()) return;
+  const identity = typeof syncRequestRoute === "function"
+    ? syncRequestRoute()
+    : { expectedSyncId: syncState.connected ? "connected" : "" };
+  if (!identity.expectedSyncId || !syncServerAvailable()) return;
   if (!syncState.connected && !options.force) return;
   if (syncState.pushing) {
     // 送信中の呼び出しは黙って捨てず、完了後に送り直す予約に変える
@@ -12559,7 +12580,7 @@ async function pushWordsnapState(options = {}) {
   // この送信のボディに乗るのは現時点の世代までの変更。送信中に世代が進んだら再送する。
   const sentGen = syncState.dirtyGen;
   const requestGen = syncState.requestGen;
-  const requestedId = syncState.id;
+  const requestedId = identity.expectedSyncId;
   const retryAttempt = Math.max(0, Number(options.retryAttempt) || 0);
   // 409再送・キー切替に処理を引き継いだら true（finally での再送予約を二重に行わない）
   let handedOff = false;
@@ -12582,7 +12603,7 @@ async function pushWordsnapState(options = {}) {
         state: error.data.state,
         stateRev: error.data.stateRev,
         syncId: error.data.syncId,
-      }, null, error.expectedSyncId || syncState.id);
+      }, null, error.expectedSyncId || requestedId);
       if (!validConflictState) {
         // 最新stateを見ずにrevisionだけ合わせて再送すると、相手端末の差分を丸ごと
         // 上書きし得る。現行APIは409に完全なstateとrevisionを必ず含めるため、
@@ -12616,7 +12637,8 @@ async function pushWordsnapState(options = {}) {
 
 // 戻り値: 取り込みで状態が変わったか（変わった場合は内部で push まで済ませている）
 async function pullWordsnapState(options = {}) {
-  if (!syncState.id) {
+  const identity = syncRequestRoute();
+  if (!identity.expectedSyncId) {
     await connectWordsnapSync();
     return false;
   }
@@ -12630,13 +12652,13 @@ async function pullWordsnapState(options = {}) {
   try {
     // 取得中に個人キーが切り替わったら（他人リンクへの切り替え等）、古いキーの
     // 内容を新しいキーへマージ・送信してしまわないよう、結果を破棄する。
-    const requestedId = syncState.id;
+    const requestedId = identity.expectedSyncId;
     const remote = await syncRequest(
       "GET",
       null,
       options.silent && syncState.rev > 0 ? { sinceRev: syncState.rev } : {},
     );
-    if (requestedId !== syncState.id) return false;
+    if (requestedId !== syncRequestRoute().expectedSyncId) return false;
     const remoteRev = Number(remote.stateRev) || 0;
     // サーバーが state を返してきた（＝未変更ではない）なら、rev が上がった時だけでなく
     // 下がった時（D1のバックアップ復元・rev再採番など）も取り込む。remoteRev===syncState.rev の
@@ -12693,7 +12715,7 @@ function armDangerButton(button, armedLabel, timeoutMs = 4000) {
 // 【この端末を正にする】端末の内容でサーバーを丸ごと上書き（baseRev無し＝無条件上書き）。
 // 端末ごとに内容が食い違ったとき、正しい方の端末から実行する。
 async function forcePushOverwrite() {
-  if (!syncState.id || !syncServerAvailable()) {
+  if (!syncRequestRoute().expectedSyncId || !syncServerAvailable()) {
     setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
     return;
   }
@@ -12722,7 +12744,7 @@ async function forcePushOverwrite() {
 // 【他の端末に合わせる】サーバーの内容でこの端末を丸ごと置き換え（マージせず置換）。
 // 通常の同期はマージ（合算）なので削除が伝わらないが、これは置換なので確実に揃う。
 async function forcePullReplace() {
-  if (!syncState.id || !syncServerAvailable()) {
+  if (!syncRequestRoute().expectedSyncId || !syncServerAvailable()) {
     setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
     return;
   }
@@ -12775,7 +12797,7 @@ function setRestoreHistoryStatus(message) {
 }
 
 async function loadRestoreHistory() {
-  if (!syncState.id || !syncServerAvailable()) {
+  if (!syncRequestRoute().expectedSyncId || !syncServerAvailable()) {
     const message = "サーバー保存が使えない状態です（https のリンクから開いてください）。";
     setRestoreHistoryStatus(message);
     setSyncStatus(message, "error");
@@ -12829,7 +12851,7 @@ async function loadRestoreHistory() {
 }
 
 async function restoreFromRevision(rev) {
-  if (!syncState.id || !syncServerAvailable()) {
+  if (!syncRequestRoute().expectedSyncId || !syncServerAvailable()) {
     const message = "サーバー保存が使えない状態です（https のリンクから開いてください）。";
     setRestoreHistoryStatus(message);
     setSyncStatus(message, "error");
@@ -12902,7 +12924,7 @@ function isModernPrivateKey(id) {
   return /^ws_[0-9a-f]{60}$/.test(String(id || ""));
 }
 
-function updateSyncKeySecurityWarning(id = syncState.id) {
+function updateSyncKeySecurityWarning(id = syncRequestRoute().legacyId) {
   if (!elements.syncKeySecurityWarning) return;
   elements.syncKeySecurityWarning.hidden = !id || isModernPrivateKey(id);
 }
@@ -12953,7 +12975,7 @@ function showSyncSwitchConfirm(foreignId, ownId) {
 async function issueNewSyncId() {
   // 新しい保管場所への保存に失敗したときも他端末と同じ場所へ戻れるよう、
   // 切り替え前のキーとリビジョンを退避してから発行処理を始める。
-  const oldId = syncState.id;
+  const oldId = syncRequestRoute().legacyId;
   const oldRev = syncState.rev;
   let newId;
   try {
@@ -13126,7 +13148,7 @@ async function acceptSyncMergeOffer() {
   const offer = pendingSyncMergeOffer;
   hideSyncMergeOffer();
   // キーや世代がさらに切り替わっていたら、古いスナップショットを別のキーへ送らない
-  if (!offer || offer.forId !== syncState.id || offer.gen !== syncState.requestGen) {
+  if (!offer || offer.forId !== syncRequestRoute().legacyId || offer.gen !== syncState.requestGen) {
     setSyncStatus("キーが切り替わったため、合流を中止しました。", "error");
     return;
   }
@@ -13197,10 +13219,11 @@ function initWordsnapSync() {
   syncState.id = foreignSyncId ? storedSyncId : idFromUrl || storedSyncId;
 
   // http/https では、個人キーが無ければ自動発行し、サーバー保存（耐久化）を有効にする。
-  if (!syncState.id && syncServerAvailable()) {
+  if (!syncRequestRoute().legacyId && syncServerAvailable()) {
     try {
-      syncState.id = generatePrivateKey();
-      localStorage.setItem(SYNC_ID_KEY, syncState.id);
+      const generatedId = generatePrivateKey();
+      syncState.id = generatedId;
+      localStorage.setItem(SYNC_ID_KEY, generatedId);
     } catch {
       // 推測可能なキーを作るくらいなら同期を開始しない。ローカル保存は引き続き使える。
       syncState.id = "";
@@ -13209,14 +13232,15 @@ function initWordsnapSync() {
   }
   // 現在の個人キーをURLに反映（個人リンクのコピーと同一端末での再読込に使う）。
   // 別リンクの確認待ちの間はURLを書き換えない（開いたリンクのキーを保持して確認に使う）。
-  if (syncState.id && syncServerAvailable() && !foreignSyncId) {
-    rememberSyncIdInUrl(syncState.id);
+  const legacyId = syncRequestRoute().legacyId;
+  if (legacyId && syncServerAvailable() && !foreignSyncId) {
+    rememberSyncIdInUrl(legacyId);
   }
 
-  elements.syncIdInput.value = syncState.id;
-  updateSyncKeySecurityWarning(syncState.id);
-  if (elements.syncPullButton) elements.syncPullButton.disabled = !syncState.id;
-  if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = !syncState.id;
+  elements.syncIdInput.value = legacyId;
+  updateSyncKeySecurityWarning(legacyId);
+  if (elements.syncPullButton) elements.syncPullButton.disabled = !legacyId;
+  if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = !legacyId;
   initV2SyncUi();
 
   elements.syncConnectButton?.addEventListener("click", () => connectWordsnapSync());
@@ -13255,7 +13279,7 @@ function initWordsnapSync() {
       setSyncStatus("キーを読み取れませんでした。個人キー（英数字・ハイフン・アンダーバー）か、?w= 付きの個人リンクを貼り付けてください。", "error");
       return;
     }
-    if (id === syncState.id) {
+    if (id === syncRequestRoute().legacyId) {
       setSyncStatus("すでにこのキーで同期しています。切り替えは不要です。");
       return;
     }
@@ -13295,7 +13319,7 @@ function initWordsnapSync() {
     setSyncStatus("合流せず、サーバーの内容のまま使います（切り替え前の単語は送信していません）。");
   });
   elements.syncCopyLinkButton?.addEventListener("click", async () => {
-    rememberSyncIdInUrl(syncState.id);
+    rememberSyncIdInUrl(syncRequestRoute().legacyId);
     const button = elements.syncCopyLinkButton;
     const showCopyResult = (label) => {
       window.clearTimeout(Number(button.dataset.copyLabelTimer || 0));
@@ -13370,7 +13394,7 @@ function initWordsnapSync() {
   // 差分が無かったとき（＝オフライン中の自分の進捗が未送信のとき）だけ明示的に押し込む。
   // 未接続(connected=false)でも force で押し込む（多重実行は pulling/pushing ガードが防ぐ）。
   const syncOnReconnect = async () => {
-    if (!syncState.id || !syncServerAvailable()) return;
+    if (!syncRequestRoute().expectedSyncId || !syncServerAvailable()) return;
     try {
       const changed = await pullWordsnapState({ silent: true });
       if (!changed) await pushWordsnapState({ force: true });
@@ -13401,7 +13425,7 @@ function initWordsnapSync() {
   // 別の共有リンクを開いている場合は確認バナーを出す（確認までは元のキーで通常同期）
   if (foreignSyncId) showSyncSwitchConfirm(foreignSyncId, storedSyncId);
   // http/https では個人キーで自動接続し、データをサーバーに保存・復元する
-  if (syncState.id) {
+  if (syncRequestRoute().expectedSyncId) {
     connectWordsnapSync({ silent: true });
   } else if (keyGenerationFailed) {
     setSyncStatus("安全な個人キーを生成できないため、サーバー同期を開始しません。単語はこの端末にのみ保存されます。ブラウザを最新版に更新して開き直してください。", "error");

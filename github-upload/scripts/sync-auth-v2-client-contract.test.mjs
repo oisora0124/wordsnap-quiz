@@ -334,24 +334,27 @@ test("到達可能な3状態の同期経路が凍結スナップショットと�
   }, "状態3（legacy + V2 active）: room経路とヘッダのみを使う");
 });
 
-// 段階1で解消する設計上の弱点をテストとして明文化する。
-// activateV2Credential が syncState.id を設定しないため、legacyキーを持たない
-// ユーザーでは scheduleSyncPush 等のガードが全て閉じてしまう（＝同期が止まる）。
-// 現状の事実を固定し、identity抽象化の完了条件を明確にする。
-test("現状は syncState.id が事実上の同期identityになっている（段階1で解消する）", () => {
-  assert.match(
-    html,
-    /function scheduleSyncPush\(\)\s*\{[\s\S]*?if \(!syncState\.connected \|\| !syncState\.id\) return;/,
-    "scheduleSyncPush が syncState.id を必須にしている",
-  );
-  const activateSource = html.slice(
-    html.indexOf("function activateV2Credential"),
-    html.indexOf("function pendingV2Credential"),
-  );
-  assert.ok(activateSource.length > 0, "activateV2Credential が見つかること");
+// 段階1の事後条件: 通信identityは syncRequestRoute に集約し、
+// legacyキーの保持に必要な代入以外では syncState.id を直読しない。
+test("syncState.id の読み取りは同期identity関数の外に存在しない", () => {
+  const scheduleStart = html.indexOf("function scheduleSyncPush");
+  const scheduleEnd = html.indexOf("function flushPendingSyncPush", scheduleStart);
+  assert.ok(scheduleStart >= 0 && scheduleEnd > scheduleStart, "scheduleSyncPush が見つかること");
   assert.doesNotMatch(
-    activateSource,
-    /syncState\.id\s*=/,
-    "activateV2Credential は syncState.id を設定しない（これが段階1の対象）",
+    html.slice(scheduleStart, scheduleEnd),
+    /syncState\.id/,
+    "scheduleSyncPush が syncState.id を参照しないこと",
+  );
+
+  const identityStart = html.indexOf("function syncRequestRoute");
+  const identityEnd = html.indexOf("function syncEndpoint", identityStart);
+  assert.ok(identityStart >= 0 && identityEnd > identityStart, "syncRequestRoute が見つかること");
+  const outsideIdentity =
+    html.slice(0, identityStart) +
+    html.slice(identityEnd);
+  assert.doesNotMatch(
+    outsideIdentity,
+    /syncState\.id(?!\s*=(?!=))/,
+    "syncState.id の読み取りが syncRequestRoute の外に無いこと",
   );
 });
