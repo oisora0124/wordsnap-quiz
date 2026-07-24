@@ -276,3 +276,82 @@ test("V2の強制上書きと復元送信はforce指定を通す", () => {
     /if \(isV2Route && requestOptions\.force === true\) \{\s*endpoint \+= "&force=1";/,
   );
 });
+
+// ---------------------------------------------------------------------------
+// 段階1（同期identity抽象化）の凍結ゲート
+//
+// 今日到達可能な同期状態は次の3つだけで、いずれも legacyキーを持つ:
+//   1. legacyのみ
+//   2. legacy + V2 pending
+//   3. legacy + V2 active（upgrade / join 済み）
+// identityリファクタは「この3状態の出力を1文字も変えない」ことが成立条件。
+// 下の凍結スナップショットが1バイトでも動いたらリファクタが挙動を変えている。
+//
+// 「legacyなしのV2」は現時点で生成経路が存在しない状態であり、ここには含めない
+// （段階2以降で別途テストを足す）。
+// ---------------------------------------------------------------------------
+test("到達可能な3状態の同期経路が凍結スナップショットと完全一致する", () => {
+  const result = evaluateRoutes();
+  const snapshot = (captured) => ({
+    endpoint: captured.route.endpoint,
+    expectedSyncId: captured.route.expectedSyncId,
+    isV2: captured.route.isV2,
+    secret: captured.route.secret,
+    headers: { ...captured.headers },
+  });
+
+  assert.deepEqual(snapshot(result.__before), {
+    endpoint: "/api/wordsnap-state?sync=legacy-room_42",
+    expectedSyncId: "legacy-room_42",
+    isV2: false,
+    secret: "legacy-access-key",
+    headers: {
+      "Content-Type": "application/json",
+      "x-room-key": "legacy-access-key",
+    },
+  }, "状態1（legacyのみ）");
+
+  assert.deepEqual(snapshot(result.__pending), {
+    endpoint: "/api/wordsnap-state?sync=legacy-room_42",
+    expectedSyncId: "legacy-room_42",
+    isV2: false,
+    secret: "legacy-access-key",
+    headers: {
+      "Content-Type": "application/json",
+      "x-room-key": "legacy-access-key",
+    },
+  }, "状態2（legacy + V2 pending）: pendingは通信経路を切り替えない");
+
+  assert.deepEqual(snapshot(result.__active), {
+    endpoint: `/api/wordsnap-state?room=wr_${"2".repeat(32)}`,
+    expectedSyncId: `wr_${"2".repeat(32)}`,
+    isV2: true,
+    secret: `wk_${"b".repeat(60)}`,
+    headers: {
+      "Content-Type": "application/json",
+      "x-room-key": `wk_${"b".repeat(60)}`,
+    },
+  }, "状態3（legacy + V2 active）: room経路とヘッダのみを使う");
+});
+
+// 段階1で解消する設計上の弱点をテストとして明文化する。
+// activateV2Credential が syncState.id を設定しないため、legacyキーを持たない
+// ユーザーでは scheduleSyncPush 等のガードが全て閉じてしまう（＝同期が止まる）。
+// 現状の事実を固定し、identity抽象化の完了条件を明確にする。
+test("現状は syncState.id が事実上の同期identityになっている（段階1で解消する）", () => {
+  assert.match(
+    html,
+    /function scheduleSyncPush\(\)\s*\{[\s\S]*?if \(!syncState\.connected \|\| !syncState\.id\) return;/,
+    "scheduleSyncPush が syncState.id を必須にしている",
+  );
+  const activateSource = html.slice(
+    html.indexOf("function activateV2Credential"),
+    html.indexOf("function pendingV2Credential"),
+  );
+  assert.ok(activateSource.length > 0, "activateV2Credential が見つかること");
+  assert.doesNotMatch(
+    activateSource,
+    /syncState\.id\s*=/,
+    "activateV2Credential は syncState.id を設定しない（これが段階1の対象）",
+  );
+});
