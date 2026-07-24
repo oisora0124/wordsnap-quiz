@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 - **Phase 0**: 0004適用＋サーバーにV2経路追加（クライアント無変更）。**`SYNC_V2_ENABLED` は未設定＝create/upgrade閉鎖のままデプロイ**するため、レート制限未設定でも無制限createは公開されない。リリースゲート: legacy経路の全契約テストがPhase 0前後でバイト同一
 - **Phase 1**: レート制限設定を確認後に `SYNC_V2_ENABLED=1`。クライアントにv2資格情報・移行UI・V2通信を追加（既定発行はlegacyのまま）
+  - 【2026-07-25 リリース済み】0004/0005適用・鍵リング設定・アプリ内レート制限デプロイ・フラグON。本番E2E（隔離テスト部屋）で create冪等/403統一/CAS/422/force/upgrade判定表/dual-accept同一rev系列/create 429/legacy無影響 の全項目を確認
 - **Phase 2**: 運用実績を見て新規発行の既定をV2へ。**legacyの縮退はしない**
 - （旧Phase 2の強制上書き猶予→428、旧Phase 3の平文縮退は撤回・凍結）
 
