@@ -218,7 +218,8 @@ p {
 h1 {
   max-width: 18ch;
   margin: 0 0 0.7rem;
-  font-size: clamp(2.1rem, 4.6vw, 3.2rem);
+  /* 巨大な見出しはスクロールを増やすだけなので一回り小さく（視認性は維持） */
+  font-size: clamp(1.7rem, 3.4vw, 2.3rem);
   font-weight: 800;
   line-height: 1.05;
   letter-spacing: -0.03em;
@@ -250,8 +251,8 @@ h2 {
   max-width: 100%;
   gap: 0.45rem;
   align-items: baseline;
-  margin: 0.65rem 0 0;
-  padding: 0.5rem 0.75rem;
+  margin: 0.4rem 0 0;
+  padding: 0.35rem 0.65rem;
   border-left: 3px solid var(--accent);
   border-radius: 0 var(--r-md) var(--r-md) 0;
   background: var(--accent-soft);
@@ -290,9 +291,9 @@ h2 {
 
 .hero-title {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.4rem;
 }
 
 .hero-title h1 {
@@ -302,10 +303,10 @@ h2 {
 .brand-mark {
   position: relative;
   display: inline-block;
-  width: clamp(48px, 7vw, 62px);
-  height: clamp(48px, 7vw, 62px);
+  width: clamp(38px, 5vw, 46px);
+  height: clamp(38px, 5vw, 46px);
   flex: none;
-  border-radius: 18px;
+  border-radius: 13px;
   background: url("assets/wordsnap-icon-light.png") center / cover no-repeat;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -331,7 +332,8 @@ h2 {
 .shell {
   width: min(1080px, calc(100% - 40px));
   margin: 0 auto;
-  padding: 40px 0 72px;
+  /* 人間工学的コンパクト化: ファーストビューに主要操作が収まるよう上下余白を圧縮 */
+  padding: 22px 0 56px;
 }
 
 /* ---------- 起動時の導入アニメーション ----------
@@ -406,9 +408,9 @@ h2 {
 .hero {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 28px;
+  gap: 18px;
   align-items: start;
-  margin-bottom: 28px;
+  margin-bottom: 14px;
   animation: rise 460ms ease both;
 }
 
@@ -1279,8 +1281,8 @@ button.ghost.danger:hover {
 .panel {
   position: relative;
   overflow: hidden;
-  padding: clamp(20px, 3.5vw, 30px);
-  margin-top: 18px;
+  padding: clamp(16px, 2.6vw, 22px);
+  margin-top: 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-xl);
   background:
@@ -1309,7 +1311,7 @@ button.ghost.danger:hover {
   gap: 16px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 22px;
+  margin-bottom: 16px;
 }
 
 /* クイズの進捗バー（復習セッション中のみ）。細い1本で縦幅をほぼ増やさない。 */
@@ -1334,9 +1336,9 @@ button.ghost.danger:hover {
 .step-tabs {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  padding: 8px;
-  margin: 0 0 18px;
+  gap: 6px;
+  padding: 6px;
+  margin: 0 0 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--surface);
@@ -1346,11 +1348,11 @@ button.ghost.danger:hover {
 .step-tab {
   display: inline-flex;
   min-width: 0;
-  min-height: 58px;
+  min-height: 48px; /* タップ領域の推奨44pxは維持したまま圧縮 */
   align-items: center;
   justify-content: center;
-  gap: 0.7rem;
-  padding: 0.7rem 0.85rem;
+  gap: 0.55rem;
+  padding: 0.5rem 0.7rem;
   color: var(--ink);
   text-align: left;
   background: transparent;
@@ -1376,8 +1378,8 @@ button.ghost.danger:hover {
 .step-icon {
   position: relative;
   display: inline-grid;
-  width: 2.2rem;
-  height: 2.2rem;
+  width: 1.9rem;
+  height: 1.9rem;
   flex: none;
   place-items: center;
   border-radius: 12px;
@@ -2403,10 +2405,10 @@ textarea:focus-visible {
 .safe-share-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 14px;
+  gap: 8px 14px;
   align-items: center;
-  margin: 0 0 16px;
-  padding: 12px 14px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
   border-radius: var(--r-md);
@@ -4665,7 +4667,7 @@ body.tutorial-open {
 @media (max-width: 760px) {
   .shell {
     width: calc(100% - 28px);
-    padding-top: 28px;
+    padding-top: 16px;
   }
 
   .hero,
@@ -4881,7 +4883,7 @@ body.tutorial-open {
 @media (max-width: 480px) {
   .shell {
     width: calc(100% - 20px);
-    padding: 22px 0 56px;
+    padding: 14px 0 48px;
   }
 
   .panel {
@@ -4889,7 +4891,7 @@ body.tutorial-open {
   }
 
   h1 {
-    font-size: clamp(1.85rem, 9vw, 2.4rem);
+    font-size: clamp(1.5rem, 7vw, 1.9rem);
   }
 
   .hero-card {
@@ -11271,12 +11273,13 @@ async function connectWordsnapSync(options = {}) {
 
 function startSyncPolling() {
   stopSyncPolling();
-  // 非表示タブで15秒ごとのD1読み取りを続けない。復帰時はvisibilitychangeで
+  // 非表示タブで定期的なD1読み取りを続けない。復帰時はvisibilitychangeで
   // 即時pullしてからポーリングを再開するため、他端末の変更は取りこぼさない。
   if (document.hidden) return;
+  // sinceRev付きGETは変更が無ければ本文なしで返る軽い要求なので、10秒でも負荷は小さい。
   syncState.pollTimer = window.setInterval(() => {
     pullWordsnapState({ silent: true });
-  }, 15000);
+  }, 10000);
 }
 
 function stopSyncPolling() {
@@ -11299,9 +11302,20 @@ function scheduleSyncPush() {
   window.clearTimeout(syncState.retryTimer);
   syncState.retryTimer = 0;
   window.clearTimeout(syncState.pushTimer);
+  // 連続操作（クイズ回答など）はまとめつつ、体感の同期待ちを短くする。
   syncState.pushTimer = window.setTimeout(() => {
+    syncState.pushTimer = 0;
     pushWordsnapState();
-  }, 900);
+  }, 400);
+}
+
+// タブが裏に回る・閉じられる直前に、デバウンス待ちの未送信変更を即座に送る。
+// setTimeout は背面タブで大きく遅延（モバイルでは凍結）されるため、待たずに flush する。
+function flushPendingSyncPush() {
+  if (!syncState.pushTimer) return;
+  window.clearTimeout(syncState.pushTimer);
+  syncState.pushTimer = 0;
+  pushWordsnapState();
 }
 
 function scheduleSyncRetry(requestGen, requestedId, retryAttempt) {
@@ -11509,6 +11523,7 @@ async function forcePullReplace() {
   // マージ・送信につながる）を中断し、保留中の自動pushも破棄する。
   bumpSyncRequestGen();
   window.clearTimeout(syncState.pushTimer);
+  syncState.pushTimer = 0; // 破棄済み。flushPendingSyncPush が誤って送らないようゼロ化
   syncState.pushQueued = false;
   try {
     // サーバー内容で置き換える直前の端末状態を、既存の「元に戻す」へ退避する。
@@ -11738,6 +11753,7 @@ async function issueNewSyncId() {
   // 旧キーへの自動同期を止め、遅れて届く応答が新キーへ混ざらないようにする
   stopSyncPolling();
   window.clearTimeout(syncState.pushTimer);
+  syncState.pushTimer = 0; // 旧キー宛の保留pushを破棄（flush誤発火防止）
   syncState.pushQueued = false;
   bumpSyncRequestGen();
   syncState.id = newId;
@@ -11809,6 +11825,7 @@ async function adoptForeignSyncId(newId) {
   // 元のキーで動いていた自動同期（ポーリング・保留中のpush）を止めてから切り替える
   stopSyncPolling();
   window.clearTimeout(syncState.pushTimer);
+  syncState.pushTimer = 0; // 旧キー宛の保留pushを破棄（flush誤発火防止）
   syncState.pushQueued = false;
   // 進行中の旧キーへのGET/PUTを中断し、遅れて届く応答が新キーへ混ざるのを防ぐ
   bumpSyncRequestGen();
@@ -12122,12 +12139,16 @@ function initWordsnapSync() {
     if (document.hidden) {
       stopSyncPolling();
       stopQuizTimer(); // 背面ではカウントダウンを止める（見えない所で時間切れにしない）
+      // 背面ではタイマーが遅延・凍結されるため、デバウンス待ちの変更は今すぐ送る。
+      flushPendingSyncPush();
       return;
     }
     resetQuizTimerOnResume();
     pullIfConnected();
   });
   window.addEventListener("pageshow", pullIfConnected);
+  // タブを閉じる・別ページへ移る直前の最後の砦（visibilitychangeが来ない環境向け）。
+  window.addEventListener("pagehide", flushPendingSyncPush);
   // オフライン復帰時：オフライン中に解いた進捗（stats・history・streak等）を即サーバーへ反映する。
   // pull で差分があれば pull 内部で push まで行われるため、二重pushを避け、
   // 差分が無かったとき（＝オフライン中の自分の進捗が未送信のとき）だけ明示的に押し込む。
