@@ -6818,6 +6818,10 @@ let personalFactorCache = { at: 0, value: 1 };
 // トグルON時は、前のデータで計算した係数を持ち越さないよう明示的に破棄する（F2）。
 function invalidatePersonalFactorCache() {
   personalFactorCache = { at: 0, value: 1 };
+  // 「今日の目標 X/Y問」の日次カウントも履歴由来。単語帳が丸ごと入れ替わる操作
+  // （JSON置換・同期マージ・同期先切替・復元）では、他端末で解いた分を含めて
+  // 数え直す必要があるため、同じタイミングで破棄する。
+  dailyCountCache = { day: "", count: 0 };
 }
 function personalAccuracyFactorCached() {
   const now = Date.now();
@@ -19596,6 +19600,9 @@ function renderAll() {
   // populateQuizDeckSelect は起動直後の restoreLastQuizSettings が選択肢に依存する
   // ため、パネルの表示状態に関わらず毎回更新しておく（デッキ数件分で十分安価）。
   renderStreakBadge();
+  // 学習カレンダーを開いたまま同期マージが届いた場合も、他端末で解いた分を
+  // その場で数字に反映する（閉じているときは何もしない＝通常コストは増えない）。
+  if (elements.streakPanel && elements.streakPanel.hidden === false) renderStreakCalendar();
   renderDecks();
   populateQuizDeckSelect();
   // 重い描画（一覧のDOM再構築・通信）は全パネルを dirty にして、表示中だけ即時描画
