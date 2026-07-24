@@ -107,12 +107,156 @@ test("roomIdとsecretはgetRandomValuesから指定ビット長で生成する",
     },
   };
   const credential = result.generateV2Credential();
-  assert.deepEqual(Object.keys(credential), ["v", "status", "roomId", "secret"]);
+  assert.deepEqual(Object.keys(credential), ["v", "status", "roomId", "secret", "origin"]);
   assert.equal(credential.v, 2);
   assert.equal(credential.status, "pending");
+  assert.equal(credential.origin, "");
   assert.match(credential.roomId, /^wr_[0-9a-f]{32}$/);
   assert.match(credential.secret, /^wk_[0-9a-f]{60}$/);
   assert.deepEqual(requestedByteLengths, [30, 16]);
+});
+
+test("origin追加前のV2資格情報も有効で、不明として安全側へ正規化する", () => {
+  const result = evaluateRoutes();
+  const base = {
+    v: 2,
+    status: "active",
+    roomId: `wr_${"3".repeat(32)}`,
+    secret: `wk_${"c".repeat(60)}`,
+  };
+  assert.deepEqual(
+    { ...result.normalizeV2Credential(base) },
+    { ...base, origin: "" },
+  );
+  assert.equal(result.normalizeV2Credential({ ...base, origin: "upgrade" }).origin, "upgrade");
+  assert.equal(result.normalizeV2Credential({ ...base, origin: "create" }).origin, "create");
+  assert.equal(result.normalizeV2Credential({ ...base, origin: "invalid" }).origin, "");
+});
+
+test("IndexedDB復元は既存localStorage資格情報を最優先し上書きしない", async () => {
+  const storage = new Map();
+  const local = {
+    v: 2,
+    status: "active",
+    roomId: `wr_${"4".repeat(32)}`,
+    secret: `wk_${"d".repeat(60)}`,
+    origin: "create",
+  };
+  const durable = {
+    v: 2,
+    status: "active",
+    roomId: `wr_${"5".repeat(32)}`,
+    secret: `wk_${"e".repeat(60)}`,
+    origin: "upgrade",
+  };
+  storage.set("wordsnap-sync-credential:v2", JSON.stringify(local));
+  let getCalls = 0;
+  const context = {
+    localStorage: {
+      getItem(key) {
+        return storage.has(key) ? storage.get(key) : null;
+      },
+      setItem(key, value) {
+        storage.set(key, String(value));
+      },
+      removeItem(key) {
+        storage.delete(key);
+      },
+    },
+    idb: {
+      async get() {
+        getCalls += 1;
+        return JSON.stringify(durable);
+      },
+      async set() {
+        return true;
+      },
+      async delete() {
+        return true;
+      },
+    },
+    syncState: { id: "", accessKey: "" },
+    SYNC_V2_CREDENTIAL_KEY: "wordsnap-sync-credential:v2",
+  };
+  vm.runInNewContext(routingFunctionsSource(), context);
+  const restored = await context.recoverV2CredentialFromIdb();
+  assert.equal(restored, false);
+  assert.equal(getCalls, 0);
+  assert.deepEqual(JSON.parse(storage.get("wordsnap-sync-credential:v2")), local);
+});
+
+test("active資格情報の書き込みだけを既存IndexedDBの専用キーへ自動退避する", () => {
+  const result = evaluateRoutes();
+  const backups = [];
+  result.idb = {
+    set(key, value) {
+      backups.push([key, JSON.parse(value)]);
+      return Promise.resolve(true);
+    },
+  };
+  const base = {
+    v: 2,
+    roomId: `wr_${"6".repeat(32)}`,
+    secret: `wk_${"f".repeat(60)}`,
+    origin: "upgrade",
+  };
+  result.writeV2Credential({ ...base, status: "pending" });
+  assert.equal(backups.length, 0);
+  result.writeV2Credential({ ...base, status: "active" });
+  assert.equal(backups.length, 1);
+  assert.equal(backups[0][0], "wordsnap-sync-credential:v2");
+  assert.deepEqual(backups[0][1], { ...base, status: "active" });
+});
+
+test("JSONへの引き継ぎコード同梱はチェックボックスも処理も既定OFF", () => {
+  assert.match(
+    html,
+    /<label id="exportV2CredentialOption" class="settings-check" hidden>[\s\S]*?<input id="exportV2CredentialToggle" type="checkbox" \/>/,
+  );
+  assert.doesNotMatch(
+    html,
+    /<input id="exportV2CredentialToggle"[^>]*\schecked(?:\s|>|=)/,
+  );
+  assert.match(html, /function buildJsonBackupPayload\(includeV2Credential = false\)/);
+  assert.match(
+    html,
+    /const includeV2Credential = elements\.exportV2CredentialToggle\?\.checked === true;/,
+  );
+});
+
+test("V2合流後のインラインUndoは既存undoButtonハンドラを呼び二重実装しない", () => {
+  assert.match(
+    html,
+    /elements\.syncV2UndoButton\?\.addEventListener\("click", \(\) => \{[\s\S]*?elements\.undoButton\?\.click\(\);[\s\S]*?\}\);/,
+  );
+  assert.equal(
+    (html.match(/elements\.undoButton\.addEventListener\("click", performUndo\);/g) || []).length,
+    1,
+  );
+  assert.doesNotMatch(
+    html,
+    /elements\.syncV2UndoButton\?\.addEventListener\("click", performUndo\)/,
+  );
+});
+
+test("normalizeStateはJSONのsyncCredentialV2を学習stateへ取り込まない", () => {
+  const start = html.indexOf("function normalizeState(state)");
+  const end = html.indexOf("function normalizeWord(word)", start);
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(html.slice(start, end), /syncCredentialV2/);
+});
+
+test("JSON資格情報は取得済みremote stateを既存マージで保全してからactive化する", () => {
+  const start = html.indexOf("async function connectImportedV2Credential");
+  const end = html.indexOf("elements.importJsonInput.addEventListener", start);
+  assert.ok(start >= 0 && end > start);
+  const source = html.slice(start, end);
+  const mergeAt = source.indexOf("mergeAppStates(appState, normalizedRemote");
+  const activateAt = source.indexOf("activateV2Credential(credential, data.stateRev)");
+  assert.ok(mergeAt >= 0, "既存mergeAppStatesを使うこと");
+  assert.ok(activateAt > mergeAt, "remote stateのマージ後にactive化すること");
+  assert.match(source, /applyMergedRemoteState\([\s\S]*?sync: false,/);
+  assert.match(source, /if \(needsPush\) await pushWordsnapState\(\);/);
 });
 
 test("upgradeだけは明示したlegacy IDをsyncへ送り、V2値はbodyとヘッダに分離する", () => {
