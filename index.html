@@ -2408,6 +2408,7 @@ textarea:focus-visible {
   margin: 0 0 16px;
   padding: 12px 14px;
   border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
   border-radius: var(--r-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-sm);
@@ -2424,6 +2425,25 @@ textarea:focus-visible {
   flex: none;
 }
 
+/* 開閉トグル: テキスト＋回転するキャレットで「折りたたみ操作」だと分かるようにする。 */
+.safe-share-toggle {
+  gap: 0.4rem;
+}
+
+.safe-share-toggle-caret {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg); /* 展開中: 下向き（閉じられる） */
+  transition: transform 160ms ease;
+  opacity: 0.75;
+}
+
+.safe-share-toggle[aria-expanded="false"] .safe-share-toggle-caret {
+  transform: translateY(2px) rotate(-135deg); /* 最小化中: 上向き（開ける） */
+}
+
 .safe-share-warning {
   flex: 1 1 320px;
   margin: 0;
@@ -2431,6 +2451,22 @@ textarea:focus-visible {
   font-size: 0.8rem;
   font-weight: 700;
   line-height: 1.5;
+}
+
+/* 最小化中だけ表示する一行リマインダー。安全上の注意を完全には消さない。 */
+.safe-share-warning-mini {
+  display: none;
+  flex: 1 1 220px;
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.4;
+  opacity: 0.9;
+}
+
+.safe-share-strip.is-collapsed .safe-share-warning-mini {
+  display: block;
 }
 
 .share-url-warning {
@@ -5067,14 +5103,22 @@ body.tutorial-open {
           <button id="shareToolHeaderButton" type="button">🤝 キーなしで安全に共有</button>
           <button
             id="safeShareToggleButton"
-            class="ghost mini"
+            class="ghost mini safe-share-toggle"
             type="button"
             aria-expanded="true"
             aria-controls="safeShareWarning"
-          >注意を最小化</button>
+            aria-label="共有時の注意事項を最小化"
+          >
+            <span class="safe-share-toggle-label">注意を最小化</span>
+            <span class="safe-share-toggle-caret" aria-hidden="true"></span>
+          </button>
         </div>
         <p id="safeShareWarning" class="safe-share-warning">
           ⚠️ アドレスバーのURLにはあなたの個人キーが含まれます。共有には必ずこのボタンを使ってください。
+        </p>
+        <!-- 最小化中も、キー漏えいという安全上の注意だけは一行で残す（完全には隠さない）。 -->
+        <p id="safeShareWarningMini" class="safe-share-warning-mini">
+          ⚠️ URLに個人キーが含まれます。共有はこのボタンから。
         </p>
       </aside>
 
@@ -8729,6 +8773,7 @@ const elements = {
   downloadToolButton: document.querySelector("#downloadToolButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
   shareToolHeaderButton: document.querySelector("#shareToolHeaderButton"),
+  safeShareStrip: document.querySelector("#safeShareStrip"),
   safeShareWarning: document.querySelector("#safeShareWarning"),
   safeShareToggleButton: document.querySelector("#safeShareToggleButton"),
   showTutorialButton: document.querySelector("#showTutorialButton"),
@@ -21234,10 +21279,17 @@ elements.shareToolHeaderButton?.addEventListener("click", shareTool);
 
 function applySafeShareCollapsed(collapsed) {
   const isCollapsed = Boolean(collapsed);
+  if (elements.safeShareStrip) elements.safeShareStrip.classList.toggle("is-collapsed", isCollapsed);
+  // 完全な警告文はアクセシビリティツリーからも外す。代わりに一行版（mini）をCSSで見せる。
   if (elements.safeShareWarning) elements.safeShareWarning.hidden = isCollapsed;
   if (elements.safeShareToggleButton) {
     elements.safeShareToggleButton.setAttribute("aria-expanded", String(!isCollapsed));
-    elements.safeShareToggleButton.textContent = isCollapsed ? "注意を表示" : "注意を最小化";
+    elements.safeShareToggleButton.setAttribute(
+      "aria-label",
+      isCollapsed ? "共有時の注意事項を表示" : "共有時の注意事項を最小化",
+    );
+    const label = elements.safeShareToggleButton.querySelector(".safe-share-toggle-label");
+    if (label) label.textContent = isCollapsed ? "注意を表示" : "注意を最小化";
   }
 }
 
