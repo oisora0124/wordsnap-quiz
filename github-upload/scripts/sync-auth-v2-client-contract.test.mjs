@@ -16,6 +16,44 @@ function routingFunctionsSource() {
   return html.slice(start, end);
 }
 
+function startupDecisionSource() {
+  const start = html.indexOf("function syncStartupIdentityDecision");
+  const end = html.indexOf("\nfunction initWordsnapSync", start);
+  assert.ok(start >= 0, "起動時identity判定関数が見つかること");
+  assert.ok(end > start, "起動時identity判定関数の終端が見つかること");
+  return html.slice(start, end);
+}
+
+function retireNativeCredentialSource() {
+  const start = html.indexOf("async function retireNativeV2Credential");
+  const end = html.indexOf("\n// 【他人の共有リンク対策】", start);
+  assert.ok(start >= 0, "V2ネイティブ資格情報の退役関数が見つかること");
+  assert.ok(end > start, "V2ネイティブ資格情報の退役関数の終端が見つかること");
+  return html.slice(start, end);
+}
+
+function checkedPersistenceSource() {
+  const start = html.indexOf("async function persistAppStateChecked");
+  const end = html.indexOf("\nfunction defaultState", start);
+  assert.ok(start >= 0, "identity切替用の保存確認関数が見つかること");
+  assert.ok(end > start, "identity切替用の保存確認関数の終端が見つかること");
+  return html.slice(start, end);
+}
+
+function evaluateStartupDecision(identity, idFromUrl = "", storedSyncId = "") {
+  const context = {};
+  vm.runInNewContext(
+    `${startupDecisionSource()}
+     globalThis.__decision = syncStartupIdentityDecision(
+       ${JSON.stringify(identity)},
+       ${JSON.stringify(idFromUrl)},
+       ${JSON.stringify(storedSyncId)}
+     );`,
+    context,
+  );
+  return { ...context.__decision };
+}
+
 function evaluateRoutes() {
   const storage = new Map();
   const context = {
@@ -35,6 +73,7 @@ function evaluateRoutes() {
       accessKey: "legacy-access-key",
     },
     SYNC_V2_CREDENTIAL_KEY: "wordsnap-sync-credential:v2",
+    SYNC_V2_NATIVE_PROVENANCE: "native-default:v1",
   };
   vm.runInNewContext(
     `${routingFunctionsSource()}
@@ -59,6 +98,19 @@ function evaluateRoutes() {
         secret: "wk_${"b".repeat(60)}",
       }));
       globalThis.__active = {
+        route: syncRequestRoute(),
+        headers: syncHeaders(),
+      };
+      syncState.id = "";
+      localStorage.setItem(SYNC_V2_CREDENTIAL_KEY, JSON.stringify({
+        v: 2,
+        status: "active",
+        roomId: "wr_${"7".repeat(32)}",
+        secret: "wk_${"7".repeat(60)}",
+        origin: "create",
+        provenance: SYNC_V2_NATIVE_PROVENANCE,
+      }));
+      globalThis.__native = {
         route: syncRequestRoute(),
         headers: syncHeaders(),
       };`,
@@ -133,6 +185,221 @@ test("origin追加前のV2資格情報も有効で、不明として安全側へ
   assert.equal(result.normalizeV2Credential({ ...base, origin: "invalid" }).origin, "");
 });
 
+test("V2ネイティブ専用印だけを保持し、既存資格情報へはフィールドを追加しない", () => {
+  const result = evaluateRoutes();
+  const base = {
+    v: 2,
+    status: "active",
+    roomId: `wr_${"8".repeat(32)}`,
+    secret: `wk_${"8".repeat(60)}`,
+    origin: "create",
+  };
+  assert.deepEqual(
+    Object.keys(result.normalizeV2Credential(base)),
+    ["v", "status", "roomId", "secret", "origin"],
+    "印のない既存資格情報のキー集合を変えないこと",
+  );
+  assert.equal(
+    result.normalizeV2Credential({
+      ...base,
+      provenance: "native-default:v1",
+    }).provenance,
+    "native-default:v1",
+  );
+  for (const invalid of ["", "create", "native-default:v2", true]) {
+    assert.equal(
+      Object.hasOwn(result.normalizeV2Credential({ ...base, provenance: invalid }), "provenance"),
+      false,
+      `未知の印 ${String(invalid)} を保持しないこと`,
+    );
+  }
+  const generateStart = html.indexOf("function generateV2Credential");
+  const generateEnd = html.indexOf("\nfunction v2TransferCode", generateStart);
+  assert.ok(generateStart >= 0 && generateEnd > generateStart);
+  assert.doesNotMatch(
+    html.slice(generateStart, generateEnd),
+    /provenance|SYNC_V2_NATIVE_PROVENANCE/,
+    "段階2ではV2ネイティブ印を新規生成しないこと",
+  );
+});
+
+test("legacyを持たない専用印付きactive資格情報だけをV2ネイティブidentityにする", () => {
+  const result = evaluateRoutes();
+  assert.equal(result.__native.route.isV2Native, true);
+  assert.equal(result.__native.route.legacyId, "");
+  assert.equal(result.__native.route.expectedSyncId, `wr_${"7".repeat(32)}`);
+  assert.equal(result.__native.route.endpoint, `/api/wordsnap-state?room=wr_${"7".repeat(32)}`);
+
+  const originOnly = {
+    v: 2,
+    status: "active",
+    roomId: `wr_${"9".repeat(32)}`,
+    secret: `wk_${"9".repeat(60)}`,
+    origin: "create",
+  };
+  result.localStorage.setItem("wordsnap-sync-credential:v2", JSON.stringify(originOnly));
+  assert.equal(
+    result.syncRequestRoute().isV2Native,
+    false,
+    "既存Phase 1のorigin:createだけではネイティブ扱いしないこと",
+  );
+
+  const switchedCredential = {
+    v: 2,
+    status: "pending",
+    roomId: `wr_${"6".repeat(32)}`,
+    secret: `wk_${"6".repeat(60)}`,
+    origin: "",
+  };
+  assert.equal(
+    result.preserveV2NativeProvenance(switchedCredential, result.__native.route).provenance,
+    "native-default:v1",
+    "V2ネイティブが別のV2 roomへ合流しても印を失わないこと",
+  );
+  assert.equal(
+    Object.hasOwn(
+      result.preserveV2NativeProvenance(switchedCredential, result.__active.route),
+      "provenance",
+    ),
+    false,
+    "既存legacy+V2の合流へ印を付けないこと",
+  );
+  assert.match(
+    html,
+    /function activateV2Credential\(credential, stateRev\) \{\s*const credentialWithProvenance = preserveV2NativeProvenance\(credential\);/,
+    "全V2 active化経路が印の継承境界を通ること",
+  );
+});
+
+test("V2ネイティブはlegacy自動生成を抑止し、任意の?w=を必ず確認待ちにする", () => {
+  const identity = evaluateRoutes().__native.route;
+  const noUrl = evaluateStartupDecision(identity);
+  assert.equal(noUrl.shouldAutoGenerateLegacy, false);
+  assert.equal(noUrl.foreignSyncId, "");
+  assert.equal(noUrl.legacyId, "");
+
+  const openedLegacy = "ws_foreign-native-link";
+  const withUrl = evaluateStartupDecision(identity, openedLegacy, "");
+  assert.equal(withUrl.shouldAutoGenerateLegacy, false);
+  assert.equal(withUrl.foreignSyncId, openedLegacy);
+  assert.equal(withUrl.shouldStoreUrlId, false);
+  assert.equal(withUrl.legacyId, "");
+});
+
+test("既存3状態はlegacy生成抑止も同一?w=への追加確認も起こさない", () => {
+  const result = evaluateRoutes();
+  for (const [label, captured] of [
+    ["legacyのみ", result.__before],
+    ["legacy+V2 pending", result.__pending],
+    ["legacy+V2 active", result.__active],
+  ]) {
+    assert.equal(captured.route.isV2Native, false, label);
+    const decision = evaluateStartupDecision(
+      captured.route,
+      "legacy-room_42",
+      "legacy-room_42",
+    );
+    assert.equal(decision.shouldAutoGenerateLegacy, false, `${label}: legacyを再生成しない`);
+    assert.equal(decision.foreignSyncId, "", `${label}: 同じ?w=は確認不要`);
+    assert.equal(decision.legacyId, "legacy-room_42", `${label}: 従来legacyを維持`);
+  }
+});
+
+test("V2ネイティブからlegacyへはIDB退役を確認した後だけlocal資格情報を削除する", async () => {
+  const roomId = `wr_${"a".repeat(32)}`;
+  const events = [];
+  let active = true;
+  const context = {
+    SYNC_V2_CREDENTIAL_KEY: "wordsnap-sync-credential:v2",
+    syncRequestRoute() {
+      return { isV2Native: true, roomId };
+    },
+    idb: {
+      async delete() {
+        events.push("idb.delete");
+        return true;
+      },
+      async get() {
+        events.push("idb.get");
+        return null;
+      },
+    },
+    localStorage: {
+      removeItem() {
+        events.push("localStorage.removeItem");
+        active = false;
+      },
+    },
+    getActiveV2Credential() {
+      return active ? { roomId } : null;
+    },
+  };
+  vm.runInNewContext(retireNativeCredentialSource(), context);
+  assert.equal(await context.retireNativeV2Credential(roomId), true);
+  assert.deepEqual(events, ["idb.delete", "idb.get", "localStorage.removeItem"]);
+
+  const failedEvents = [];
+  context.idb.delete = async () => {
+    failedEvents.push("idb.delete");
+    return false;
+  };
+  context.localStorage.removeItem = () => failedEvents.push("localStorage.removeItem");
+  assert.equal(await context.retireNativeV2Credential(roomId), false);
+  assert.deepEqual(failedEvents, ["idb.delete"], "IDB退役失敗時はlocal資格情報を残すこと");
+});
+
+test("native切替先stateはlocalStorageかIndexedDBの保存成功をawaitして確定する", async () => {
+  async function runCheckedPersistence({ localSucceeds, idbSucceeds }) {
+    const warnings = [];
+    const context = {
+      appState: { deletions: [], trash: [], words: [], decks: [] },
+      sanitizeDeletions(value) {
+        return value;
+      },
+      sanitizeTrash(value) {
+        return value;
+      },
+      storageWriteGeneration: 0,
+      localStorage: {
+        setItem() {
+          if (!localSucceeds) throw new Error("local unavailable");
+        },
+      },
+      STORAGE_KEY: "state",
+      idb: {
+        async set() {
+          return idbSucceeds;
+        },
+      },
+      showRuntimeStorageWarning(visible) {
+        warnings.push(visible);
+      },
+      scheduleSyncPush() {
+        throw new Error("sync:falseでは呼ばないこと");
+      },
+    };
+    vm.runInNewContext(checkedPersistenceSource(), context);
+    const saved = await context.persistAppStateChecked({ sync: false });
+    return { saved, warnings };
+  }
+
+  assert.deepEqual(
+    await runCheckedPersistence({ localSucceeds: true, idbSucceeds: false }),
+    { saved: true, warnings: [false] },
+    "localStorage成功なら確定できること",
+  );
+  assert.deepEqual(
+    await runCheckedPersistence({ localSucceeds: false, idbSucceeds: true }),
+    { saved: true, warnings: [false] },
+    "IndexedDB成功なら確定できること",
+  );
+  assert.deepEqual(
+    await runCheckedPersistence({ localSucceeds: false, idbSucceeds: false }),
+    { saved: false, warnings: [true] },
+    "両方失敗ならrollback可能なfalseを返すこと",
+  );
+});
+
 test("IndexedDB復元は既存localStorage資格情報を最優先し上書きしない", async () => {
   const storage = new Map();
   const local = {
@@ -177,6 +444,7 @@ test("IndexedDB復元は既存localStorage資格情報を最優先し上書き�
     },
     syncState: { id: "", accessKey: "" },
     SYNC_V2_CREDENTIAL_KEY: "wordsnap-sync-credential:v2",
+    SYNC_V2_NATIVE_PROVENANCE: "native-default:v1",
   };
   vm.runInNewContext(routingFunctionsSource(), context);
   const restored = await context.recoverV2CredentialFromIdb();
@@ -274,6 +542,70 @@ test("V2の強制上書きと復元送信はforce指定を通す", () => {
   assert.match(
     html,
     /if \(isV2Route && requestOptions\.force === true\) \{\s*endpoint \+= "&force=1";/,
+  );
+});
+
+test("V2ネイティブの文言とlegacy UIはidentityスナップショットだけで出し分ける", () => {
+  const start = html.indexOf("function applySyncIdentityUi");
+  const end = html.indexOf("\nasync function readJsonResponse", start);
+  assert.ok(start >= 0 && end > start, "identity UI関数が見つかること");
+  const source = html.slice(start, end);
+  assert.match(source, /identity = syncRequestRoute\(\)/);
+  assert.match(source, /Boolean\(identity\?\.isV2Native\)/);
+  assert.match(source, /data-sync-identity-ui="legacy"/);
+  assert.match(source, /data-sync-identity-ui="v2-native"/);
+
+  assert.match(
+    html,
+    /<div class="sync-controls" data-sync-identity-ui="legacy">[\s\S]*?id="syncIdInput"[\s\S]*?id="syncKeyToggleButton"[\s\S]*?id="syncCopyLinkButton"[\s\S]*?id="syncPullButton"/,
+    "個人キー入力・表示切替・個人リンクコピー・今すぐ読み込むをlegacy側へ閉じ込めること",
+  );
+  assert.match(
+    html,
+    /id="syncKeySecurityWarning"[\s\S]*?function updateSyncKeySecurityWarning[\s\S]*?syncRequestRoute\(\)\.isV2Native/,
+    "旧形式キー警告をnativeで抑止すること",
+  );
+});
+
+test("V2ネイティブの起動接続とforeign ?w=承諾は単一identityを維持する", () => {
+  assert.match(
+    html,
+    /async function connectWordsnapSync\(options = \{\}\) \{[\s\S]*?syncRequestRoute\(\)\.isV2Native\) return connectV2NativeSync\(options\);/,
+    "空のlegacy入力欄を通らずV2 routeで初回接続すること",
+  );
+  assert.match(
+    html,
+    /async function retireNativeV2Credential\(expectedRoomId\)[\s\S]*?await idb\.delete\(SYNC_V2_CREDENTIAL_KEY\)[\s\S]*?await idb\.get\(SYNC_V2_CREDENTIAL_KEY\)[\s\S]*?localStorage\.removeItem\(SYNC_V2_CREDENTIAL_KEY\)/,
+    "IndexedDBとlocalStorageのV2資格情報を退役させること",
+  );
+  assert.match(
+    html,
+    /elements\.syncSwitchKeepButton\.disabled = true;[\s\S]*?await switchNativeV2ToForeignLegacy\(foreignId, retireRoomId\)[\s\S]*?elements\.syncSwitchKeepButton\.disabled = false;/,
+    "V2退役中はKeep操作との競合を防ぐこと",
+  );
+  const switchStart = html.indexOf("async function switchNativeV2ToForeignLegacy");
+  const switchEnd = html.indexOf("\n// 【他人の共有リンク対策】", switchStart);
+  assert.ok(switchStart >= 0 && switchEnd > switchStart, "native専用legacy切替関数が見つかること");
+  const switchSource = html.slice(switchStart, switchEnd);
+  const preflightAt = switchSource.indexOf("loadForeignLegacyStateForNativeSwitch(foreignId)");
+  const retireAt = switchSource.indexOf("retireNativeV2Credential(expectedRoomId)");
+  const adoptAt = switchSource.indexOf("localStorage.setItem(SYNC_ID_KEY, foreignId)");
+  assert.ok(preflightAt >= 0 && retireAt > preflightAt, "リンク先GET成功後にV2を退役すること");
+  assert.ok(adoptAt > retireAt, "V2退役成功後だけlegacy identityを保存すること");
+  assert.match(
+    html,
+    /async function loadForeignLegacyStateForNativeSwitch[\s\S]*?syncStateExceedsLimits\(data\.state\)/,
+    "先行GETも共通の同期state件数上限を適用すること",
+  );
+  assert.match(
+    switchSource,
+    /const persisted = await persistAppStateChecked\(\{ sync: false \}\);\s*if \(!persisted\) throw/,
+    "切替先stateを耐久保存できた場合だけ成功を確定すること",
+  );
+  assert.match(
+    switchSource,
+    /restoreNativeV2AfterFailedLegacySwitch\([\s\S]*?credential,[\s\S]*?previousRev,[\s\S]*?previousSnapshot/,
+    "適用失敗時は元のV2資格情報とローカルstateを復元すること",
   );
 });
 

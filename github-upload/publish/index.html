@@ -5349,8 +5349,8 @@ body.tutorial-open {
       <!-- 共有の注意は「常時1行＋詳細リンク」。独立した最小化ボタンは共有ボタンと
            同格のアクションに見えて紛らわしかったため廃止した。 -->
       <aside id="safeShareStrip" class="safe-share-strip" aria-label="安全な共有">
-        <button id="shareToolHeaderButton" type="button">🤝 キーなしで安全に共有</button>
-        <p class="safe-share-warning-mini">
+        <button id="shareToolHeaderButton" type="button"><span data-sync-identity-ui="legacy">🤝 キーなしで安全に共有</span><span data-sync-identity-ui="v2-native" hidden>🤝 このツールを他の人に共有</span></button>
+        <p class="safe-share-warning-mini" data-sync-identity-ui="legacy">
           <span>⚠️ URLに個人キーが含まれます。共有はこのボタンから。</span>
           <button
             id="safeShareToggleButton"
@@ -5363,6 +5363,9 @@ body.tutorial-open {
         <p id="safeShareWarning" class="safe-share-warning" hidden>
           このページのURL（?w=…）を知っている人は、あなたの単語帳と学習記録をすべて読み書きできます。
           URLをそのままコピーして送らず、キーを含まないリンクを作る上のボタンから共有してください。
+        </p>
+        <p class="safe-share-warning-mini" data-sync-identity-ui="v2-native" hidden>
+          このURLに引き継ぎコードは含まれません。共有相手は空の状態から始まります。
         </p>
       </aside>
 
@@ -5402,9 +5405,15 @@ body.tutorial-open {
       <!-- 【他人の共有リンク対策】URLの ?w= がこの端末の保存済みキーと異なるときだけ表示。
            確認するまでリンク先へは何も送信しない（詳細は showSyncSwitchConfirm）。 -->
       <div id="syncSwitchBanner" class="sync-switch-banner" role="alertdialog" aria-live="polite" hidden>
-        <p class="sync-switch-text">
+        <p class="sync-switch-text" data-sync-identity-ui="legacy">
           <strong>別の共有リンクを開いています。</strong>このリンクのデータに切り替えますか？<br />
           切り替えるまで、この端末の現在の単語がこのリンク先へ送信されることはありません。
+        </p>
+        <p class="sync-switch-text" data-sync-identity-ui="v2-native" hidden>
+          <strong>個人リンク（旧方式）を開いています。</strong>現在のV2同期を終了し、このリンクのデータへ切り替えますか？<br />
+          承諾すると、この端末に保存された現在のV2引き継ぎ情報を削除してから切り替えます。
+          <strong>いまの引き継ぎコードを控えていない場合、切り替え前のデータへ戻れなくなります。</strong>
+          確認するまでリンク先へは何も送信しません。
         </p>
         <div class="sync-switch-actions">
           <button id="syncSwitchAdoptButton" class="secondary danger" type="button">このリンクのデータに切り替える</button>
@@ -5965,7 +5974,8 @@ accurate 正確な"
                 <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
                 <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲選択し、選んだ単語をまとめて出題・削除できます。</li>
                 <li><strong>設定</strong>：「JSONバックアップ」から単語・成績・単語帳を書き出せます。</li>
-                <li><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
+                <li data-sync-identity-ui="legacy"><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
+                <li data-sync-identity-ui="v2-native" hidden><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末では、設定の「新方式（V2）の同期と引き継ぎ」にある引き継ぎコードで合流します。</li>
               </ol>
               <p class="usage-tip">💡 Safariで開いて「ホーム画面に追加」しておくと、データが消えにくく、ワンタップで起動できます。</p>
               <div class="settings-row">
@@ -5976,13 +5986,17 @@ accurate 正確な"
 
           <details class="settings-section" data-settings-section="sync">
             <summary>🔄 データの保存・引き継ぎ</summary>
-            <div class="settings-section-body" aria-labelledby="syncTitle">
+            <div id="syncSettingsBody" class="settings-section-body" aria-labelledby="syncTitle">
               <!-- 要点を先に2行で示し、長い説明は「詳しい説明」に畳む（文言整理のみ・機能は不変） -->
-              <p id="syncTitle">
+              <p id="syncTitle" data-sync-identity-ui="legacy">
                 <strong>単語と成績は自動でサーバー保存されます。</strong><br />
                 別の端末では「個人リンク」を開くと引き継げます。
               </p>
-              <details class="sync-detail-more">
+              <p id="syncNativeTitle" data-sync-identity-ui="v2-native" hidden>
+                <strong>単語と成績は自動でサーバー保存されます。</strong><br />
+                別の端末では「引き継ぎコード」を使うと同じデータに合流できます。
+              </p>
+              <details class="sync-detail-more" data-sync-identity-ui="legacy">
                 <summary>詳しい説明</summary>
                 <p>追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。新しい個人キーはブラウザの安全な乱数機能で自動発行されます。</p>
                 <ol class="sync-steps">
@@ -5990,7 +6004,15 @@ accurate 正確な"
                   <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。リンクを開けないときは、下の「<strong>別の端末と同じキーで同期</strong>」にリンクやキーを貼り付けても同じことができます。</li>
                 </ol>
               </details>
-              <div class="sync-controls">
+              <details class="sync-detail-more" data-sync-identity-ui="v2-native" hidden>
+                <summary>詳しい説明</summary>
+                <p>追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。秘密の引き継ぎコードで他の人のデータと分離されています。</p>
+                <ol class="sync-steps">
+                  <li><strong>引き継ぎコードを保管する</strong>：サイトデータ消去や機種変更に備え、下のコードを「テキストで保存」するか、JSONバックアップへ含めて安全な場所へ保管してください。</li>
+                  <li><strong>別の端末で続ける</strong>：別端末の「別の端末で引き継ぎコードを使う」へコードを貼り付けると、同じデータに合流できます。コードは自分だけの秘密にしてください。</li>
+                </ol>
+              </details>
+              <div class="sync-controls" data-sync-identity-ui="legacy">
                 <label class="sync-field">
                   あなたの個人キー
                   <span class="sync-key-row">
@@ -6005,11 +6027,11 @@ accurate 正確な"
               <p id="syncKeySecurityWarning" class="sync-status is-error" role="alert" hidden>
                 この個人キーは旧形式です。同期はそのまま使えますが、短いキーは推測されやすいため、JSONバックアップ後に「新しい個人キーを発行」で安全な形式へ移すことを推奨します。
               </p>
-              <p class="settings-desc">
+              <p class="settings-desc" data-sync-identity-ui="legacy">
                 <strong>個人リンクをコピー</strong>＝このページのリンクをコピー（別端末で開くと同じデータに）。
                 <strong>今すぐ読み込む</strong>＝サーバーの最新をこの端末に取り込み。どちらも現在の単語は消えません。
               </p>
-              <p class="settings-desc">
+              <p class="settings-desc" data-sync-identity-ui="legacy">
                 <strong>新しい個人キーを発行</strong>＝キーが他人に知られたときに使います。
                 今の単語と成績はそのまま新しいキーへ引き継がれ、消えません。ただし
                 <strong>古いリンクを知っている人は、切り替え時点までのデータを引き続き見られます</strong>
@@ -6020,18 +6042,22 @@ accurate 正確な"
               <details id="syncV2Section" class="sync-fix">
                 <summary>新方式（V2）の同期と引き継ぎ</summary>
                 <div class="sync-fix-body sync-v2-panel">
-                  <h4>秘密をURLに載せない新しい同期方式</h4>
-                  <p>
+                  <h4 data-sync-identity-ui="legacy">秘密をURLに載せない新しい同期方式</h4>
+                  <p data-sync-identity-ui="legacy">
                     現在の個人キーのデータを新方式へ移行するか、新しい保存先を新方式で発行できます。
                     既定の同期方式はこれまでどおりです。
                   </p>
-                  <p>
+                  <p data-sync-identity-ui="legacy">
                     「新方式へ移行」は引き継ぎ方法を追加する操作で、漏れた個人キーを無効化するものではありません。
                     個人キーを知られた可能性がある場合は、上の「新しい個人キーを発行」を使ってください。
                   </p>
-                  <div class="sync-v2-actions">
+                  <div class="sync-v2-actions" data-sync-identity-ui="legacy">
                     <button id="syncV2UpgradeButton" class="secondary" type="button">新方式へ移行</button>
                     <button id="syncV2CreateButton" class="ghost" type="button">新方式（V2）で発行</button>
+                  </div>
+                  <div data-sync-identity-ui="v2-native" hidden>
+                    <h4>引き継ぎコードで他の端末と合流</h4>
+                    <p>この端末は、秘密をURLに載せないV2方式で同期しています。下のコードを安全に保管し、別の端末で同じデータへ合流するときに使ってください。</p>
                   </div>
                   <div id="syncV2CredentialPanel" class="sync-v2-code-panel" hidden>
                     <p><strong>引き継ぎコード</strong></p>
@@ -6074,15 +6100,18 @@ accurate 正確な"
               </details>
               <div class="share-tool">
                 <button id="shareToolButton" type="button">🤝 このツールを他の人に共有</button>
-                <p class="share-url-warning">
+                <p class="share-url-warning" data-sync-identity-ui="legacy">
                   ⚠️ アドレスバーのURLにはあなたの個人キーが含まれます。共有には必ずこのボタンを使ってください。
                 </p>
-                <p class="settings-desc">
+                <p class="settings-desc" data-sync-identity-ui="legacy">
                   相手は<strong>空の状態</strong>から始まります。あなたの単語データは渡りません
                   （個人キーの付かない“共有用リンク”をコピー／共有します）。
                 </p>
+                <p class="settings-desc" data-sync-identity-ui="v2-native" hidden>
+                  引き継ぎコードを含まない共有用リンクをコピー／共有します。相手は<strong>空の状態</strong>から始まり、あなたの単語データは渡りません。
+                </p>
               </div>
-              <details class="sync-fix">
+              <details class="sync-fix" data-sync-identity-ui="legacy">
                 <summary>別の端末と同じキーで同期（キーを貼り付け）</summary>
                 <div class="sync-fix-body">
                   <p>
@@ -6111,9 +6140,12 @@ accurate 正確な"
               <details class="sync-fix">
                 <summary>端末ごとに単語が違うとき（手動で揃える）</summary>
                 <div class="sync-fix-body">
-                  <p>
+                  <p data-sync-identity-ui="legacy">
                     同じ個人リンクなのに端末で内容が食い違うときは、<strong>どちらかを「正しい方」に決めて</strong>揃えます。
                     （例：片方で削除した単語が、もう片方から戻ってきてしまう場合など）
+                  </p>
+                  <p data-sync-identity-ui="v2-native" hidden>
+                    同じ引き継ぎコードで合流した端末の内容が食い違うときは、<strong>どちらかを「正しい方」に決めて</strong>揃えます。
                   </p>
                   <div class="sync-fix-actions">
                     <button id="syncForcePushButton" class="secondary" type="button">この端末を正にする（送信）</button>
@@ -6160,12 +6192,16 @@ accurate 正確な"
             <summary>🔒 データの保存場所と削除について</summary>
             <div class="settings-section-body">
               <ul class="usage-steps">
-                <li>単語と成績は、このアプリ専用のサーバー領域に<strong>あなたの個人キー</strong>と紐づけて保存されます。他の人のデータとは分離されており、キーを知らない人には見えません。</li>
-                <li>逆に、<strong>個人キー（＝個人リンク）を知っている人はデータを読み書きできます</strong>。「個人リンクをコピー」で得られるリンクにはこのキーが含まれるため、他人に教えたり公開の場に貼ったりしないでください。</li>
+                <li data-sync-identity-ui="legacy">単語と成績は、このアプリ専用のサーバー領域に<strong>あなたの個人キー</strong>と紐づけて保存されます。他の人のデータとは分離されており、キーを知らない人には見えません。</li>
+                <li data-sync-identity-ui="legacy">逆に、<strong>個人キー（＝個人リンク）を知っている人はデータを読み書きできます</strong>。「個人リンクをコピー」で得られるリンクにはこのキーが含まれるため、他人に教えたり公開の場に貼ったりしないでください。</li>
+                <li data-sync-identity-ui="v2-native" hidden>単語と成績は、このアプリ専用のV2サーバー領域に保存されます。他の人のデータとは分離され、秘密の引き継ぎコードで保護されます。</li>
+                <li data-sync-identity-ui="v2-native" hidden><strong>引き継ぎコードを知っている人はデータを読み書きできます</strong>。コードはURLには含まれませんが、他人に教えたり公開の場に貼ったりしないでください。</li>
                 <li><strong>外部辞書への通信：</strong>保存一覧で未判定のCEFR・品詞を補う際は英単語だけをDatamuseへ送ります。「詳しく」で辞書情報を開いた際は英単語をDatamuse・dictionaryapi.devへ、取得した英文の和訳をGoogle翻訳・MyMemoryへ送る場合があります。個人キー・成績・単語帳全体はこれらのサービスへ送りません。</li>
                 <li><strong>例文問題の外部通信：</strong>「出さない」では新しい例文を作るための通信はしません。「一部」「全部」または「例文で解く」で新規生成が必要な場合は、開始前の確認後に対象の単語と意味を辞書APIへ、APIキー設定時は選択したAIサービスへ直接送ります。APIキーはWordBankのサーバーへは送りません。</li>
-                <li>全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこの個人キーで保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
-                <li>万一、個人キーが他人に知られてしまったら：①「JSONを書き出す」で単語データを保存 → ②この端末のブラウザデータ（サイトデータ）を消してから、個人キーの付いていない新しいリンクで開き直す（新しい個人キーが自動発行されます）→ ③「JSONを読み込む」で単語を戻す、の順で新しいキーに引っ越せます。</li>
+                <li data-sync-identity-ui="legacy">全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこの個人キーで保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
+                <li data-sync-identity-ui="legacy">万一、個人キーが他人に知られてしまったら：①「JSONを書き出す」で単語データを保存 → ②この端末のブラウザデータ（サイトデータ）を消してから、個人キーの付いていない新しいリンクで開き直す（新しい個人キーが自動発行されます）→ ③「JSONを読み込む」で単語を戻す、の順で新しいキーに引っ越せます。</li>
+                <li data-sync-identity-ui="v2-native" hidden>全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこのV2保存先で保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
+                <li data-sync-identity-ui="v2-native" hidden>万一、引き継ぎコードが他人に知られてしまったら、「JSONを書き出す」で単語データを保存し、安全な新しい保存先へ移すまでコードを共有しないでください。</li>
               </ul>
               <p class="settings-desc">品質改善のため、匿名の利用回数とエラー情報を送信します（単語の内容・個人キーは含まれません）。</p>
               <label class="settings-check">
@@ -9417,6 +9453,9 @@ const SYNC_ID_KEY = "wordsnap-sync-id:v1";
 const SYNC_ACCESS_KEY = "wordsnap-sync-access-key:v1";
 // V2資格情報はlegacyのID・アクセスキーと混ぜない。これがshadow room防止の境界。
 const SYNC_V2_CREDENTIAL_KEY = "wordsnap-sync-credential:v2";
+// 段階5の「新規ユーザーをV2で自動発行」だけが付与する専用印。
+// origin:"create" は既存Phase 1の手動発行にも使われるため、ネイティブ判定には使わない。
+const SYNC_V2_NATIVE_PROVENANCE = "native-default:v1";
 const STEP_IDS = ["import", "candidates", "quiz", "library", "settings"];
 
 // ===== 取り込み上限（JSON・画像の上限はここに集約する） =====
@@ -10703,6 +10742,34 @@ function persistAppState(options = {}) {
   if (options.sync !== false) scheduleSyncPush();
 }
 
+// identity切替では、切替先stateの耐久保存を確認してから旧資格情報の破棄を確定する。
+// 通常保存のタイミングや送信挙動は変えず、native→legacy切替だけがこのawait可能版を使う。
+async function persistAppStateChecked(options = {}) {
+  appState.deletions = sanitizeDeletions(appState.deletions, Date.now());
+  appState.trash = sanitizeTrash(appState.trash, Date.now());
+  appState.savedAt = Date.now();
+  const json = JSON.stringify(appState);
+  const writeGeneration = ++storageWriteGeneration;
+  let localSaved = false;
+  try {
+    localStorage.setItem(STORAGE_KEY, json);
+    localSaved = true;
+  } catch {
+    // IndexedDB側の完了を待って、両方失敗かを下で確定する。
+  }
+  let idbSaved = false;
+  try {
+    idbSaved = (await idb.set(STORAGE_KEY, json)) === true;
+  } catch {
+    idbSaved = false;
+  }
+  if (writeGeneration === storageWriteGeneration) {
+    showRuntimeStorageWarning(!localSaved && !idbSaved);
+  }
+  if (options.sync !== false) scheduleSyncPush();
+  return localSaved || idbSaved;
+}
+
 function defaultState() {
   return {
     learningSchemaVersion: LEARNING_SCHEMA_VERSION,
@@ -11185,6 +11252,9 @@ function normalizeV2Credential(value) {
   // origin追加前の既存レコードは空文字（不明）としてそのまま有効にする。
   // 不正な値も安全側の「不明」へ落とし、強い警告を表示する。
   const origin = value.origin === "upgrade" || value.origin === "create" ? value.origin : "";
+  // 未知の値は保持しない。既存資格情報にはフィールド自体を追加せず、保存内容を不変にする。
+  const provenance =
+    value.provenance === SYNC_V2_NATIVE_PROVENANCE ? SYNC_V2_NATIVE_PROVENANCE : "";
   if (
     value.v !== 2 ||
     !status ||
@@ -11193,7 +11263,14 @@ function normalizeV2Credential(value) {
   ) {
     return null;
   }
-  return { v: 2, status, roomId, secret, origin };
+  return {
+    v: 2,
+    status,
+    roomId,
+    secret,
+    origin,
+    ...(provenance ? { provenance } : {}),
+  };
 }
 
 function readV2Credential() {
@@ -11238,6 +11315,15 @@ function removePendingV2Credential(expectedRoomId = "") {
 function getActiveV2Credential() {
   const credential = readV2Credential();
   return credential?.status === "active" ? credential : null;
+}
+
+function hasV2NativeProvenance(credential) {
+  return credential?.provenance === SYNC_V2_NATIVE_PROVENANCE;
+}
+
+function preserveV2NativeProvenance(credential, identity = syncRequestRoute()) {
+  if (!identity?.isV2Native || hasV2NativeProvenance(credential)) return credential;
+  return { ...credential, provenance: SYNC_V2_NATIVE_PROVENANCE };
 }
 
 function generateRandomHex(byteLength) {
@@ -11320,6 +11406,7 @@ function syncRequestRoute() {
   // と同じlegacy経路を、下のlegacyIdスナップショットから組み立てる。
   const v2Credential = getActiveV2Credential();
   if (v2Credential) {
+    const isV2Native = !legacyId && hasV2NativeProvenance(v2Credential);
     return {
       kind: "v2",
       legacyId,
@@ -11328,6 +11415,7 @@ function syncRequestRoute() {
       expectedSyncId: v2Credential.roomId,
       secret: v2Credential.secret,
       isV2: true,
+      isV2Native,
     };
   }
   return {
@@ -11338,6 +11426,7 @@ function syncRequestRoute() {
     expectedSyncId: legacyId,
     secret: syncState.accessKey,
     isV2: false,
+    isV2Native: false,
   };
 }
 
@@ -11683,6 +11772,31 @@ function renderV2CredentialUi() {
   if (elements.syncV2CreateButton) elements.syncV2CreateButton.disabled = syncState.v2Busy || Boolean(active);
 }
 
+function applySyncIdentityUi(identity = syncRequestRoute()) {
+  const isV2Native = Boolean(identity?.isV2Native);
+  document.querySelectorAll('[data-sync-identity-ui="legacy"]').forEach((element) => {
+    element.hidden = isV2Native;
+  });
+  document.querySelectorAll('[data-sync-identity-ui="v2-native"]').forEach((element) => {
+    element.hidden = !isV2Native;
+  });
+  const syncBody = document.querySelector("#syncSettingsBody");
+  if (syncBody) {
+    syncBody.setAttribute("aria-labelledby", isV2Native ? "syncNativeTitle" : "syncTitle");
+  }
+  if (elements.syncV2Section && isV2Native) elements.syncV2Section.open = true;
+  if (elements.syncKeySecurityWarning && isV2Native) {
+    elements.syncKeySecurityWarning.hidden = true;
+  }
+  if (elements.safeShareWarning) {
+    if (isV2Native) {
+      elements.safeShareWarning.hidden = true;
+    } else if (typeof applySafeShareCollapsed === "function") {
+      applySafeShareCollapsed(safeShareCollapsed);
+    }
+  }
+}
+
 async function readJsonResponse(response) {
   return await response.json().catch(() => ({}));
 }
@@ -11702,7 +11816,8 @@ async function v2Fetch(url, options) {
 }
 
 function activateV2Credential(credential, stateRev) {
-  const active = writeV2Credential({ ...credential, status: "active" });
+  const credentialWithProvenance = preserveV2NativeProvenance(credential);
+  const active = writeV2Credential({ ...credentialWithProvenance, status: "active" });
   // 永続化に成功した後でだけ通常通信をV2へ切り替える。先に切り替えると、
   // localStorage失敗時に再読込後のlegacy経路と食い違うため、この順序を固定する。
   stopSyncPolling();
@@ -11710,6 +11825,7 @@ function activateV2Credential(credential, stateRev) {
   syncState.rev = Math.max(0, Number(stateRev) || 0);
   syncState.connected = true;
   renderV2CredentialUi();
+  applySyncIdentityUi(syncRequestRoute());
   if (syncServerAvailable()) startSyncPolling();
   updateSyncBadge();
   return active;
@@ -12436,8 +12552,62 @@ function applyMergedRemoteState(remoteState, suppliedOptions) {
   return changed;
 }
 
+async function connectV2NativeSync() {
+  const identity = syncRequestRoute();
+  if (!identity.isV2Native || !identity.expectedSyncId) return;
+  if (!syncServerAvailable()) {
+    syncState.connected = false;
+    setSyncStatus("同期には https のリンクから開く必要があります。file:// では端末間同期できません。", "error");
+    return;
+  }
+
+  const requestGen = syncState.requestGen;
+  const requestedId = identity.expectedSyncId;
+  setSyncBusy(true);
+  setSyncStatus("同期サーバーへ接続しています…");
+  try {
+    const remote = await syncRequest("GET");
+    const currentIdentity = syncRequestRoute();
+    if (
+      requestGen !== syncState.requestGen ||
+      requestedId !== currentIdentity.expectedSyncId ||
+      !currentIdentity.isV2Native
+    ) {
+      return;
+    }
+    syncState.rev = Number(remote.stateRev) || 0;
+    syncState.connected = true;
+    let needsPush = !remote.state;
+    if (remote.state) {
+      const localSignature = stateSignature(appState);
+      const normalizedRemote = normalizeState(remote.state);
+      const merged = mergeAppStates(appState, normalizedRemote, { normalized: true });
+      const mergedSignature = stateSignature(merged);
+      needsPush = mergedSignature !== stateSignature(normalizedRemote);
+      applyMergedRemoteState(remote.state, {
+        merged,
+        beforeSignature: localSignature,
+        mergedSignature,
+      });
+    }
+    startSyncPolling();
+    if (needsPush) {
+      await pushWordsnapState({ force: true });
+    } else {
+      setSyncStatus("✓ サーバーに保存済み（機種変更に備え、引き継ぎコードまたはJSONを安全に保管してください）", "live");
+    }
+  } catch (error) {
+    if (isStaleSyncError(error)) return;
+    syncState.connected = false;
+    setSyncStatus(error.message || "同期できませんでした。", "error");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
 async function connectWordsnapSync(options = {}) {
   if (!elements.syncIdInput) return;
+  if (syncRequestRoute().isV2Native) return connectV2NativeSync(options);
   const id = cleanSyncId(elements.syncIdInput.value);
   if (!id) {
     setSyncStatus("同期IDを入力してください。英数字・ハイフン・アンダーバーが使えます。", "error");
@@ -12926,6 +13096,10 @@ function isModernPrivateKey(id) {
 
 function updateSyncKeySecurityWarning(id = syncRequestRoute().legacyId) {
   if (!elements.syncKeySecurityWarning) return;
+  if (syncRequestRoute().isV2Native) {
+    elements.syncKeySecurityWarning.hidden = true;
+    return;
+  }
   elements.syncKeySecurityWarning.hidden = !id || isModernPrivateKey(id);
 }
 
@@ -12946,22 +13120,227 @@ function rememberSyncIdInUrl(id) {
   }
 }
 
+function removeSyncIdFromUrl() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("w");
+    url.searchParams.delete("wordsnap");
+    url.searchParams.delete("syncId");
+    window.history.replaceState(null, "", url);
+  } catch {
+    /* URL書き換えに失敗してもV2の通常同期は継続できる */
+  }
+}
+
+// localStorageだけ消すとIndexedDBミラーから復元され、legacyとV2が暗黙に併存する。
+// 先にミラーを消し、両方の削除を確認できた場合だけlegacyへの切り替えを許可する。
+async function retireNativeV2Credential(expectedRoomId) {
+  const identity = syncRequestRoute();
+  if (!identity.isV2Native || identity.roomId !== expectedRoomId) return false;
+  try {
+    const deleted = await idb.delete(SYNC_V2_CREDENTIAL_KEY);
+    if (deleted === false) return false;
+    if ((await idb.get(SYNC_V2_CREDENTIAL_KEY)) != null) return false;
+    localStorage.removeItem(SYNC_V2_CREDENTIAL_KEY);
+    return getActiveV2Credential() === null;
+  } catch {
+    return false;
+  }
+}
+
+async function loadForeignLegacyStateForNativeSwitch(foreignId) {
+  const headers = { "Content-Type": "application/json" };
+  if (syncState.accessKey) headers["x-room-key"] = syncState.accessKey;
+  const response = await v2Fetch(legacySyncEndpoint(foreignId), {
+    method: "GET",
+    cache: "no-store",
+    headers,
+  });
+  const data = await readJsonResponse(response);
+  if (
+    response.status !== 200 ||
+    !validSyncGetResponse(data, null, foreignId) ||
+    syncStateExceedsLimits(data.state)
+  ) {
+    const error = new Error(
+      response.status === 403
+        ? "リンク先のデータを確認できませんでした。リンクを確認してください。"
+        : "リンク先のデータを安全に読み込めないため、切り替えを中止しました。",
+    );
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+async function restoreNativeV2AfterFailedLegacySwitch(
+  credential,
+  previousRev,
+  previousSnapshot,
+) {
+  try {
+    localStorage.removeItem(SYNC_ID_KEY);
+    syncState.id = "";
+    writeV2Credential(credential);
+    await idb.set(SYNC_V2_CREDENTIAL_KEY, JSON.stringify(credential));
+    syncState.rev = previousRev;
+    syncState.connected = true;
+    syncState.applyingRemote = true;
+    try {
+      appState = normalizeState(previousSnapshot);
+      persistAppState();
+    } finally {
+      syncState.applyingRemote = false;
+    }
+    renderV2CredentialUi();
+    applySyncIdentityUi(syncRequestRoute());
+    renderAll();
+    removeSyncIdFromUrl();
+    if (syncServerAvailable()) startSyncPolling();
+    return true;
+  } catch {
+    syncState.applyingRemote = false;
+    return false;
+  }
+}
+
+// nativeからlegacyへ切り替える場合だけ、先にリンク先の正常応答を確認する。
+// V2資格情報を退役させた後は取得済みstateを適用するため、通信失敗で旧V2だけ失う状態を作らない。
+async function switchNativeV2ToForeignLegacy(foreignId, expectedRoomId) {
+  const credential = getActiveV2Credential();
+  if (
+    !credential ||
+    !hasV2NativeProvenance(credential) ||
+    credential.roomId !== expectedRoomId
+  ) {
+    return false;
+  }
+
+  let remote;
+  setSyncBusy(true);
+  try {
+    setSyncStatus("リンク先のデータを安全に確認しています…");
+    remote = await loadForeignLegacyStateForNativeSwitch(foreignId);
+  } catch (error) {
+    setSyncBusy(false);
+    setSyncStatus(error.message || "リンク先を確認できないため、切り替えを中止しました。", "error");
+    return false;
+  }
+
+  const previousRev = syncState.rev;
+  let previousSnapshot;
+  try {
+    previousSnapshot = snapshotState();
+  } catch {
+    setSyncBusy(false);
+    setSyncStatus("切り替え前のデータを保護できないため、切り替えを中止しました。", "error");
+    return false;
+  }
+  const previousWordCount = previousSnapshot.words.length;
+  stopSyncPolling();
+  bumpSyncRequestGen();
+
+  const retired = await retireNativeV2Credential(expectedRoomId);
+  if (!retired) {
+    // IDBだけ削除できたケースも、activeなlocal資格情報を救済先へ戻してから中止する。
+    try {
+      await idb.set(SYNC_V2_CREDENTIAL_KEY, JSON.stringify(credential));
+    } catch {
+      // localStorageのactive資格情報は残っているため、このタブのV2同期は継続できる。
+    }
+    if (syncServerAvailable()) startSyncPolling();
+    setSyncBusy(false);
+    setSyncStatus(
+      "現在のV2引き継ぎ情報を安全に解除できなかったため、切り替えを中止しました。",
+      "error",
+    );
+    return false;
+  }
+
+  try {
+    // ここから最初のawaitまでは、永続identityとメモリidentityを一続きに切り替える。
+    localStorage.setItem(SYNC_ID_KEY, foreignId);
+    syncState.id = foreignId;
+    syncState.rev = Number(remote.stateRev) || 0;
+    syncState.connected = true;
+    if (elements.syncIdInput) elements.syncIdInput.value = foreignId;
+    rememberSyncIdInUrl(foreignId);
+
+    syncState.applyingRemote = true;
+    try {
+      appState = normalizeState(remote.state || defaultState());
+      invalidatePersonalFactorCache();
+      currentQuiz = null;
+      selectedIds.clear();
+      const persisted = await persistAppStateChecked({ sync: false });
+      if (!persisted) throw new Error("切り替え先のデータを端末へ保存できませんでした。");
+    } finally {
+      syncState.applyingRemote = false;
+    }
+    renderV2CredentialUi();
+    applySyncIdentityUi(syncRequestRoute());
+    renderAll();
+    startSyncPolling();
+    setV2Status("V2引き継ぎ情報をこの端末から削除しました。");
+    setSyncStatus(`✓ このキーのデータに切り替えました（${appState.words.length}語）。`, "live");
+    if (previousWordCount > 0) {
+      showSyncMergeOffer({
+        snapshot: previousSnapshot,
+        wordCount: previousWordCount,
+        forId: foreignId,
+        gen: syncState.requestGen,
+      });
+    }
+    return true;
+  } catch {
+    const restored = await restoreNativeV2AfterFailedLegacySwitch(
+      credential,
+      previousRev,
+      previousSnapshot,
+    );
+    setSyncStatus(
+      restored
+        ? "切り替えを完了できなかったため、元のV2同期へ戻しました。"
+        : "切り替えを完了できませんでした。引き継ぎコードを使って再接続してください。",
+      "error",
+    );
+    return false;
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
 // 【他人の共有リンク対策】URLの ?w= が保存済みキーと異なるときに出す確認バナー。
 // window.confirm はiOSのホーム画面起動で固まるため、非ブロッキングのバナーで確認する。
 // 確認するまでは元のキーのまま同期し、リンク先のキーへは一切送信しない。
 function showSyncSwitchConfirm(foreignId, ownId) {
   const banner = elements.syncSwitchBanner;
   if (!banner) return;
+  const nativeIdentity = syncRequestRoute();
+  const retireRoomId = nativeIdentity.isV2Native ? nativeIdentity.roomId : "";
   banner.hidden = false;
-  elements.syncSwitchAdoptButton?.addEventListener("click", () => {
+  elements.syncSwitchAdoptButton?.addEventListener("click", async () => {
     // ローカル表示をリンク先の内容で置き換える破壊的操作なので、2段階タップで確定する
     if (!armDangerButton(elements.syncSwitchAdoptButton, "もう一度押すと切り替え")) return;
+    if (retireRoomId) {
+      elements.syncSwitchAdoptButton.disabled = true;
+      if (elements.syncSwitchKeepButton) elements.syncSwitchKeepButton.disabled = true;
+      const switched = await switchNativeV2ToForeignLegacy(foreignId, retireRoomId);
+      elements.syncSwitchAdoptButton.disabled = false;
+      if (elements.syncSwitchKeepButton) elements.syncSwitchKeepButton.disabled = false;
+      if (!switched) return;
+    } else {
+      await adoptForeignSyncId(foreignId);
+    }
     banner.hidden = true;
-    adoptForeignSyncId(foreignId);
   });
   elements.syncSwitchKeepButton?.addEventListener("click", () => {
     banner.hidden = true;
-    rememberSyncIdInUrl(ownId); // URLを自分のキーに戻す
+    if (retireRoomId) {
+      removeSyncIdFromUrl();
+    } else {
+      rememberSyncIdInUrl(ownId); // URLを自分のキーに戻す
+    }
     setSyncStatus("元のデータのまま使います（開いたリンクへは何も送信していません）。");
   });
 }
@@ -13071,6 +13450,7 @@ async function adoptForeignSyncId(newId) {
   syncState.connected = false;
   localStorage.setItem(SYNC_ID_KEY, newId);
   if (elements.syncIdInput) elements.syncIdInput.value = newId;
+  applySyncIdentityUi(syncRequestRoute());
   rememberSyncIdInUrl(newId);
   if (!syncServerAvailable()) {
     setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
@@ -13199,6 +13579,28 @@ function extractSyncIdFromJoinInput(rawValue) {
   }
 }
 
+// 起動時のlegacy採用・自動生成・確認要否を、単一のidentityスナップショットから決める。
+// V2ネイティブではURLの ?w= を常にforeign扱いにし、確認前はlegacyを保存・採用しない。
+function syncStartupIdentityDecision(identity, idFromUrl, storedSyncId) {
+  const isV2Native = Boolean(identity?.isV2Native);
+  const foreignSyncId =
+    idFromUrl && (isV2Native || (storedSyncId && idFromUrl !== storedSyncId))
+      ? idFromUrl
+      : "";
+  const legacyId = isV2Native
+    ? ""
+    : foreignSyncId
+      ? storedSyncId
+      : idFromUrl || storedSyncId;
+  return {
+    isV2Native,
+    foreignSyncId,
+    legacyId,
+    shouldStoreUrlId: Boolean(idFromUrl && !foreignSyncId),
+    shouldAutoGenerateLegacy: !isV2Native && !legacyId,
+  };
+}
+
 function initWordsnapSync() {
   if (!elements.syncIdInput) return;
   let keyGenerationFailed = false;
@@ -13213,13 +13615,21 @@ function initWordsnapSync() {
   // これを怠ると、他人のリンクを開いただけで自分の単語が相手のサーバー領域へ混入する。
   // 同じキーを開き直した通常のケースと、初回（保存キーなし）は従来どおり無確認で動く。
   const storedSyncId = cleanSyncId(localStorage.getItem(SYNC_ID_KEY));
-  const foreignSyncId = idFromUrl && storedSyncId && idFromUrl !== storedSyncId ? idFromUrl : "";
-  if (idFromUrl && !foreignSyncId) localStorage.setItem(SYNC_ID_KEY, idFromUrl);
+  // identityに保存済みlegacyの有無を含めてから判定する。これにより、印付き資格情報が
+  // あってもlegacyを持つ既存ユーザーは必ず従来分岐に残る。
+  syncState.id = storedSyncId;
+  const startupDecision = syncStartupIdentityDecision(
+    syncRequestRoute(),
+    idFromUrl,
+    storedSyncId,
+  );
+  const foreignSyncId = startupDecision.foreignSyncId;
+  if (startupDecision.shouldStoreUrlId) localStorage.setItem(SYNC_ID_KEY, idFromUrl);
   // 確認が済むまでは元のキーのまま（＝リモートと分離。リンク先へは何も送信しない）
-  syncState.id = foreignSyncId ? storedSyncId : idFromUrl || storedSyncId;
+  syncState.id = startupDecision.legacyId;
 
   // http/https では、個人キーが無ければ自動発行し、サーバー保存（耐久化）を有効にする。
-  if (!syncRequestRoute().legacyId && syncServerAvailable()) {
+  if (startupDecision.shouldAutoGenerateLegacy && syncServerAvailable()) {
     try {
       const generatedId = generatePrivateKey();
       syncState.id = generatedId;
@@ -13242,6 +13652,7 @@ function initWordsnapSync() {
   if (elements.syncPullButton) elements.syncPullButton.disabled = !legacyId;
   if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = !legacyId;
   initV2SyncUi();
+  applySyncIdentityUi(syncRequestRoute());
 
   elements.syncConnectButton?.addEventListener("click", () => connectWordsnapSync());
   elements.syncGenerateButton?.addEventListener("click", () => {
