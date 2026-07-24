@@ -172,8 +172,9 @@ assert.match(tutorialContent, /\baria-atomic=["']true["']/i,
 const safeShareToggle = staticMarkup.match(
   /<button\b[^>]*\bid=["']safeShareToggleButton["'][^>]*>/i,
 )?.[0] || "";
-assert.match(safeShareToggle, /\baria-expanded=["']true["']/i,
-  "the safe-share warning toggle must expose its initial state");
+// 既定はコンパクト表示（詳細は閉じている）。一行警告は常時表示なので false が正。
+assert.match(safeShareToggle, /\baria-expanded=["']false["']/i,
+  "the safe-share warning toggle must expose its initial (collapsed) state");
 assert.match(safeShareToggle, /\baria-controls=["']safeShareWarning["']/i,
   "the safe-share warning toggle must identify its controlled warning");
 for (const match of staticMarkup.matchAll(/<button\b[^>]*>/gi)) {
