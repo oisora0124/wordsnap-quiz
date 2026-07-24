@@ -626,30 +626,60 @@ h2 {
 .streak-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
+  font-variant-numeric: tabular-nums;
 }
 
 .streak-stat {
+  --stat-accent: var(--accent);
   flex: 1 1 auto;
   min-width: 96px;
-  padding: 8px 10px;
+  padding: 7px 9px;
   border: 1px solid var(--line);
+  border-left: 3px solid var(--stat-accent);
   border-radius: var(--r-sm);
   background: var(--surface-2);
 }
 
+.streak-stat.is-success { --stat-accent: var(--success); }
+.streak-stat.is-danger { --stat-accent: var(--danger-text); }
+.streak-stat.is-muted { --stat-accent: var(--muted); }
+
 .streak-stat-label {
   display: block;
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 600;
 }
 
 .streak-stat-value {
-  display: block;
-  font-size: 1.1rem;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  margin-top: 1px;
+  font-size: 1.25rem;
   font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
 }
+
+.streak-stat-unit {
+  font-size: 0.68em;
+  font-weight: 650;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+
+.streak-stat-trend {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 650;
+}
+
+.streak-stat-trend.is-up { color: var(--success); }
+.streak-stat-trend.is-down { color: var(--danger-text); }
 
 .streak-cal-nav {
   display: flex;
@@ -710,7 +740,7 @@ h2 {
 }
 
 .streak-day[data-level="4"] .streak-day-num {
-  color: #fff;
+  color: var(--ink);
 }
 
 .streak-day-count {
@@ -723,10 +753,10 @@ h2 {
 .streak-day[data-level="2"] { background: color-mix(in srgb, var(--success) 32%, var(--surface-2)); }
 .streak-day[data-level="3"] { background: color-mix(in srgb, var(--success) 50%, var(--surface-2)); }
 .streak-day[data-level="4"] {
-  color: #fff;
+  color: var(--ink);
   background: color-mix(in srgb, var(--success) 72%, var(--surface-2));
 }
-.streak-day[data-level="4"] .streak-day-count { color: rgba(255, 255, 255, 0.85); }
+.streak-day[data-level="4"] .streak-day-count { color: var(--ink); }
 
 .streak-day.is-today {
   border-color: var(--accent);
@@ -770,11 +800,12 @@ h2 {
 /* 既存データ（単語ごとの正誤履歴・学習状態・任意の学習イベント）だけから、
    依存ゼロのインラインSVGで描く。stateへは一切書き込まない読み取り専用の可視化。 */
 .stats-block {
-  margin-top: 18px;
-  padding-top: var(--space-4);
+  margin-top: 14px;
+  padding-top: var(--space-3);
   border-top: 1px solid var(--line);
   display: grid;
-  gap: 14px;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .stats-block[hidden] { display: none; }
 .stats-head {
@@ -794,8 +825,8 @@ h2 {
 }
 .stats-grid {
   display: grid;
-  gap: var(--space-3);
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   /* 各カードは中身の高さに収める（背の高いカードに引き伸ばされて余白が空くのを防ぐ） */
   align-items: start;
 }
@@ -803,21 +834,55 @@ h2 {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
-  padding: var(--space-3) 14px;
+  padding: 10px 11px;
   display: grid;
-  gap: var(--space-2);
+  gap: 7px;
+  min-width: 0;
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    border-color 150ms ease;
+}
+
+@media (hover: hover) {
+  .stats-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+.stats-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
 }
-.stats-card h4 {
+
+.stats-card-head h4 {
   margin: 0;
   font-size: 0.8rem;
   color: var(--ink);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+.stats-card-meta {
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.3;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .stats-card .stats-caption {
   margin: 0;
   color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.5;
+  font-size: 0.72rem;
+  line-height: 1.42;
 }
 .stats-card svg {
   width: 100%;
@@ -829,6 +894,146 @@ h2 {
   color: var(--muted);
   font-size: 0.74rem;
 }
+
+.stats-card.is-review {
+  grid-column: 1 / -1;
+  padding: 12px 13px;
+  border-left: 4px solid var(--accent);
+  background:
+    linear-gradient(135deg, var(--accent-soft), transparent 56%),
+    var(--surface-2);
+}
+
+.stats-review-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stats-review-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--accent-text);
+  font-size: 1.65rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.stats-review-count small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.stats-review-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.stats-review-breakdown strong {
+  color: var(--ink);
+}
+
+.stats-review-done {
+  margin: 0;
+  color: var(--success);
+  font-size: 0.92rem;
+  font-weight: 750;
+}
+
+.stats-progress-list,
+.stats-cefr-list {
+  display: grid;
+  gap: 7px;
+}
+
+.stats-progress-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+}
+
+.stats-progress-label,
+.stats-cefr-label {
+  color: var(--ink);
+  font-size: 0.74rem;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-progress-value,
+.stats-cefr-value {
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.stats-progress-track,
+.stats-cefr-track {
+  grid-column: 1 / -1;
+  display: flex;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.stats-progress-fill {
+  min-width: 0;
+  border-radius: inherit;
+  background: var(--success);
+}
+
+.stats-cefr-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.stats-cefr-track {
+  grid-column: auto;
+}
+
+.stats-cefr-mastered { background: var(--success); }
+.stats-cefr-learning { background: var(--accent); }
+
+.stats-chart {
+  max-height: 64px;
+}
+
+.stats-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.stats-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.stats-chart-legend i {
+  width: 12px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.stats-chart-legend .is-average { background: var(--success); }
 /* 定着の内訳（積み上げバー）の凡例 */
 .stats-legend {
   display: flex;
@@ -857,45 +1062,29 @@ h2 {
   gap: 7px;
 }
 .stats-weak li {
+  /* 1語=1行のコンパクト表示（語・意味・正答率） */
   display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 4px 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0 8px;
 }
 .stats-weak .weak-term {
   font-weight: 650;
   font-size: 0.82rem;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .stats-weak .weak-meaning {
-  grid-column: 1 / -1;
   color: var(--muted);
   font-size: 0.72rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-top: -3px;
 }
 .stats-weak .weak-rate {
   font-variant-numeric: tabular-nums;
   font-size: 0.78rem;
   color: var(--danger-text);
   font-weight: 650;
-}
-.stats-weak .weak-bar {
-  grid-column: 1 / -1;
-  height: 5px;
-  border-radius: 3px;
-  background: var(--surface-3);
-  overflow: hidden;
-}
-.stats-weak .weak-bar > i {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: var(--danger);
 }
 /* 出題形式別の正答率 */
 .stats-fmt {
@@ -943,6 +1132,27 @@ h2 {
 }
 .stats-weak-action button {
   width: 100%;
+}
+
+@media (max-width: 900px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-review-body {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .stats-review-body button {
+    width: 100%;
+  }
 }
 
 .hero-card {
@@ -18967,6 +19177,30 @@ function renderStreakDayDetail(byDay) {
     `<div class="streak-day-terms">${escapeHtml(shown.join("、"))}${rest > 0 ? ` ほか${rest}語` : ""}</div>`;
 }
 
+// 表示月の先頭から指定日までを集計する。前月同日までとの比較にも同じ集計を使う。
+function monthActivityToDay(byDay, year, month, lastDay) {
+  const prefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
+  const result = { days: 0, answers: 0, correct: 0 };
+  for (const [key, day] of byDay) {
+    if (!key.startsWith(prefix) || Number(key.slice(-2)) > lastDay) continue;
+    result.days += 1;
+    result.answers += day.answers;
+    result.correct += day.correct;
+  }
+  return result;
+}
+
+// 比較できる記録がある統計だけ、増減を短く添える。
+function streakTrend(current, previous) {
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
+  const diff = Math.round(current - previous);
+  if (diff === 0) return { text: "変化なし", tone: "" };
+  return {
+    text: `${diff > 0 ? "上昇" : "低下"}${Math.abs(diff)}`,
+    tone: diff > 0 ? "is-up" : "is-down",
+  };
+}
+
 function renderStreakCalendar() {
   const grid = elements.streakCalendar;
   if (!grid) return;
@@ -18977,35 +19211,84 @@ function renderStreakCalendar() {
 
   // サマリー：現在の連続・過去最高・今月の学習日数と回答数
   const streak = normalizeStreak(appState.streak);
-  const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
-  let monthDays = 0;
-  let monthAnswers = 0;
-  let monthCorrect = 0;
   let busiest = 0;
-  for (const [key, day] of byDay) {
+  for (const day of byDay.values()) {
     if (day.answers > busiest) busiest = day.answers;
-    if (!key.startsWith(monthPrefix)) continue;
-    monthDays += 1;
-    monthAnswers += day.answers;
-    monthCorrect += day.correct;
   }
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth();
+  const monthLastDay = isCurrentMonth
+    ? now.getDate()
+    : new Date(year, month + 1, 0).getDate();
+  const monthActivity = monthActivityToDay(byDay, year, month, monthLastDay);
+  const previousMonth = new Date(year, month - 1, 1);
+  const previousLastDay = Math.min(
+    monthLastDay,
+    new Date(previousMonth.getFullYear(), previousMonth.getMonth() + 1, 0).getDate(),
+  );
+  const previousActivity = monthActivityToDay(
+    byDay,
+    previousMonth.getFullYear(),
+    previousMonth.getMonth(),
+    previousLastDay,
+  );
+  const monthDays = monthActivity.days;
+  const monthAnswers = monthActivity.answers;
+  const monthCorrect = monthActivity.correct;
   const monthRate = monthAnswers ? Math.round((monthCorrect / monthAnswers) * 100) : 0;
   if (elements.streakSummary) {
     const goal = dailyGoalWords();
+    const hasPrevious = previousActivity.answers > 0;
+    const previousRate = previousActivity.answers
+      ? Math.round((previousActivity.correct / previousActivity.answers) * 100)
+      : null;
     const stats = [
-      ["現在の連続", `${streak.count}日`],
-      ...(goal ? [["今日の目標", `${todayAnswerCount()}/${goal}問`]] : []),
+      { label: "現在の連続", value: streak.count, unit: "日", accent: "is-success" },
+      ...(goal
+        ? [{ label: "今日の目標", value: `${todayAnswerCount()}/${goal}`, unit: "問", accent: "" }]
+        : []),
       // 保存済みの記録と履歴からの再計算の大きい方。移行前のデータでも履歴があれば拾える。
-      ["連続の最高記録", `${Math.max(streak.best, longestStreakFromDays(byDay.keys()))}日`],
-      ["この月の学習日", `${monthDays}日`],
-      ["この月の回答", `${monthAnswers}回`],
-      ["この月の正答率", monthAnswers ? `${monthRate}%` : "—"],
+      {
+        label: "連続の最高記録",
+        value: Math.max(streak.best, longestStreakFromDays(byDay.keys())),
+        unit: "日",
+        accent: "is-success",
+      },
+      {
+        label: "この月の学習日",
+        value: monthDays,
+        unit: "日",
+        accent: "",
+        trend: hasPrevious ? streakTrend(monthDays, previousActivity.days) : null,
+      },
+      {
+        label: "この月の回答",
+        value: monthAnswers,
+        unit: "回",
+        accent: "",
+        trend: hasPrevious ? streakTrend(monthAnswers, previousActivity.answers) : null,
+      },
+      {
+        label: "この月の正答率",
+        value: monthAnswers ? monthRate : "—",
+        unit: monthAnswers ? "%" : "",
+        accent: monthRate >= 80 ? "is-success" : monthAnswers ? "is-danger" : "is-muted",
+        trend:
+          monthAnswers && Number.isFinite(previousRate)
+            ? streakTrend(monthRate, previousRate)
+            : null,
+      },
     ];
     elements.streakSummary.innerHTML = stats
       .map(
-        ([label, value]) =>
-          `<span class="streak-stat"><span class="streak-stat-label">${escapeHtml(label)}</span>` +
-          `<span class="streak-stat-value">${escapeHtml(value)}</span></span>`,
+        (stat) =>
+          `<span class="streak-stat ${stat.accent}">` +
+          `<span class="streak-stat-label">${escapeHtml(stat.label)}</span>` +
+          `<span class="streak-stat-value"><span>${escapeHtml(stat.value)}</span>` +
+          `<span class="streak-stat-unit">${escapeHtml(stat.unit)}</span></span>` +
+          (stat.trend
+            ? `<span class="streak-stat-trend ${stat.trend.tone}" title="前月同日までとの比較">${escapeHtml(stat.trend.text)}</span>`
+            : "") +
+          `</span>`,
       )
       .join("");
   }
@@ -19057,6 +19340,213 @@ function svgFill(cssVar) {
   return `style="fill:var(${cssVar})"`;
 }
 
+function statsCardHeader(title, meta) {
+  return (
+    `<div class="stats-card-head">` +
+    `<h4>${escapeHtml(title)}</h4>` +
+    `<span class="stats-card-meta">${escapeHtml(meta)}</span>` +
+    `</div>`
+  );
+}
+
+// 今日の復習ボタンと同じ抽出結果を、期限超過と今日到来に分けて表示する。
+function statsTodayReviewCard() {
+  const scopedWords = quizSelectedDeckWords();
+  if (scopedWords.length === 0) return "";
+  const dueWords = eligibleSrsWords(scopedWords);
+  const today = localDateString();
+  const overdue = dueWords.filter(
+    (word) => localDateString(new Date(Number(word.learning.nextReviewAt))) < today,
+  ).length;
+  const dueToday = dueWords.length - overdue;
+  const body = dueWords.length
+    ? (
+      `<div class="stats-review-body">` +
+      `<div>` +
+      `<div class="stats-review-count"><span>${escapeHtml(dueWords.length)}</span><small>語</small></div>` +
+      `<div class="stats-review-breakdown">` +
+      `<span>期限超過 <strong>${escapeHtml(overdue)}語</strong></span>` +
+      `<span>今日到来 <strong>${escapeHtml(dueToday)}語</strong></span>` +
+      `</div>` +
+      `</div>` +
+      `<button type="button" id="statsTodayReviewButton">復習を始める</button>` +
+      `</div>`
+    )
+    : `<p class="stats-review-done">今日の復習は完了！</p>`;
+  return (
+    `<div class="stats-card is-review">` +
+    statsCardHeader("今日の復習", "現在の出題範囲") +
+    body +
+    `</div>`
+  );
+}
+
+// 直近30日の回答数に、各日の直前7日間の平均を重ねる。
+function statsActivityCard(byDay) {
+  const days = [];
+  let hasData = false;
+  for (let i = 29; i >= 0; i -= 1) {
+    const date = new Date();
+    date.setHours(12, 0, 0, 0);
+    date.setDate(date.getDate() - i);
+    const key = localDateString(date);
+    const answers = byDay.get(key)?.answers || 0;
+    let averageTotal = 0;
+    for (let offset = 0; offset < 7; offset += 1) {
+      const averageDate = new Date(date);
+      averageDate.setDate(averageDate.getDate() - offset);
+      averageTotal += byDay.get(localDateString(averageDate))?.answers || 0;
+    }
+    if (answers > 0) hasData = true;
+    days.push({
+      key,
+      day: date.getDate(),
+      answers,
+      average: averageTotal / 7,
+      isToday: i === 0,
+    });
+  }
+  if (!hasData) return "";
+
+  const W = 240;
+  const H = 64;
+  const chartH = 50;
+  const slot = W / days.length;
+  const barW = Math.max(2.5, slot * 0.62);
+  const maxValue = Math.max(
+    1,
+    ...days.map((day) => day.answers),
+    ...days.map((day) => day.average),
+  );
+  const grid = [0, 0.5, 1]
+    .map((ratio) => {
+      const y = (chartH * ratio).toFixed(2);
+      return `<line x1="0" y1="${y}" x2="${W}" y2="${y}" style="stroke:var(--line);stroke-width:0.7${ratio === 0.5 ? ";stroke-dasharray:2 3" : ""}"/>`;
+    })
+    .join("");
+  const bars = days
+    .map((day, index) => {
+      const x = slot * index + (slot - barW) / 2;
+      const height = day.answers ? Math.max(1.5, (day.answers / maxValue) * chartH) : 1;
+      const y = chartH - height;
+      const label =
+        index % 5 === 0 || day.isToday
+          ? `<text x="${(x + barW / 2).toFixed(2)}" y="${H - 2}" text-anchor="middle" style="fill:var(--muted);font-size:7px">${escapeHtml(day.day)}</text>`
+          : "";
+      return (
+        `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${height.toFixed(2)}" rx="1.8" ${svgFill(day.answers ? "--accent" : "--surface-3")}>` +
+        `<title>${escapeHtml(`${day.key} 回答${day.answers}回`)}</title></rect>` +
+        label
+      );
+    })
+    .join("");
+  const averagePoints = days
+    .map((day, index) => {
+      const x = slot * index + slot / 2;
+      const y = chartH - (day.average / maxValue) * chartH;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  const srItems = days
+    .filter((day) => day.answers > 0)
+    .map(
+      (day) =>
+        `<li>${escapeHtml(`${day.key}：${day.answers}回、7日平均${day.average.toFixed(1)}回`)}</li>`,
+    )
+    .join("");
+  return (
+    `<div class="stats-card">` +
+    statsCardHeader("学習量の推移（30日）", "7日移動平均") +
+    `<svg class="stats-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">` +
+    `${grid}<g>${bars}</g>` +
+    `<polyline points="${averagePoints}" style="fill:none;stroke:var(--success);stroke-width:2;stroke-linecap:round;stroke-linejoin:round" vector-effect="non-scaling-stroke"></polyline>` +
+    `</svg>` +
+    `<ul class="sr-only">${srItems}</ul>` +
+    `<div class="stats-chart-legend"><span><i></i>回答数</span><span><i class="is-average"></i>7日平均</span></div>` +
+    `</div>`
+  );
+}
+
+function statsDeckProgressCard() {
+  const decks = (appState.decks || []).map((deck) => {
+    const words = (appState.words || []).filter((word) => word.deckId === deck.id);
+    return {
+      name: deck.name || "名称未設定",
+      total: words.length,
+      mastered: words.filter((word) => word.learning?.status === "mastered").length,
+    };
+  });
+  if (decks.length <= 1) return "";
+  decks.sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "ja"));
+  const shown = decks.slice(0, 6);
+  if (decks.length > 6) {
+    const rest = decks.slice(6);
+    shown.push({
+      name: `他${rest.length}冊`,
+      total: rest.reduce((sum, deck) => sum + deck.total, 0),
+      mastered: rest.reduce((sum, deck) => sum + deck.mastered, 0),
+    });
+  }
+  const rows = shown
+    .map((deck) => {
+      const rate = deck.total ? Math.round((deck.mastered / deck.total) * 100) : 0;
+      return (
+        `<div class="stats-progress-row">` +
+        `<span class="stats-progress-label" title="${escapeHtml(deck.name)}">${escapeHtml(deck.name)}</span>` +
+        `<span class="stats-progress-value">${escapeHtml(deck.mastered)} / ${escapeHtml(deck.total)}語</span>` +
+        `<span class="stats-progress-track" role="img" aria-label="${escapeHtml(`${deck.name}、${deck.total}語中${deck.mastered}語を習得`)}">` +
+        `<span class="stats-progress-fill" style="width:${rate}%"></span></span>` +
+        `</div>`
+      );
+    })
+    .join("");
+  return (
+    `<div class="stats-card">` +
+    statsCardHeader("単語帳ごとの進捗", `${decks.length}冊`) +
+    `<div class="stats-progress-list">${rows}</div>` +
+    `<p class="stats-caption">語数の多い順。バーは習得済みの割合。</p>` +
+    `</div>`
+  );
+}
+
+function statsCefrCard() {
+  const words = (appState.words || []).filter((word) =>
+    CEFR_ORDER.includes(word.cefr?.level),
+  );
+  if (words.length < 10) return "";
+  const levels = CEFR_ORDER.map((level) => {
+    const levelWords = words.filter((word) => word.cefr.level === level);
+    const mastered = levelWords.filter(
+      (word) => word.learning?.status === "mastered",
+    ).length;
+    return { level, total: levelWords.length, mastered };
+  });
+  const maxTotal = Math.max(...levels.map((level) => level.total), 1);
+  const rows = levels
+    .map((level) => {
+      const masteredWidth = (level.mastered / maxTotal) * 100;
+      const learningWidth = ((level.total - level.mastered) / maxTotal) * 100;
+      return (
+        `<div class="stats-cefr-row">` +
+        `<span class="stats-cefr-label">${escapeHtml(level.level)}</span>` +
+        `<span class="stats-cefr-track" role="img" aria-label="${escapeHtml(`${level.level}、習得${level.mastered}語、未習得${level.total - level.mastered}語`)}">` +
+        `<span class="stats-cefr-mastered" style="width:${masteredWidth.toFixed(2)}%"></span>` +
+        `<span class="stats-cefr-learning" style="width:${learningWidth.toFixed(2)}%"></span>` +
+        `</span>` +
+        `<span class="stats-cefr-value">${escapeHtml(level.mastered)} / ${escapeHtml(level.total)}</span>` +
+        `</div>`
+      );
+    })
+    .join("");
+  return (
+    `<div class="stats-card">` +
+    statsCardHeader("レベル別（CEFR）", `${words.length}語`) +
+    `<div class="stats-cefr-list">${rows}</div>` +
+    `<div class="stats-legend"><span><i style="background:var(--success)"></i>習得</span><span><i style="background:var(--accent)"></i>未習得</span></div>` +
+    `</div>`
+  );
+}
+
 // A) 定着の内訳（習得 / 復習中 / 未着手）を積み上げバーで示す。
 function statsMasteryCard() {
   const b = learningBuckets(appState.words || []);
@@ -19089,7 +19579,7 @@ function statsMasteryCard() {
   const rate = Math.round((b.mastered / total) * 100);
   return (
     `<div class="stats-card">` +
-    `<h4>定着の内訳</h4>` +
+    statsCardHeader("定着の内訳", `全${total}語`) +
     `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="習得${b.mastered}語 復習中${b.review}語 未着手${b.new}語">` +
     `<g>${rects}</g></svg>` +
     `<div class="stats-legend">${legend}</div>` +
@@ -19131,7 +19621,7 @@ function statsAccuracyCard(byDay) {
   }
   if (!hasData) return "";
   const W = 240;
-  const H = 88;
+  const H = 64;
   const pad = 4;
   const slot = (W - pad * 2) / days;
   const barW = slot * 0.62;
@@ -19183,8 +19673,8 @@ function statsAccuracyCard(byDay) {
     .join("");
   return (
     `<div class="stats-card">` +
-    `<h4>正答率の推移（14日）</h4>` +
-    `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">` +
+    statsCardHeader("正答率の推移（14日）", "日別") +
+    `<svg class="stats-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">` +
     `${grid}<g>${bars}</g></svg>` +
     `<ul class="sr-only">${srItems}</ul>` +
     `<p class="stats-caption">棒の高さ＝その日の正答率。点線は50%。日付の色は日曜・土曜、丸印は今日。</p>` +
@@ -19212,7 +19702,7 @@ function statsSpeedCard() {
   }
   const maxCount = Math.max(...buckets.map((bk) => bk.count), 1);
   const W = 240;
-  const H = 96;
+  const H = 64;
   const pad = 4;
   const slot = (W - pad * 2) / buckets.length;
   const barW = slot * 0.6;
@@ -19238,8 +19728,8 @@ function statsSpeedCard() {
     .join("");
   return (
     `<div class="stats-card">` +
-    `<h4>回答速度の分布</h4>` +
-    `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>` +
+    statsCardHeader("回答速度の分布", `${events.length}回`) +
+    `<svg class="stats-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>` +
     `<ul class="sr-only">${srItems}</ul>` +
     `<p class="stats-caption">正答・誤答を含む直近${events.length}回。速く答えられるほど定着の目安。</p>` +
     `</div>`
@@ -19280,7 +19770,7 @@ function statsFormatCard() {
     .join("");
   return (
     `<div class="stats-card">` +
-    `<h4>出題形式別の正答率</h4>` +
+    statsCardHeader("出題形式別の正答率", `${shown.length}形式`) +
     `<div class="stats-fmt">${rows}</div>` +
     `<p class="stats-caption">「学習の記録」がオンの間の集計。形式ごとの得意・苦手が分かります。</p>` +
     `</div>`
@@ -19300,16 +19790,16 @@ function statsWeakCard() {
   }
   if (rows.length === 0) return "";
   rows.sort((a, b) => a.rate - b.rate || b.attempts - a.attempts);
-  const top = rows.slice(0, 8);
+  // コンパクト方針: 1語=1行（語＋意味＋正答率）。%と重複する装飾バーは持たない。
+  const top = rows.slice(0, 5);
   const items = top
     .map((r) => {
       const pct = Math.round(r.rate * 100);
       return (
         `<li>` +
         `<span class="weak-term">${escapeHtml(r.term)}</span>` +
-        `<span class="weak-rate">${pct}%</span>` +
         `<span class="weak-meaning">${escapeHtml(r.meaning)}（${r.attempts}回）</span>` +
-        `<span class="weak-bar"><i style="width:${pct}%"></i></span>` +
+        `<span class="weak-rate">${pct}%</span>` +
         `</li>`
       );
     })
@@ -19323,10 +19813,10 @@ function statsWeakCard() {
     : "";
   return (
     `<div class="stats-card">` +
-    `<h4>苦手な単語</h4>` +
+    statsCardHeader("苦手な単語", `${top.length}語`) +
     `<ul class="stats-weak">${items}</ul>` +
     action +
-    `<p class="stats-caption">3回以上答えた語のうち正答率が低い順（最大8語）。</p>` +
+    `<p class="stats-caption">3回以上答えた語のうち正答率が低い順（最大5語）。</p>` +
     `</div>`
   );
 }
@@ -19337,7 +19827,11 @@ function renderStatsCharts(byDay) {
   if (!block || !grid) return;
   const activity = byDay instanceof Map ? byDay : buildDailyActivity();
   const cards = [
+    statsTodayReviewCard(),
+    statsActivityCard(activity),
     statsMasteryCard(),
+    statsDeckProgressCard(),
+    statsCefrCard(),
     statsAccuracyCard(activity),
     statsFormatCard(),
     statsSpeedCard(),
@@ -21212,11 +21706,15 @@ elements.streakBadge?.addEventListener("click", () => {
   toggleStreakPanel();
 });
 elements.streakPanelClose?.addEventListener("click", closeStreakPanel);
-// 成績の「苦手な語を復習する」導線（カードは再描画で作り直されるため委譲で受ける）。
+// 成績カードの復習導線（カードは再描画で作り直されるため委譲で受ける）。
 elements.statsGrid?.addEventListener("click", (event) => {
-  const button = event.target.closest?.("#statsWeakQuizButton");
+  const button = event.target.closest?.("#statsWeakQuizButton, #statsTodayReviewButton");
   if (!button) return;
   closeStreakPanel();
+  if (button.id === "statsTodayReviewButton") {
+    startGeneralReview();
+    return;
+  }
   setActiveStep("quiz", { sound: false });
   startDifficultQuiz();
 });
