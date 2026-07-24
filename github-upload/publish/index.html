@@ -6157,6 +6157,11 @@ accurate 正確な"
                 <li>全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこの個人キーで保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
                 <li>万一、個人キーが他人に知られてしまったら：①「JSONを書き出す」で単語データを保存 → ②この端末のブラウザデータ（サイトデータ）を消してから、個人キーの付いていない新しいリンクで開き直す（新しい個人キーが自動発行されます）→ ③「JSONを読み込む」で単語を戻す、の順で新しいキーに引っ越せます。</li>
               </ul>
+              <p class="settings-desc">品質改善のため、匿名の利用回数とエラー情報を送信します（単語の内容・個人キーは含まれません）。</p>
+              <label class="settings-check">
+                <input id="telemetryOptoutToggle" type="checkbox" />
+                <span>匿名の利用統計とエラー情報の送信をOFFにする</span>
+              </label>
             </div>
           </details>
 
@@ -6451,6 +6456,276 @@ accurate 正確な"
     }
   }
 })();
+
+// ---------- 匿名利用統計・エラー監視 ----------
+// 学習データとは別の端末内バッファに、固定された機能IDの回数だけを保持する。
+// どの失敗もアプリ本体へ波及させないため、この区画はすべて例外を内側で処理する。
+const WordBankTelemetry = (() => {
+  const BUFFER_KEY = "wordsnap-telemetry-buffer:v1";
+  const OPTOUT_KEY = "wordsnap-telemetry-optout:v1";
+  const LAST_SENT_KEY = "wordsnap-telemetry-last-sent:v1";
+  const ERROR_STATE_KEY = "wordsnap-telemetry-errors:v1";
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const APP_REV = "web";
+  const USAGE_NAMES = new Set([
+    "quiz-answer",
+    "flashcard-answer",
+    "ocr-run",
+    "ai-extract",
+    "json-export",
+    "json-import",
+    "sync-v2-upgrade",
+    "sync-v2-create",
+    "share-tool",
+    "streak-panel-open",
+    "tutorial-complete",
+  ]);
+  const SECRET_PATTERN = /w(s|k|r)?_[0-9a-f]{16,}/gi;
+  const URL_QUERY_PATTERN = /\b(https?:\/\/[^\s?#]+)\?[^#\s]*/gi;
+  const W_QUERY_PATTERN = /([?&]w=)[^&#\s]*/gi;
+  let usageFlushPending = false;
+
+  function optedOut() {
+    try {
+      return localStorage.getItem(OPTOUT_KEY) === "1";
+    } catch {
+      return true;
+    }
+  }
+
+  function sanitize(value, maxLength) {
+    try {
+      return String(value || "")
+        .replace(URL_QUERY_PATTERN, "$1?[redacted]")
+        .replace(W_QUERY_PATTERN, "$1[redacted]")
+        .replace(SECRET_PATTERN, "[redacted]")
+        .slice(0, maxLength);
+    } catch {
+      return "";
+    }
+  }
+
+  function readUsageBuffer() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(BUFFER_KEY) || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+      const clean = {};
+      for (const name of USAGE_NAMES) {
+        const count = Number(parsed[name]);
+        if (Number.isInteger(count) && count > 0) clean[name] = count;
+      }
+      return clean;
+    } catch {
+      return {};
+    }
+  }
+
+  function writeUsageBuffer(buffer) {
+    try {
+      if (Object.keys(buffer).length === 0) localStorage.removeItem(BUFFER_KEY);
+      else localStorage.setItem(BUFFER_KEY, JSON.stringify(buffer));
+    } catch {
+      // 統計用ストレージの失敗は学習機能へ影響させない。
+    }
+  }
+
+  function postEvents(events, onAccepted, onSettled) {
+    try {
+      if (optedOut() || !Array.isArray(events) || events.length === 0) return false;
+      const body = JSON.stringify({ events, appRev: APP_REV });
+      if (typeof navigator.sendBeacon === "function") {
+        const accepted = navigator.sendBeacon(
+          "/api/telemetry",
+          new Blob([body], { type: "application/json" }),
+        );
+        if (accepted) onAccepted?.();
+        onSettled?.();
+        return accepted;
+      }
+      if (typeof fetch !== "function") return false;
+      fetch("/api/telemetry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive: true,
+      })
+        .then((response) => {
+          if (response.ok && !optedOut()) onAccepted?.();
+        })
+        .catch(() => {
+          // 失敗時は表示せず、利用回数は次回の送信まで端末内に残す。
+        })
+        .finally(() => {
+          onSettled?.();
+        });
+      return true;
+    } catch {
+      onSettled?.();
+      return false;
+    }
+  }
+
+  function flushUsage(force = false) {
+    try {
+      if (optedOut() || usageFlushPending) return;
+      const buffer = readUsageBuffer();
+      const names = Object.keys(buffer);
+      if (names.length === 0) return;
+      const lastSent = Number(localStorage.getItem(LAST_SENT_KEY) || 0);
+      if (!force && names.length < 20 && Date.now() - lastSent < DAY_MS) return;
+
+      const snapshot = Object.fromEntries(
+        names.slice(0, 20).map((name) => [name, Math.min(1000, buffer[name])]),
+      );
+      const events = Object.entries(snapshot).map(([name, count]) => ({
+        kind: "usage",
+        name,
+        count,
+      }));
+      usageFlushPending = true;
+      const accepted = postEvents(
+        events,
+        () => {
+          try {
+            const latest = readUsageBuffer();
+            for (const [name, count] of Object.entries(snapshot)) {
+              const remaining = Math.max(0, Number(latest[name] || 0) - count);
+              if (remaining > 0) latest[name] = remaining;
+              else delete latest[name];
+            }
+            writeUsageBuffer(latest);
+            localStorage.setItem(LAST_SENT_KEY, String(Date.now()));
+          } catch {
+            // 次回に再送されても匿名の回数情報だけであり、アプリ動作を優先する。
+          }
+          usageFlushPending = false;
+        },
+        () => {
+          usageFlushPending = false;
+        },
+      );
+      if (!accepted) usageFlushPending = false;
+    } catch {
+      usageFlushPending = false;
+    }
+  }
+
+  function trackUsage(name) {
+    try {
+      if (optedOut() || !USAGE_NAMES.has(name)) return;
+      const buffer = readUsageBuffer();
+      buffer[name] = Math.min(Number.MAX_SAFE_INTEGER, Number(buffer[name] || 0) + 1);
+      writeUsageBuffer(buffer);
+      flushUsage(Object.keys(buffer).length >= 20);
+    } catch {
+      // 利用統計は補助機能。どの例外もユーザー操作へ返さない。
+    }
+  }
+
+  function errorDay() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function readErrorState() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(ERROR_STATE_KEY) || "{}");
+      if (parsed?.day !== errorDay()) return { day: errorDay(), count: 0, seen: [] };
+      const parsedCount = Number(parsed.count);
+      return {
+        day: parsed.day,
+        count: Number.isInteger(parsedCount) ? Math.max(0, Math.min(5, parsedCount)) : 0,
+        seen: Array.isArray(parsed.seen) ? parsed.seen.slice(-20) : [],
+      };
+    } catch {
+      return { day: errorDay(), count: 0, seen: [] };
+    }
+  }
+
+  function captureError(message, source, line, stack) {
+    try {
+      if (optedOut()) return;
+      const safeMessage = sanitize(message || "Unknown error", 120) || "Unknown error";
+      const safeSource = sanitize(source, 240);
+      const safeLine = Number.isFinite(Number(line)) ? Number(line) : 0;
+      const dedupeKey = `${safeMessage}|${safeSource}|${safeLine}`;
+      const state = readErrorState();
+      if (state.count >= 5 || state.seen.includes(dedupeKey)) return;
+      state.count += 1;
+      state.seen.push(dedupeKey);
+      localStorage.setItem(ERROR_STATE_KEY, JSON.stringify(state));
+      postEvents([
+        {
+          kind: "error",
+          name: safeMessage,
+          detail: sanitize(stack || `${safeSource}:${safeLine}`, 600),
+        },
+      ]);
+    } catch {
+      // エラー監視自身の失敗は再帰的に報告しない。
+    }
+  }
+
+  function setOptOut(disabled) {
+    try {
+      if (disabled) {
+        localStorage.setItem(OPTOUT_KEY, "1");
+        localStorage.removeItem(BUFFER_KEY);
+        localStorage.removeItem(LAST_SENT_KEY);
+        localStorage.removeItem(ERROR_STATE_KEY);
+      } else {
+        localStorage.removeItem(OPTOUT_KEY);
+      }
+    } catch {
+      // 保存できない環境では安全側として optedOut() が true を返す。
+    }
+  }
+
+  setTimeout(() => flushUsage(), 0);
+  return { trackUsage, captureError, optedOut, setOptOut };
+})();
+
+// 後続のインラインscriptから1行で呼べるよう、例外を外へ出さない窓口だけ公開する。
+function trackUsage(name) {
+  try {
+    WordBankTelemetry.trackUsage(name);
+  } catch {
+    // 匿名統計の失敗で学習操作を止めない。
+  }
+}
+
+const previousWordBankOnError = window.onerror;
+window.onerror = function telemetryOnError(message, source, line, column, error) {
+  try {
+    WordBankTelemetry.captureError?.(
+      message,
+      source,
+      line,
+      error?.stack || `${source || ""}:${line || 0}:${column || 0}`,
+    );
+  } catch {
+    // エラー監視自身の失敗は無視する。
+  }
+  if (typeof previousWordBankOnError === "function") {
+    return previousWordBankOnError.apply(this, arguments);
+  }
+  return false;
+};
+
+window.addEventListener("unhandledrejection", (event) => {
+  try {
+    const reason = event.reason;
+    const message = reason instanceof Error
+      ? reason.message
+      : typeof reason === "string"
+        ? reason
+        : "Unhandled promise rejection";
+    const stack = reason instanceof Error ? reason.stack || "" : "";
+    const sourceLine = stack.split("\n")[1] || "";
+    WordBankTelemetry.captureError?.(message, sourceLine, 0, stack || sourceLine);
+  } catch {
+    // エラー監視自身の失敗は無視する。
+  }
+});
 
 // Resolves an approximate CEFR level (A1–C2) for an English word.
 // A small curated list gives exact levels offline; everything else is
@@ -9005,6 +9280,7 @@ const elements = {
   feedbackContact: document.querySelector("#feedbackContact"),
   feedbackSubmit: document.querySelector("#feedbackSubmit"),
   feedbackStatus: document.querySelector("#feedbackStatus"),
+  telemetryOptoutToggle: document.querySelector("#telemetryOptoutToggle"),
   syncSwitchBanner: document.querySelector("#syncSwitchBanner"),
   syncSwitchAdoptButton: document.querySelector("#syncSwitchAdoptButton"),
   syncSwitchKeepButton: document.querySelector("#syncSwitchKeepButton"),
@@ -9953,6 +10229,23 @@ function initFeedbackForm() {
   });
 }
 
+function initTelemetrySettings() {
+  const toggle = elements.telemetryOptoutToggle;
+  if (!toggle) return;
+  try {
+    toggle.checked = WordBankTelemetry.optedOut();
+  } catch {
+    toggle.checked = true;
+  }
+  toggle.addEventListener("change", () => {
+    try {
+      WordBankTelemetry.setOptOut(toggle.checked);
+    } catch {
+      // 匿名統計の設定失敗で、他の設定操作を止めない。
+    }
+  });
+}
+
 function initSettings() {
   initSound();
   initSpeechSettings();
@@ -9960,6 +10253,7 @@ function initSettings() {
   applyQuizSettings();
   initReviewLogSettings();
   initFeedbackForm();
+  initTelemetrySettings();
 }
 
 const TUTORIAL_STEPS = [
@@ -10044,6 +10338,7 @@ function maybeShowInitialTutorial() {
 
 elements.tutorialNextButton?.addEventListener("click", () => {
   if (tutorialStepIndex >= TUTORIAL_STEPS.length - 1) {
+    trackUsage("tutorial-complete");
     completeTutorial();
     return;
   }
@@ -11363,6 +11658,7 @@ async function upgradeToV2() {
         String(data.syncId || "") === credential.roomId
       ) {
         activateV2Credential(credential, data.stateRev || syncState.rev);
+        trackUsage("sync-v2-upgrade");
         setV2Status("✓ 新方式への移行が完了しました。引き継ぎコードを必ず保存してください。", "live");
         return;
       }
@@ -11451,6 +11747,7 @@ async function createV2Room() {
       const data = await readJsonResponse(response);
       if (response.status === 200 && validSyncPutResponse(data, credential.roomId)) {
         activateV2Credential(credential, data.stateRev);
+        trackUsage("sync-v2-create");
         setV2Status("✓ 新方式の保存先を発行しました。引き継ぎコードを必ず保存してください。", "live");
         return;
       }
@@ -16441,6 +16738,7 @@ function gradeFlashcard(isKnown) {
   // 「知らない」はスキップ扱いではなく明示的な不正解としてreview-eventにも記録する。
   gradeQuiz(isKnown ? wordId : "__flashcard_wrong__", false);
   if (!currentQuiz?.answered) return;
+  trackUsage("flashcard-answer");
   if (isKnown) flashcardSession.knownIds.push(wordId);
   else flashcardSession.unknownIds.push(wordId);
   flashcardSession.index += 1;
@@ -19850,6 +20148,7 @@ function renderStatsCharts(byDay) {
 function openStreakPanel() {
   const panel = elements.streakPanel;
   if (!panel) return;
+  trackUsage("streak-panel-open");
   const now = new Date();
   streakCalMonth = { year: now.getFullYear(), month: now.getMonth() };
   streakCalSelected = localDateString();
@@ -19967,6 +20266,7 @@ function gradeQuiz(choiceId, dontKnow = false) {
   const word = appState.words.find((item) => item.id === currentQuiz.answer.id);
   if (!word) return;
 
+  if (!currentQuiz.flashcard) trackUsage("quiz-answer");
   currentQuiz.answered = true;
   updateStreakOnAnswer();
   word.stats[isCorrect ? "correct" : "wrong"] += 1;
@@ -21013,6 +21313,7 @@ elements.ocrCancelButton.addEventListener("click", cancelActiveOcrRun);
 elements.ocrButton.addEventListener("click", async () => {
   // disabled属性だけに頼らず、プログラム的clickを含む多重実行もここで止める。
   if (!editorImg || activeOcrRun) return;
+  trackUsage("ocr-run");
 
   const run = {
     id: ++ocrRunSerial,
@@ -21157,6 +21458,7 @@ elements.aiOcrButton.addEventListener("click", async () => {
     if (settings) settings.open = true;
     return;
   }
+  trackUsage("ai-extract");
 
   // 処理中はボタンを「中断」に切り替える（元のアイコン付きラベルは終了時に戻す）
   const originalLabel = elements.aiOcrButton.innerHTML;
@@ -22066,6 +22368,7 @@ elements.exportButton.addEventListener("click", () => {
   try {
     const blob = new Blob([JSON.stringify(appState, null, 2)], { type: "application/json" });
     downloadBlob(blob, "wordsnap-quiz-data.json");
+    trackUsage("json-export");
     setStatus("JSONバックアップを書き出しました。安全な場所に保管してください。");
   } catch {
     setStatus("JSONバックアップを書き出せませんでした。空き容量を確認して、もう一度お試しください。");
@@ -22189,6 +22492,7 @@ elements.importConfirmButton?.addEventListener("click", () => {
   currentQuiz = null;
   saveState();
   offerUndo(snapshot);
+  trackUsage("json-import");
   setStatus("JSONデータを読み込みました。「元に戻す」で取り消せます。");
 });
 
@@ -22373,6 +22677,7 @@ function shareTool() {
     return;
   }
   const url = location.origin + location.pathname;
+  trackUsage("share-tool");
   if (navigator.share) {
     navigator
       .share({ title: "WordBank", text: "英単語クイズ学習ツール WordBank", url })
