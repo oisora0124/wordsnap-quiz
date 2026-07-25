@@ -105,6 +105,25 @@ async function post(db, body, { env = {}, headers = {}, waitUntil } = {}) {
   return { response, data: await response.json(), pending };
 }
 
+test("診断ログに宛先・APIキー・投稿本文を出さない", () => {
+  const source = readFileSync(join(repoRoot, "functions", "api", "feedback.js"), "utf8");
+  const start = source.indexOf("function mailLog");
+  const end = source.indexOf("export async function onRequest");
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  for (const forbidden of [
+    /console\.\w+\([^)]*config\.key/,
+    /console\.\w+\([^)]*config\.to\b/,
+    /console\.\w+\([^)]*config\.from\b/,
+    /mailLog\([^)]*\b(?:config\.key|to\.address|from\.address|record\.|text|message)\b/,
+  ]) {
+    assert.doesNotMatch(block, forbidden, `ログが ${forbidden} を含まないこと`);
+  }
+  // 設定の有無は真偽だけで示す（値をそのまま出さない）。
+  assert.match(block, /Boolean\(env\?\.FEEDBACK_MAIL_TO\)/);
+  assert.doesNotMatch(block, /\$\{env\?\.\w+\}/, "環境変数の値を直接埋め込まないこと");
+});
+
 // ---- 宛先を書かない ----
 
 test("宛先アドレスはリポジトリのどこにも書かれていない", () => {

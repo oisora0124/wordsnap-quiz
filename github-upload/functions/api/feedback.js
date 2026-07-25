@@ -270,13 +270,35 @@ async function mailRateLimited(env, request) {
   return false;
 }
 
+// 送信の失敗は投稿を落とさないために握り潰す。そのままだと症状が「静かに来ない」
+// だけになり切り分けようがないので、経路の分岐だけを固定文言で残す。
+// 宛先・APIキー・投稿本文はいずれもログに出さない（`wrangler pages deployment tail`
+// は誰でも見るものではないが、秘密を置く場所でもない）。
+function mailLog(stage, detail) {
+  console.log(`[feedback-mail] ${stage}${detail ? ` ${detail}` : ""}`);
+}
+
 async function sendFeedbackMail(env, request, record) {
   const config = mailConfig(env);
-  if (!config) return false;
+  if (!config) {
+    // どの設定が欠けているかだけを真偽で示す。値は出さない。
+    mailLog(
+      "skip: not configured",
+      `to=${Boolean(env?.FEEDBACK_MAIL_TO)} from=${Boolean(env?.FEEDBACK_MAIL_FROM)}`
+        + ` resend=${Boolean(env?.RESEND_API_KEY)} brevo=${Boolean(env?.BREVO_API_KEY)}`,
+    );
+    return false;
+  }
   const to = parseMailbox(config.to);
   const from = parseMailbox(config.from);
-  if (!to || !from) return false;
-  if (await mailRateLimited(env, request)) return false;
+  if (!to || !from) {
+    mailLog("skip: malformed address", `to=${Boolean(to)} from=${Boolean(from)}`);
+    return false;
+  }
+  if (await mailRateLimited(env, request)) {
+    mailLog("skip: rate limited or counter unavailable");
+    return false;
+  }
 
   const subject = mailSubject(record.category);
   const text = mailBody(record);
@@ -313,11 +335,19 @@ async function sendFeedbackMail(env, request, record) {
     });
   }
 
-  const response = await fetch(url, init);
+  let response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    mailLog("failed: network", `${config.provider} ${error?.name || "error"}`);
+    throw error;
+  }
   if (!response.ok) {
     // 本文にはAPIキーも宛先も含めない。原因追跡はステータスだけで足りる。
+    mailLog("failed: provider", `${config.provider} ${response.status}`);
     throw new Error(`mail provider responded ${response.status}`);
   }
+  mailLog("sent", config.provider);
   return true;
 }
 
