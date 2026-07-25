@@ -189,12 +189,19 @@ test("注意表示は同期状態と単語数の更新に追随する", () => {
   assert.match(handlerSource("function renderAll", "\n  // 学習カレンダー"), /renderV2RecoveryNotice\(\)/);
 });
 
-test("段階4の時点でもV2ネイティブ資格情報の発行経路は存在しない", () => {
-  assert.equal(
-    (html.match(/v2NativeIssueAllowed/g) || []).length,
-    1,
-    "発行ゲートは定義のみで呼び出し側を作らない",
+// 段階5-3bで発行経路が生えた。段階4の関心は「保管を促す注意が正しい相手に出るか」
+// なので、自動発行でも検証済み記録が残ることを確かめる（残らないと、発行された
+// 引き継ぎコードを保存するよう促されないまま使い続けることになる）。
+test("自動発行でも、保存できたことを検証済みとして記録する", () => {
+  const issue = html.slice(
+    html.indexOf("async function issueV2NativeCredential"),
+    html.indexOf("async function bootstrapNewUserIdentity"),
   );
+  const activated = issue.indexOf("activateV2Credential(");
+  const recorded = issue.indexOf("recordVerifiedSync(");
+  assert.ok(activated >= 0 && recorded > activated, "active化の後に記録すること");
+  // 記録するのは実際に発行した保存先であること
+  assert.match(issue.slice(recorded), /recordVerifiedSync\(credential\.roomId/);
 });
 
 // --- 敵対的レビュー(NO_GO)で見つかった2件の回帰テスト ---

@@ -265,17 +265,32 @@ test("4秒フォールバックは復元完了を待たない前提が維持さ�
   assert.match(html, /recoverPersisted\(\)\s*\n\s*\.then\(/);
 });
 
-test("段階3の時点ではV2ネイティブ資格情報の発行経路が存在しない", () => {
-  assert.equal(
-    (html.match(/v2NativeIssueAllowed/g) || []).length,
-    1,
-    "段階3ではゲート関数の定義のみで、呼び出し側を作らない",
+// 段階5-3bで発行経路が生えた。バリアの意味は「発行してよいかの唯一の判定」なので、
+// 番兵の役割は「経路が無いこと」から「経路が必ずバリアを通ること」へ移る。
+test("V2ネイティブの発行は、必ず回復バリアの確定を通ってから行われる", () => {
+  const issue = html.slice(
+    html.indexOf("async function issueV2NativeCredential"),
+    html.indexOf("async function bootstrapNewUserIdentity"),
   );
+  assert.ok(issue.length > 0, "発行関数が見つかること");
+  const gate = issue.indexOf("v2NativeIssueAllowed()");
+  assert.ok(gate >= 0, "バリアを見ること");
+  // ネットワークにも資格情報の保存にも、バリアより先に触れないこと
+  for (const needle of ["writeV2Credential", "v2Fetch", "acquireIdentityClaim"]) {
+    assert.ok(issue.indexOf(needle) > gate, `${needle} はバリアより後であること`);
+  }
+  // 発行リクエストの組み立ては1か所だけ（別経路でバリアを迂回させない）
+  assert.equal((html.match(/create=1&native=1/g) || []).length, 1);
+  // ネイティブ印を付ける場所は2つだけ。マジックな参照数ではなく、書き込み側を直接数える。
+  //   ・preserveV2NativeProvenance … 既にネイティブなら印を保つ
+  //   ・issueV2NativeCredential    … 自動発行のときに印を付ける（段階5-3b）
+  // ここが増えたら、バリアを通らない別の生成経路が生えている。
   assert.equal(
-    (html.match(/SYNC_V2_NATIVE_PROVENANCE/g) || []).length,
-    5,
-    "ネイティブ印の参照箇所が増えていない（＝新しい生成経路が生えていない）",
+    (html.match(/provenance: SYNC_V2_NATIVE_PROVENANCE/g) || []).length,
+    2,
+    "ネイティブ印の書き込み側が増えていない",
   );
+  assert.match(issue, /provenance: SYNC_V2_NATIVE_PROVENANCE/, "自動発行では印を付けること");
 });
 
 // --- Codexの敵対的レビュー(NO_GO)で見つかった2件の回帰テスト ---

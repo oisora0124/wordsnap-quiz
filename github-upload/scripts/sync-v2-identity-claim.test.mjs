@@ -177,12 +177,21 @@ test("claimを取れなかったら切替を始めない（別タブが同じ端
   assert.ok(guard >= 0 && guard - acquired < 200, "取得直後に失敗を確認すること");
 });
 
-test("段階5-1の時点ではV2ネイティブ資格情報の発行経路が存在しない", () => {
-  assert.equal(
-    (html.match(/v2NativeIssueAllowed/g) || []).length,
-    1,
-    "発行ゲートは定義のみで、呼び出し側を作らない",
+// 段階5-3bの受入条件: 発行は自動で走るため、手動操作と違って自分でclaimを取り、
+// さらに実行直前に再確認する（claimを取れても、他タブが先に決め終えていることがある）。
+test("自動発行は自らclaimを取り、実行直前にもう一度確認する", () => {
+  const issue = html.slice(
+    html.indexOf("async function issueV2NativeCredential"),
+    html.indexOf("async function bootstrapNewUserIdentity"),
   );
+  const acquired = issue.indexOf("await acquireIdentityClaim(");
+  const rechecked = issue.indexOf("identityClaimBlocksDecision(claimToken)");
+  const wrote = issue.indexOf("writeV2Credential(");
+  assert.ok(acquired >= 0, "claimを取ること");
+  assert.ok(rechecked > acquired, "取得後に再確認すること");
+  assert.ok(wrote > rechecked, "再確認より後で資格情報を書くこと");
+  assert.match(issue, /finally\s*\{[\s\S]*releaseIdentityClaim\(/, "finallyで必ず解放すること");
+  assert.match(issue, /if \(!claimToken\) return false/, "取れなければ発行しないこと");
 });
 
 // --- レビュー(GO_WITH_FIXES)で指摘されたギャップの回帰テスト ---

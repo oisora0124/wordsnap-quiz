@@ -12107,10 +12107,12 @@ async function readJsonResponse(response) {
 
 // V2の資格情報操作用fetch。通常同期のsyncRequestと同じ60秒上限で打ち切り、
 // 応答が来ない回線でボタンがbusyのまま固まらないようにする。
-async function v2Fetch(url, options) {
+// 起動経路の自動発行（段階5-3b）だけは短い上限を渡す。60秒待たせると、
+// 新規ユーザーが同期の始まらない画面を1分見ることになる。
+async function v2Fetch(url, options, timeoutMs = SYNC_REQUEST_TIMEOUT_MS) {
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeout = controller
-    ? window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS)
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
     : 0;
   try {
     return await fetch(url, controller ? { ...options, signal: controller.signal } : options);
@@ -14029,6 +14031,147 @@ function startSyncWithEstablishedIdentity({ keyGenerationFailed, identityDecisio
   setSyncStatus("サーバー保存の準備中です…");
 }
 
+// 段階5-3b: 新規ユーザーへのV2ネイティブ資格情報の自動発行。
+// 起動経路で走るので、どんな失敗でも**必ず false を返して legacy へ倒す**のが契約。
+// サーバー側の SYNC_V2_NATIVE_DEFAULT が立つまでは常に403が返るため、
+// この段階では実質的に常にlegacyへ倒れる＝挙動不変。
+// 短すぎると低速回線で不要にlegacyへ倒れ、「新規ユーザーをV2で始める」目的が薄れる。
+// 長すぎると起動直後の無言時間が延びる。倒れること自体は安全（従来どおり動く）なので、
+// 低速回線の実測に耐える程度に取り、通常同期の60秒とは別に短く保つ。
+const V2_NATIVE_ISSUE_TIMEOUT_MS = 10000;
+
+async function issueV2NativeCredential() {
+  // 回復バリアが「この端末に資格情報の痕跡は無い」と確定した場合だけ発行する。
+  // pending（＝IDBをまだ読めていない）や inconclusive では発行しない。
+  if (!v2NativeIssueAllowed()) return false;
+  // 発行は自動で走るので、手動操作と違って自分でclaimを取る。
+  const claimToken = await acquireIdentityClaim("issue");
+  if (!claimToken) return false;
+  let credential = null;
+  try {
+    // claimを取れても、他タブが先に決め終えている可能性がある。実行直前に再確認する。
+    if (identityClaimBlocksDecision(claimToken)) return false;
+    // 「資格情報なし」はrawキーの不在で見る（壊れたレコードも「保存あり」扱い）。
+    if (localStorage.getItem(SYNC_V2_CREDENTIAL_KEY) !== null) return false;
+    if (localStorage.getItem(SYNC_ID_KEY) !== null) return false;
+
+    // 送信bodyを組む直前の語数。応答待ちの間に増えた分はこの成功では保証されない。
+    const issuedWordCount = appState?.words?.length || 0;
+    credential = writeV2Credential(pendingV2Credential("create"));
+    const response = await v2Fetch(
+      `${v2SyncEndpoint(credential.roomId)}&create=1&native=1`,
+      {
+        method: "PUT",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "x-room-key": credential.secret,
+        },
+        body: JSON.stringify({
+          state: buildSyncPayloadState(),
+          learningSchemaVersion: Math.max(
+            LEARNING_SCHEMA_VERSION,
+            Number(appState.learningSchemaVersion) || 0,
+          ),
+        }),
+      },
+      V2_NATIVE_ISSUE_TIMEOUT_MS,
+    );
+    const data = await readJsonResponse(response);
+
+    // 展開制御による拒否。恒常的な拒否なので再試行しない。手動createは一般の403を
+    // 「room衝突」とみなしてroomIdを替えて再試行するが、ここでそれをやると
+    // フラグが未設定の間、起動のたびに無駄な再試行が4回走る。statusだけでなく
+    // codeまで見て、一般の403処理より先に確定させる。
+    if (response.status === 403 && data?.code === "native-default-disabled") return false;
+
+    if (response.status === 200 && validSyncPutResponse(data, credential.roomId)) {
+      // 複数タブ対策: 応答待ちの間に別タブがidentityを確定しているかもしれない。
+      // active化の直前にrawキーを読み直し、後出しで上書きしない。
+      if (localStorage.getItem(SYNC_ID_KEY) !== null) return false;
+      const stored = readV2Credential();
+      if (stored?.status !== "pending" || stored.roomId !== credential.roomId) return false;
+      // ネイティブ印はここで付ける。preserveV2NativeProvenance は「既にネイティブな
+      // identityの印を保つ」関数で、新規に付けはしない（発行時点では資格情報がまだ
+      // pendingなので syncRequestRoute() は legacy を返し、isV2Native は false）。
+      // 印が無いと isV2Native が永久に false のままになり、
+      //   ・次回起動で shouldAutoGenerateLegacy が真になって余計なlegacyキーが生え、
+      //     「個人リンク」が空のlegacy部屋を指す（別端末で開くと単語が消えて見える）
+      //   ・引き継ぎコードの保管催促（shouldPromptV2CodeBackup）が出ない
+      //   ・段階2で用意したネイティブ用のUIと接続経路が効かない
+      // という段階2〜4の保護が丸ごと無効になる。
+      activateV2Credential(
+        { ...credential, provenance: SYNC_V2_NATIVE_PROVENANCE },
+        data.stateRev,
+      );
+      // createのPUTで現在の状態を保存できているので、検証済みとして記録する。
+      recordVerifiedSync(credential.roomId, issuedWordCount);
+      trackUsage("sync-v2-native-issue");
+      return true;
+    }
+    // ここに来る全ケース（未知の4xx・413・422・429・5xx・parse失敗）をlegacyへ倒す。
+    // 起動経路なので、判断がつかないときに粘るより従来方式で確実に動かすほうがよい。
+    return false;
+  } catch {
+    // 通信断・タイムアウト・localStorage不可、いずれもlegacyへ倒す。
+    return false;
+  } finally {
+    // 成功時は status が active になっているので、この破棄は何もしない。
+    // 破棄が投げてもclaimは必ず解放する（解放し損ねると、このタブが閉じるまで
+    // 他タブのidentity操作が止まる）。
+    try {
+      if (credential) removePendingV2Credential(credential.roomId);
+    } finally {
+      releaseIdentityClaim(claimToken);
+    }
+  }
+}
+
+// 段階5-3b: 新規ユーザーのidentity確立（非同期）。V2発行を試し、成否に関わらず
+// **必ずlegacyへ着地させてから** UI反映と接続開始へ進む。着地しないまま抜けると、
+// 新規ユーザーが同期の無いまま取り残される。
+async function bootstrapNewUserIdentity({ foreignSyncId, identityDecisionDeferred }) {
+  let keyGenerationFailed = false;
+  try {
+    let issued = false;
+    try {
+      issued = await issueV2NativeCredential();
+    } catch {
+      issued = false;
+    }
+    if (!issued) {
+      // 発行を待っている間に、別タブがこの端末のidentityを確定しているかもしれない。
+      // そのまま新しいキーを作ると別タブの保存先を奪い、同じ端末の2タブが別々の
+      // 保存先へ送り続けてデータが割れる。既に決まっていれば、それに合流する。
+      const settledLegacyId = cleanSyncId(localStorage.getItem(SYNC_ID_KEY));
+      if (getActiveV2Credential()) {
+        // 別タブがV2を確定済み。こちらは何も足さない。
+      } else if (settledLegacyId) {
+        syncState.id = settledLegacyId;
+      } else {
+        keyGenerationFailed = !establishLegacyIdentity();
+      }
+    }
+  } catch {
+    // 予期しない失敗でも同期の無いまま放置しない。最後の手段としてlegacyを発行する。
+    try {
+      keyGenerationFailed = !establishLegacyIdentity();
+    } catch {
+      keyGenerationFailed = true;
+    }
+  } finally {
+    // 着地保証: どの枝を通っても、接続開始まで必ず到達する。
+    // UI反映で失敗しても同期は始める（表示が古いだけなら再描画で直るが、
+    // 同期が始まらないとサーバー保存も端末間の引き継ぎも効かない）。
+    try {
+      applyEstablishedIdentityToUi(foreignSyncId);
+    } catch {
+      // 表示の更新に失敗しても、identityは確立済みなので同期は開始できる。
+    }
+    startSyncWithEstablishedIdentity({ keyGenerationFailed, identityDecisionDeferred });
+  }
+}
+
 function initWordsnapSync() {
   if (!elements.syncIdInput) return;
   let keyGenerationFailed = false;
@@ -14072,8 +14215,16 @@ function initWordsnapSync() {
   syncState.id = identityDecisionDeferred ? "" : startupDecision.legacyId;
 
   // http/https では、個人キーが無ければ自動発行し、サーバー保存（耐久化）を有効にする。
+  // 段階5-3b: 資格情報の痕跡が無いと確定している端末だけ、先にV2の発行を試す。
+  // その場合の発行は bootstrapNewUserIdentity が最後まで面倒を見る（この関数は同期なので、
+  // ここでは「保留する」ことだけを決めて、着地は末尾の分岐へ委ねる）。
+  let deferredNewUserBootstrap = false;
   if (startupDecision.shouldAutoGenerateLegacy && !identityDecisionDeferred && syncServerAvailable()) {
-    keyGenerationFailed = !establishLegacyIdentity();
+    if (v2NativeIssueAllowed()) {
+      deferredNewUserBootstrap = true;
+    } else {
+      keyGenerationFailed = !establishLegacyIdentity();
+    }
   }
   // 呼び出し順は元のまま: legacy側のUI反映 → V2 UIの初期化 → identity依存のUI適用。
   applyLegacyIdentityToUi(foreignSyncId);
@@ -14261,6 +14412,12 @@ function initWordsnapSync() {
   }
   // 別の共有リンクを開いている場合は確認バナーを出す（確認までは元のキーで通常同期）
   if (foreignSyncId) showSyncSwitchConfirm(foreignSyncId, storedSyncId);
+  if (deferredNewUserBootstrap) {
+    // 発行の応答を待つ間、画面を無言にしない。着地後にこの文言は上書きされる。
+    setSyncStatus("サーバー保存の準備中です…");
+    void bootstrapNewUserIdentity({ foreignSyncId, identityDecisionDeferred });
+    return;
+  }
   startSyncWithEstablishedIdentity({ keyGenerationFailed, identityDecisionDeferred });
 }
 
