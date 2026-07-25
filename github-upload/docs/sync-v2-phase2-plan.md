@@ -408,7 +408,7 @@ Codexの敵対的レビューを5周実施。1〜4周目は `NO_GO`（合計BLOC
 
 ```
 5-1  identity操作の排他基盤（claim）＋ 切替時のタブ間空白期間の解消   【完了・本番検証済み】
-5-2  サーバー側 kill switch（SYNC_V2_NATIVE_DEFAULT）の受付          【実装完了・レビュー中】
+5-2  サーバー側 kill switch（SYNC_V2_NATIVE_DEFAULT）の受付          【完了・本番検証済み】
 5-3  クライアントの発行経路一式                                      挙動不変（サーバーが常に拒否するため）
 5-4  本番でフラグON                                                  ← 唯一の挙動変更
 ```
@@ -511,7 +511,7 @@ foreignリンク確認フローを止めないため。claimを取るのは nati
 手動操作（キー生成ボタン・引き継ぎコード入力・JSON取り込み）はclaimを見ないが、
 ユーザーの明示操作なので許容する。発行は自動で走るため扱いが違う。
 
-### 段階5-2: サーバー側 kill switch — **実装完了（2026-07-25）／レビュー中**
+### 段階5-2: サーバー側 kill switch — **完了（2026-07-25 / 本番検証済み）**
 
 `?create=1&native=1` が付いたcreateだけを、`SYNC_V2_NATIVE_DEFAULT !== "1"` のとき拒否する。
 
@@ -536,6 +536,17 @@ foreignリンク確認フローを止めないため。claimを取るのは nati
 **フラグは文字列 `"1"` のときだけ許可**（fail-closed）。`"0"` `"true"` `" 1"` 等はすべて拒否。
 
 **レビュー結果**: `GO`（BLOCKING 0件）。テスト194件green、`npm test` 終了コード0。
+
+**本番検証**（実際にAPIを叩いて確認）:
+- `?create=1&native=1` × 6回連続 → すべて `403` ＋
+  `{"error":"native default disabled","code":"native-default-disabled"}`（恒常的）
+- legacy同期 `?sync=…` → `200`（既存ユーザーの経路は無影響）
+- 手動create（`native=1` なし）→ `200`（Phase 1の機能は生きている）
+
+**運用上の知見**: デプロイ直後はエッジ伝播が完了しておらず、1回目は新コード・2回目は
+旧コードの応答が返った。Phase 1の鍵リング投入時と同じ現象。**本番検証は数回繰り返して
+収束を確認する**こと。またデプロイ固有URL（`<hash>.wordbank.pages.dev`）では
+Functionsが解決せず「Deployment Not Found」になるため、APIの検証は本番ドメインで行う。
 
 **5-3への申し送り（レビュー指摘・重要）**: 既存の手動create経路は**一般の403を
 「room衝突」とみなして再試行**する（`publish/index.html` の createV2Room）。
