@@ -12,8 +12,21 @@
 //   これにより「他のユーザーがフィードバックを読む経路」が構造的に存在しない。
 //
 // 【プライバシー】
-//   同期キー（?w=）・IPアドレスは受け取らないし保存もしない。
-//   連絡先は任意。UAはデバッグ目的で切り詰めて保存する。
+//   同期キー（?w=）・IPアドレスは受け取らないし保存もしない。連絡先は任意。UAも保存しない。
+//   メール通知の送信上限だけは「同じ相手か」を数える必要があるため、IPを
+//   SHA-256 で不可逆に潰した8バイトを rate_limits のキーに使う（feedback テーブル
+//   側には一切入らず、投稿内容とも結び付かない）。
+//
+// 【メール通知】
+//   保存に成功したら、設定されていれば通知メールを1通送る。宛先・差出人・APIキーは
+//   すべて Cloudflare 側の環境変数／シークレットで与える。このリポジトリは公開なので、
+//   宛先アドレスをソースにもクライアントにも書かない（未設定なら通知しないだけ）。
+//     FEEDBACK_MAIL_TO     宛先（シークレット）
+//     FEEDBACK_MAIL_FROM   差出人（プロバイダで許可されたアドレス）
+//     RESEND_API_KEY       Resend を使う場合のAPIキー
+//     BREVO_API_KEY        Brevo を使う場合のAPIキー（RESEND_API_KEY が優先）
+//   送信は fail-open。失敗しても投稿は D1 に残っており、ユーザーには 200 を返す
+//   （送れなかったことでユーザーの要望が消えるほうが害が大きい）。
 //
 // 同期API（wordsnap-state.js）とは完全に別ファイル・別テーブルで、既存の保存・
 // 同期の経路には一切触れない。feedback テーブルが無い場合は 503 を返すだけ。
@@ -94,6 +107,191 @@ async function readBodyCapped(request, maxBytes) {
   return new TextDecoder().decode(merged);
 }
 
+// ---- メール通知 ----
+
+const MAIL_TIMEOUT_MS = 8000;
+const MAIL_USER_AGENT = "WordBank-Feedback/1.0";
+const CATEGORY_LABELS = { request: "要望", bug: "不具合", other: "その他" };
+
+// 通知は公開・無認証のエンドポイントから発火するため、そのままでは受信箱への
+// フラッド経路になる。IP単位と全体の二段で上限を掛け、超えた分は「保存はするが
+// メールは出さない」に倒す（投稿自体は D1 に残るので失われない）。
+const MAIL_RATE_LIMITS = [
+  { scope: "ip", limit: 5, windowMs: 60 * 60 * 1000 },
+  { scope: "all", limit: 60, windowMs: 60 * 60 * 1000 },
+];
+
+// 送信先が設定されていなければ null を返す＝通知しない（現行どおり D1 保存のみ）。
+function mailConfig(env) {
+  const to = String(env?.FEEDBACK_MAIL_TO || "").trim();
+  const from = String(env?.FEEDBACK_MAIL_FROM || "").trim();
+  if (!to || !from) return null;
+  const resendKey = String(env?.RESEND_API_KEY || "").trim();
+  if (resendKey) return { provider: "resend", to, from, key: resendKey };
+  const brevoKey = String(env?.BREVO_API_KEY || "").trim();
+  if (brevoKey) return { provider: "brevo", to, from, key: brevoKey };
+  return null;
+}
+
+// `no-reply@example.com` または `WordBank <no-reply@example.com>` の1件だけを受理する。
+// 設定ミス（改行混入・複数アドレス・閉じていない山括弧）は黙って通さず null にして
+// 送信自体を見送る — 壊れた値をプロバイダへ渡しても失敗して枠を無駄にするだけ。
+const MAILBOX_PATTERN = /^(?:([^<>@\n\r]*?)\s*<\s*([^\s<>@,;]+@[^\s<>@,;]+)\s*>|([^\s<>@,;]+@[^\s<>@,;]+))$/;
+
+function parseMailbox(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed || /[\r\n,;]/.test(trimmed)) return null;
+  const match = MAILBOX_PATTERN.exec(trimmed);
+  if (!match) return null;
+  const address = match[2] || match[3];
+  if (!address || !/^[^@]+@[^@]+\.[^@]+$/.test(address)) return null;
+  const name = (match[1] || "").trim().replace(/^"(.*)"$/, "$1").trim();
+  return { address, name: name || "WordBank", raw: trimmed };
+}
+
+// 件名にはユーザー入力を一切入れない。ヘッダに本文が混ざる経路を作らないためと、
+// 受信箱でのなりすまし（件名だけ見て別サービスの通知に見える）を防ぐため。
+function mailSubject(category) {
+  return `[WordBank] 新しいフィードバック（${CATEGORY_LABELS[category] || category}）`;
+}
+
+function mailBody({ category, message, contact, appVersion, createdAt }) {
+  return [
+    "WordBank にフィードバックが届きました。",
+    "",
+    `種別: ${CATEGORY_LABELS[category] || category}（${category}）`,
+    `受信: ${new Date(createdAt).toISOString()}`,
+    `アプリ版: ${appVersion || "(未記入)"}`,
+    `連絡先: ${contact || "(未記入)"}`,
+    "",
+    "--- 本文 ---",
+    message,
+    "",
+    "--- ",
+    "連絡先はユーザーの自己申告であり検証していない。返信する前に内容を確認すること。",
+    "全文は D1 の feedback テーブルにも保存されている。",
+  ].join("\n");
+}
+
+// IPをそのままキーにすると「IPアドレスは保存しない」という本ファイルの契約を破る。
+// 上限判定に必要なのは「同じ相手か」だけなので、不可逆なハッシュに落として保存する。
+async function ipBucket(ip) {
+  const bytes = new TextEncoder().encode(`wordbank-fb-mail ${ip}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest).slice(0, 8))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// wordsnap-state.js の同名処理と同じ rate_limits テーブルを使うが、feedback.js は
+// 同期APIから独立させる方針なので意図的に別実装として持つ。
+//
+// 保存（feedback テーブル）と違い、ここは fail-CLOSED にする。上限を確かめられない
+// まま送ると、公開・無認証の投稿口が無制限のメール送信路になるため。通知を見送っても
+// 投稿本体は D1 に残っているので要望は失われない。
+async function mailRateLimited(db, request) {
+  const now = Date.now();
+  let keys;
+  try {
+    const bucket = await ipBucket(request.headers.get("CF-Connecting-IP") || "unknown");
+    keys = MAIL_RATE_LIMITS.map((rule) => ({
+      rule,
+      key: rule.scope === "ip" ? `fb-mail:${bucket}` : "fb-mail:all",
+    }));
+  } catch {
+    return true;
+  }
+
+  try {
+    // まず両方を読んで判定する。片方だけ消費して他方で止まると、送っていないのに
+    // 枠が減る（カウンタ同士が食い違う）ため、消費は判定が全部通ってから行う。
+    for (const { rule, key } of keys) {
+      const current = await db
+        .prepare("SELECT window_start, count FROM rate_limits WHERE rl_key = ?")
+        .bind(key)
+        .first();
+      const expired = !current || now >= Number(current.window_start) + rule.windowMs;
+      if (!expired && Number(current.count) >= rule.limit) return true;
+    }
+
+    for (const { rule, key } of keys) {
+      const expiryCutoff = now - rule.windowMs;
+      const result = await db
+        .prepare(
+          `INSERT INTO rate_limits (rl_key, window_start, count) VALUES (?, ?, 1)
+           ON CONFLICT(rl_key) DO UPDATE SET
+             window_start = CASE
+               WHEN rate_limits.window_start <= ? THEN excluded.window_start
+               ELSE rate_limits.window_start
+             END,
+             count = CASE
+               WHEN rate_limits.window_start <= ? THEN 1
+               ELSE rate_limits.count + 1
+             END
+           WHERE rate_limits.window_start <= ? OR rate_limits.count < ?`,
+        )
+        .bind(key, now, expiryCutoff, expiryCutoff, expiryCutoff, rule.limit)
+        .run();
+      // 同時実行で埋まった場合。読み取り判定を通っていても、ここで負けたら送らない。
+      if (Number(result?.meta?.changes) === 0) return true;
+    }
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+async function sendFeedbackMail(env, request, record) {
+  const config = mailConfig(env);
+  if (!config) return false;
+  const to = parseMailbox(config.to);
+  const from = parseMailbox(config.from);
+  if (!to || !from) return false;
+  if (await mailRateLimited(env.DB, request)) return false;
+
+  const subject = mailSubject(record.category);
+  const text = mailBody(record);
+  // 返信先にユーザー申告の連絡先を入れない（未検証のアドレスを差出人相当に置くと
+  // 第三者を騙る踏み台になる）。連絡先は本文にだけ載せる。
+  const init = {
+    method: "POST",
+    signal: AbortSignal.timeout(MAIL_TIMEOUT_MS),
+  };
+  let url;
+  if (config.provider === "resend") {
+    url = "https://api.resend.com/emails";
+    init.headers = {
+      authorization: `Bearer ${config.key}`,
+      "content-type": "application/json",
+      // Resend は直接のHTTP呼び出しに User-Agent を要求し、無いと403を返す。
+      // Workers の fetch は自動では付けないので明示する（秘密情報は載せない）。
+      "user-agent": MAIL_USER_AGENT,
+    };
+    init.body = JSON.stringify({ from: from.raw, to: [to.address], subject, text });
+  } else {
+    url = "https://api.brevo.com/v3/smtp/email";
+    init.headers = {
+      "api-key": config.key,
+      "content-type": "application/json",
+      accept: "application/json",
+      "user-agent": MAIL_USER_AGENT,
+    };
+    init.body = JSON.stringify({
+      sender: { email: from.address, name: from.name },
+      to: [{ email: to.address }],
+      subject,
+      textContent: text,
+    });
+  }
+
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    // 本文にはAPIキーも宛先も含めない。原因追跡はステータスだけで足りる。
+    throw new Error(`mail provider responded ${response.status}`);
+  }
+  return true;
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
 
@@ -149,12 +347,14 @@ export async function onRequest(context) {
   // 列はスキーマ安定のため残し、常に空文字を入れる。
   const userAgent = "";
 
+  // 時刻は prepare() の後に取る（メール通知の追加前と同じ評価順を保つ）。
+  let createdAt;
   try {
-    await env.DB.prepare(
+    const statement = env.DB.prepare(
       "INSERT INTO feedback (created_at, category, message, contact, app_version, user_agent) VALUES (?, ?, ?, ?, ?, ?)",
-    )
-      .bind(Date.now(), category, message, contact, appVersion, userAgent)
-      .run();
+    );
+    createdAt = Date.now();
+    await statement.bind(createdAt, category, message, contact, appVersion, userAgent).run();
   } catch (error) {
     // feedback テーブル未適用や一時障害。内部詳細は返さない。
     const missingTable = /no such table/i.test(String(error && error.message));
@@ -162,6 +362,27 @@ export async function onRequest(context) {
       { error: missingTable ? "storage unavailable" : "could not save" },
       missingTable ? 503 : 500,
     );
+  }
+
+  // 保存が確定してから通知する。送信の成否は応答に影響させない（fail-open）。
+  // waitUntil があれば応答を待たせずに裏で送る。無い環境（テスト等）では
+  // 応答前に送りきる — どちらの経路でも例外はここで飲み込む。
+  try {
+    const notify = sendFeedbackMail(env, request, {
+      category,
+      message,
+      contact,
+      appVersion,
+      createdAt,
+    }).catch(() => false);
+    if (typeof context.waitUntil === "function") {
+      // waitUntil の登録自体が投げる可能性も潰す（保存済みなのに500にしない）。
+      context.waitUntil(notify);
+    } else {
+      await notify;
+    }
+  } catch {
+    // 通知の都合で保存済みの投稿を失敗扱いにはしない。
   }
 
   return json({ ok: true });
