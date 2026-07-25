@@ -10687,6 +10687,51 @@ const idb = {
       }
     });
   },
+  // 通常の get は open失敗・トランザクション失敗・例外をすべて null に畳むため、
+  // 「値が無い」と「読めなかった」を呼び出し側で区別できない。さらに値そのものが
+  // null / undefined でも保存できるので、値だけでは「キーが無い」とも区別できない。
+  // その区別が判断を左右する場合（Phase 2 段階3の起動バリア）だけこちらを使う。
+  // 読めたかどうか(ok)・キーがあるか(present)・値(value) を同じ1トランザクションで返す。
+  async getChecked(key) {
+    const db = await this.open();
+    if (!db) return { ok: false, present: false, value: null };
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction("kv", "readonly");
+        const store = tx.objectStore("kv");
+        const countReq = store.count(key);
+        const valueReq = store.get(key);
+        let finished = false;
+        let pendingCount = 2;
+        const fail = () => {
+          if (finished) return;
+          finished = true;
+          resolve({ ok: false, present: false, value: null });
+        };
+        const step = () => {
+          pendingCount -= 1;
+          if (finished || pendingCount > 0) return;
+          finished = true;
+          resolve({
+            ok: true,
+            present: Number(countReq.result || 0) > 0,
+            value: valueReq.result ?? null,
+          });
+        };
+        countReq.onsuccess = step;
+        valueReq.onsuccess = step;
+        countReq.onerror = fail;
+        valueReq.onerror = fail;
+        // abort ではどちらの onerror も発火しない。拾わないとPromiseが永久に解決せず、
+        // 復元が確定しないまま止まる（バリアはpendingのままなので安全側ではあるが、
+        // 起動処理がそこで止まる）。set と同じくトランザクション側も見る。
+        tx.onabort = fail;
+        tx.onerror = fail;
+      } catch {
+        resolve({ ok: false, present: false, value: null });
+      }
+    });
+  },
   async delete(key) {
     const db = await this.open();
     if (!db) return false;
@@ -11380,7 +11425,11 @@ async function recoverV2CredentialFromIdb() {
     }
     const normalized = normalizeV2Credential(parsed);
     if (!normalized || normalized.status !== "active") {
-      await idb.delete(SYNC_V2_CREDENTIAL_KEY);
+      // 段階3: ここで削除してはいけない。壊れた／未activeの耐久レコードは
+      // 「この端末には資格情報の痕跡があった」という唯一の証跡であり、消すと
+      // 次の起動から「資格情報がどこにも無い＝新規ユーザー」に見えてしまう
+      // （＝元データから切り離された別の部屋を発行してしまう）。
+      // 残しても実害はなく、後でactive資格情報を持てばそのまま上書きされる。
       return false;
     }
     if (localStorage.getItem(SYNC_V2_CREDENTIAL_KEY) !== null) return false;
@@ -23433,6 +23482,65 @@ elements.ocrLayoutSelect.addEventListener("change", () => {
   localStorage.setItem(OCR_LAYOUT_KEY, elements.ocrLayoutSelect.value);
 });
 
+// ---- 起動時レースのガード（Phase 2 段階3）----
+// IndexedDBからのV2資格情報の復元は非同期で、下の4秒フォールバックはその完了を待たずに
+// 同期を開始する。「保存された資格情報が無い＝新規ユーザー」という判定を復元の確定前に
+// 行うと、耐久コピーに残る本人の引き継ぎ情報を見落として別系列の資格情報を発行し、
+// データが2つの部屋に割れる。そのためV2ネイティブ発行の可否は、この状態だけで決める。
+//   pending      … 復元がまだ確定していない（4秒フォールバック起動はここに当たる）
+//   settled      … localStorageにもIndexedDBにも資格情報の痕跡が無いと確認できた
+//   inconclusive … 読めなかった、痕跡が残っている、または既に資格情報を持っている
+// settled 以外は必ずlegacy側へ倒す。legacyは後からupgradeできるが、
+// 誤発行したV2は既存データと切り離されたまま取り返しがつかない。
+let v2RecoveryBarrierState = "pending";
+
+function v2RecoveryBarrierStatus() {
+  return v2RecoveryBarrierState;
+}
+
+// 最初の確定だけを採用する。後から状態が覆ると、確定済みの分岐と矛盾した判断が生まれる。
+function settleV2RecoveryBarrier(state) {
+  if (v2RecoveryBarrierState !== "pending") return;
+  v2RecoveryBarrierState = state === "settled" ? "settled" : "inconclusive";
+}
+
+// 段階5のV2ネイティブ自動発行は、このゲートだけを判断材料にする。
+// 段階3の時点では呼び出し側を作らない（発行経路そのものがまだ存在しない）。
+function v2NativeIssueAllowed() {
+  return v2RecoveryBarrierState === "settled";
+}
+
+// recoverV2CredentialFromIdb は失敗も false に畳むため、戻り値だけでは
+// 「耐久コピーが無い」と「IndexedDBが読めなかった」を区別できない。idb.get も同様に
+// 失敗を null へ畳むので、判定には使えない（例外も飛ばない）。
+// そこで、復元されず、かつlocalStorageにも生の資格情報が無いとき＝まさに「新規」判定へ
+// 踏み込む状態のときだけ、成否・キーの有無・値を返す getChecked で直接確かめる。
+// settled にしてよいのは、次の3つが揃ったときだけ:
+//   1. 読み取り自体が成功した
+//   2. 耐久キーが存在しない（壊れたレコードが残っていれば「痕跡あり」＝新規ではない）
+//   3. 値も残っていない（読めたのに復元されなかった＝一時的な読み取り失敗の証拠）
+async function settleV2RecoveryFromIdb() {
+  let restored = false;
+  try {
+    restored = await recoverV2CredentialFromIdb();
+    if (restored || localStorage.getItem(SYNC_V2_CREDENTIAL_KEY) !== null) {
+      // すでに資格情報を持っている＝新規ではない。発行の前提を満たさない。
+      settleV2RecoveryBarrier("inconclusive");
+      return restored;
+    }
+    const probe = await idb.getChecked(SYNC_V2_CREDENTIAL_KEY);
+    const durableTraceRemains =
+      !probe ||
+      !probe.ok ||
+      probe.present ||
+      (probe.value !== null && probe.value !== undefined);
+    settleV2RecoveryBarrier(durableTraceRemains ? "inconclusive" : "settled");
+  } catch {
+    settleV2RecoveryBarrier("inconclusive");
+  }
+  return restored;
+}
+
 // Hardens data against eviction / localStorage clearing:
 // 1) ask the browser to keep storage persistent (won't be auto-evicted)
 // 2) keep the client id in IndexedDB so a wiped localStorage can be recovered
@@ -23449,7 +23557,8 @@ async function recoverPersisted() {
 
   // V2資格情報は学習stateやlegacyキーと別の専用レコードとして復元する。
   // localStorage優先の判定はrecoverV2CredentialFromIdb内で読み取り前後の2回行う。
-  v2CredentialRecoveredFromIdb = await recoverV2CredentialFromIdb();
+  // 起動バリア経由で呼び、この復元が確定したかどうかを段階5の発行ゲートへ残す。
+  v2CredentialRecoveredFromIdb = await settleV2RecoveryFromIdb();
   if (v2CredentialRecoveredFromIdb && syncInitStarted) {
     // 4秒フォールバックでlegacy同期が先に始まっていた場合も、復元したV2へ安全に切り替える。
     stopSyncPolling();
