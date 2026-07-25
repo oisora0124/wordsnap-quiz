@@ -909,3 +909,166 @@ test("upgradeのD1失敗は5xxとなり、資格情報の再試行余地を残�
   assert.equal(retried.response.status, 200);
   assert.equal(retried.data.syncId, ROOM_ID);
 });
+
+// --- Phase 2 段階5-2: 新規ユーザーへのV2自動発行の kill switch ---
+//
+// 5-3のクライアントは、この拒否を受けたら**無言でlegacyへ倒す**。したがって拒否は
+//   ・恒常的であること（再試行しても結果が変わらない）
+//   ・5xx障害と機械的に区別できること（区別できないと再試行ループやpending滞留になる）
+// が必要。SYNC_V2_ENABLED（create/upgrade全体）とは独立した別スイッチにする。
+test("native既定のcreateは専用フラグ未設定なら恒常的に拒否し、5xxと区別できる", async () => {
+  const db = new FakeD1();
+  const refused = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1, native: 1 },
+    body: { state: sampleState("native-off") },
+    env: { SYNC_V2_NATIVE_DEFAULT: undefined },
+  });
+  // 5xxではない（＝障害ではなく仕様どおりの拒否）
+  assert.ok(
+    refused.response.status < 500,
+    `恒常的な拒否は5xxにしないこと（${refused.response.status}）`,
+  );
+  assert.equal(refused.response.status, 403);
+  // 5-3のクライアントはこの形だけを見てlegacyへ倒す。応答形状ごと固定する。
+  assert.deepEqual(refused.data, {
+    error: "native default disabled",
+    code: "native-default-disabled",
+  });
+  assert.equal(db.rows.size, 0, "部屋を作らないこと");
+  assert.equal(db.rooms.size, 0);
+
+  // 何度試しても結果が変わらない（再試行の余地を与えない）
+  const again = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1, native: 1 },
+    body: { state: sampleState("native-off-2") },
+    env: { SYNC_V2_NATIVE_DEFAULT: undefined },
+  });
+  assert.equal(again.response.status, 403);
+  assert.equal(again.data.code, "native-default-disabled");
+});
+
+test("native既定の拒否はcreateのレート上限を消費しない", async () => {
+  // 拒否のたびに枠を食うと、フラグを立てた直後に本来の利用者が429になる
+  const db = new FakeD1();
+  for (let i = 0; i < 15; i += 1) {
+    const refused = await requestV2(db, {
+      method: "PUT",
+      room: `wr_${String(i).padStart(2, "0").repeat(16)}`,
+      query: { create: 1, native: 1 },
+      body: { state: sampleState(`native-off-${i}`) },
+      env: { SYNC_V2_NATIVE_DEFAULT: undefined },
+    });
+    assert.equal(refused.response.status, 403, `${i}回目も同じ拒否であること`);
+  }
+  // 直後にフラグを立てたcreateが通ること（＝枠を消費していない）
+  const allowed = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1, native: 1 },
+    body: { state: sampleState("native-on") },
+    env: { SYNC_V2_NATIVE_DEFAULT: "1" },
+  });
+  assert.equal(allowed.response.status, 200);
+});
+
+test("フラグを立てればnative既定のcreateは通常のcreateと同じ結果になる", async () => {
+  const db = new FakeD1();
+  const created = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1, native: 1 },
+    body: { state: sampleState("native-created") },
+    env: { SYNC_V2_NATIVE_DEFAULT: "1" },
+  });
+  assert.equal(created.response.status, 200);
+  assert.equal(created.data.ok, true);
+  assert.equal(created.data.syncId, ROOM_ID);
+  assert.ok(Number(created.data.stateRev) > 0);
+});
+
+test("native既定のフラグはPhase 1の手動create・upgradeに影響しない", async () => {
+  // 独立したkill switchであること。5-4を戻してもPhase 1の機能は生きている必要がある。
+  const db = new FakeD1();
+  const manualCreate = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1 },
+    body: { state: sampleState("manual") },
+    env: { SYNC_V2_NATIVE_DEFAULT: undefined },
+  });
+  assert.equal(manualCreate.response.status, 200, "手動createはフラグ未設定でも通ること");
+
+  const upgraded = await requestUpgrade(new FakeD1(), {
+    env: { SYNC_V2_NATIVE_DEFAULT: undefined },
+  });
+  assert.equal(upgraded.response.status, 200, "upgradeもフラグ未設定で通ること");
+});
+
+test("native既定でもSYNC_V2_ENABLEDの停止が優先される", async () => {
+  // 二重の停止スイッチ。全体停止中に native だけ通る抜け道を作らない。
+  const db = new FakeD1();
+  const stopped = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1, native: 1 },
+    body: { state: sampleState("both-off") },
+    env: { SYNC_V2_ENABLED: undefined, SYNC_V2_NATIVE_DEFAULT: "1" },
+  });
+  assert.equal(stopped.response.status, 503, "全体停止は503のまま");
+  assert.equal(db.rows.size, 0);
+
+  // 両方とも未設定なら、返るのは全体停止の503であって native の403ではない。
+  // （native判定を全体停止より前に置くと、ここが403になって順序が壊れる）
+  const bothOff = await requestV2(db, {
+    method: "PUT",
+    query: { create: 1, native: 1 },
+    body: { state: sampleState("both-unset") },
+    env: { SYNC_V2_ENABLED: undefined, SYNC_V2_NATIVE_DEFAULT: undefined },
+  });
+  assert.equal(bothOff.response.status, 503, "全体停止の判定が先であること");
+  assert.equal(db.rows.size, 0);
+});
+
+test("native既定の拒否はレート枠を使い切った後でも429ではなく403になる", async () => {
+  // native判定がレート判定より常に先であることの直接固定。
+  // 429だと5-3のクライアントが「時間をおけば通る」と誤解し、pendingを抱えたまま滞留する。
+  const db = new FakeD1();
+  for (let i = 0; i < 10; i += 1) {
+    const ok = await requestV2(db, {
+      method: "PUT",
+      room: `wr_${String(i).padStart(2, "0").repeat(16)}`,
+      query: { create: 1 },
+      body: { state: sampleState(`fill-${i}`) },
+    });
+    assert.equal(ok.response.status, 200, `${i}回目の通常createは成功すること`);
+  }
+  const overLimit = await requestV2(db, {
+    method: "PUT",
+    room: `wr_${"9".repeat(32)}`,
+    query: { create: 1 },
+    body: { state: sampleState("over") },
+  });
+  assert.equal(overLimit.response.status, 429, "通常createは枠超過で429になること");
+
+  const nativeRefused = await requestV2(db, {
+    method: "PUT",
+    room: `wr_${"8".repeat(32)}`,
+    query: { create: 1, native: 1 },
+    body: { state: sampleState("native-over") },
+    env: { SYNC_V2_NATIVE_DEFAULT: undefined },
+  });
+  assert.equal(nativeRefused.response.status, 403, "枠超過でもnative判定が先であること");
+  assert.equal(nativeRefused.data.code, "native-default-disabled");
+});
+
+test("native既定のフラグは文字列1のときだけ許可する（fail-closed）", async () => {
+  for (const value of [undefined, "", "0", "true", "yes", "1 ", " 1"]) {
+    const db = new FakeD1();
+    const refused = await requestV2(db, {
+      method: "PUT",
+      query: { create: 1, native: 1 },
+      body: { state: sampleState(`flag-${String(value)}`) },
+      env: { SYNC_V2_NATIVE_DEFAULT: value },
+    });
+    assert.equal(refused.response.status, 403, `${JSON.stringify(value)} は拒否すること`);
+    assert.equal(db.rows.size, 0, `${JSON.stringify(value)} で部屋を作らないこと`);
+  }
+});

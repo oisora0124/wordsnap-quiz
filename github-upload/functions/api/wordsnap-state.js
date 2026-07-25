@@ -306,6 +306,15 @@ function v2Unavailable() {
   return json({ error: "sync v2 unavailable" }, 503);
 }
 
+// Phase 2 段階5-2: 新規ユーザーへのV2自動発行だけを止める独立スイッチ。
+// クライアントはこれを受けたら無言でlegacyへ倒す。そのため拒否は
+//   ・恒常的（再試行しても結果が変わらない）
+//   ・5xx障害と機械的に区別できる（区別できないと再試行ループやpending滞留になる）
+// である必要がある。503（＝障害と同じ形）にしてはいけない。
+function v2NativeDefaultDisabled() {
+  return json({ error: "native default disabled", code: "native-default-disabled" }, 403);
+}
+
 function v2RateLimited() {
   return json({ error: "rate limited", code: "rate-limited" }, 429);
 }
@@ -627,6 +636,17 @@ async function handleV2RoomRequest(context, url) {
   if (!keyRing) return v2Unavailable();
   if (url.searchParams.get("create") === "1" && env.SYNC_V2_ENABLED !== "1") {
     return v2Unavailable();
+  }
+  // 全体停止（SYNC_V2_ENABLED）を先に見る。全体が止まっているときに
+  // native既定だけ通る抜け道を作らない。
+  if (
+    url.searchParams.get("create") === "1"
+    && url.searchParams.get("native") === "1"
+    && env.SYNC_V2_NATIVE_DEFAULT !== "1"
+  ) {
+    // レート上限を消費する前に返す。拒否のたびに枠を食うと、フラグを立てた直後に
+    // 本来の利用者が429になる。
+    return v2NativeDefaultDisabled();
   }
   if (
     url.searchParams.get("create") === "1"
