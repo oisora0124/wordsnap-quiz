@@ -2642,6 +2642,24 @@ textarea:focus-visible {
   color: var(--accent-text);
 }
 
+/* 段階4: 引き継ぎコードが端末外に保存されていない間の注意。保存されると消える。 */
+.sync-v2-recovery-notice {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--danger-text);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger-text) 8%, transparent);
+  /* 設定内の p は --muted 指定の方が詳細度で勝つため、隣の .sync-v2-code-warning と同じく明示する */
+  color: var(--danger-text) !important;
+  line-height: 1.6;
+}
+
+.sync-v2-recovery-notice small {
+  display: inline-block;
+  margin-top: 0.25rem;
+  opacity: 0.85;
+}
+
 .sync-v2-code {
   width: 100%;
   min-width: 0;
@@ -6071,6 +6089,13 @@ accurate 正確な"
                       aria-label="新方式の引き継ぎコード"
                     />
                     <p id="syncV2CredentialWarning" class="sync-v2-code-warning"></p>
+                    <p id="syncV2RecoveryNotice" class="sync-v2-recovery-notice" role="status" hidden>
+                      ⚠️ <strong>この引き継ぎコードはまだ端末の外に保存されていません。</strong><br />
+                      単語データが増えています。サイトデータの消去や機種変更でこの端末の中身が失われると、
+                      コードが無ければ復旧できません。「テキストで保存」するか、
+                      「JSONを書き出す」で引き継ぎコードを含めて保管してください。<br />
+                      <small>コピーだけでは、貼り付け先が残っている保証がないため注意は消えません。</small>
+                    </p>
                     <div class="sync-v2-actions">
                       <button id="syncV2CopyCodeButton" class="secondary" type="button">コードをコピー</button>
                       <button id="syncV2DownloadCodeButton" class="ghost" type="button">テキストで保存</button>
@@ -9353,6 +9378,7 @@ const elements = {
   syncBadgeText: document.querySelector("#syncBadge .sync-badge-text"),
   syncStatus: document.querySelector("#syncStatus"),
   syncV2Section: document.querySelector("#syncV2Section"),
+  syncV2RecoveryNotice: document.querySelector("#syncV2RecoveryNotice"),
   syncV2UpgradeButton: document.querySelector("#syncV2UpgradeButton"),
   syncV2CreateButton: document.querySelector("#syncV2CreateButton"),
   syncV2CredentialPanel: document.querySelector("#syncV2CredentialPanel"),
@@ -11660,6 +11686,13 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     error.noRetry = true;
     throw error;
   }
+  // 段階4: この応答が「どの保存先のものか」を呼び出し側へ渡す。
+  // 呼び出し側が通信前に取った identity では、gzip圧縮のawaitを跨いで
+  // 別タブが資格情報を切り替えた場合に、送信先と記録先がずれる。
+  // ここは応答の syncId と照合済みの値なので、実際に通信した保存先そのもの。
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    data.verifiedSyncTarget = expectedSyncId;
+  }
   return data;
 }
 
@@ -11801,6 +11834,99 @@ function setV2Busy(busy) {
   if (elements.syncV2DownloadCodeButton) elements.syncV2DownloadCodeButton.disabled = busy;
 }
 
+// ---- 回復UX（Phase 2 段階4）----
+// V2ネイティブには個人リンク（?w=）が無く、引き継ぎコードが唯一のアクセス手段になる。
+// legacyではURL・履歴・ブックマークが事実上のバックアップだったので、その後退を埋める。
+//
+// 設計上の要点:
+// - 保存済みは **roomIdごと** に持つ。単一booleanだと部屋を切り替えたあとも
+//   「保存済み」が残り、新しい部屋のコードを保管しないまま注意が消えてしまう。
+// - 保存済みとみなすのは **端末外へ出す操作だけ**（テキスト保存 / 資格情報を含むJSON書き出し）。
+//   clipboardコピーは貼り付け先が保証されず、端末を失えば一緒に消える。
+// - 提示するのは **守る価値のあるデータができた後**（単語があり、同期に成功したあと）。
+// - **V2ネイティブ限定**。個人リンクを持つ既存ユーザー（legacy+V2）には一切出さない。
+const V2_CODE_SAVED_KEY = "wordsnap-v2-code-saved:v1";
+const V2_CODE_SAVED_MAX = 8;
+const V2_ROOM_ID_PATTERN = /^wr_[0-9a-f]{32}$/;
+
+function readV2SavedRooms() {
+  try {
+    const raw = localStorage.getItem(V2_CODE_SAVED_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id) => typeof id === "string" && V2_ROOM_ID_PATTERN.test(id));
+  } catch {
+    // 壊れた値は「保存済みが無い」として扱う。注意が残るだけで安全側。
+    return [];
+  }
+}
+
+function isV2CodeSavedFor(roomId) {
+  if (!roomId) return false;
+  return readV2SavedRooms().includes(roomId);
+}
+
+// 端末外へ書き出したときだけ呼ぶ。コピー操作からは呼ばない。
+function markV2CodeSavedFor(roomId) {
+  if (!roomId || !V2_ROOM_ID_PATTERN.test(roomId)) return;
+  try {
+    const rooms = readV2SavedRooms().filter((id) => id !== roomId);
+    rooms.push(roomId);
+    localStorage.setItem(V2_CODE_SAVED_KEY, JSON.stringify(rooms.slice(-V2_CODE_SAVED_MAX)));
+  } catch {
+    // 保存できない環境では注意が出続けるだけ（安全側）
+  }
+  renderV2RecoveryNotice();
+}
+
+// 引き継ぎコードの保管を促すべきか。4条件すべてを満たしたときだけ true。
+function shouldPromptV2CodeBackup(identity = syncRequestRoute()) {
+  if (!identity?.isV2Native) return false; // 個人リンクを持つ人には出さない
+  if (!identity.roomId) return false;
+  if (isV2CodeSavedFor(identity.roomId)) return false;
+  if (!(appState?.words?.length > 0)) return false; // 守る価値のあるデータができてから
+  // この部屋に単語が実際に入ったと検証できてから。別の部屋の成功や、
+  // 同期を伴わない操作（共有リンクのコピー等）、空のcreateを根拠にしない。
+  return lastVerifiedSyncTarget === identity.roomId && lastVerifiedSyncHasWords;
+}
+
+// 「この保存先に、少なくとも一度、空でないデータが保存されたことを確認した」だけを記録する。
+// 現在のローカル内容や最新の編集まで一致していることは保証しない（保証する必要もない）。
+// setSyncStatus(..., "live") は共有リンクのコピー・共有の成功でも呼ばれるため
+// （同期通信は一切していない）、表示用の状態を回復UXの判断に使ってはいけない。
+// 逆に、createの成功は表示上 live にならないが、実際には状態を保存できている。
+let lastVerifiedSyncTarget = "";
+// 「その保存先に、実際に単語が入っている」ことまで確かめる。空の状態でcreateしただけの
+// 保存先を根拠にすると、その後オフラインで追加した未送信の単語まで守られているように見える。
+let lastVerifiedSyncHasWords = false;
+
+// 保存が検証できた保存先（roomId または legacyキー）を記録する。
+// 呼ぶのは、送信内容がサーバーに入った／サーバーの内容と一致していると確認できた経路だけ。
+// wordCount は「その時点でサーバー側に入っていると確認できた語数」を渡す。
+function recordVerifiedSync(targetId, wordCount) {
+  if (!targetId) return;
+  lastVerifiedSyncTarget = targetId;
+  lastVerifiedSyncHasWords = Number(wordCount) > 0;
+  renderV2RecoveryNotice();
+}
+
+let v2RecoveryNoticeShown = false;
+
+function renderV2RecoveryNotice(identity = syncRequestRoute()) {
+  const notice = elements.syncV2RecoveryNotice;
+  const prompt = shouldPromptV2CodeBackup(identity);
+  if (notice) notice.hidden = !prompt;
+  if (!prompt) return;
+  // このページで最初に条件を満たした一度だけ、設定を開いて気づけるようにする。
+  // 以後は注意表示が残り続けるので、繰り返し開き直さない。
+  if (v2RecoveryNoticeShown) return;
+  v2RecoveryNoticeShown = true;
+  const syncSection = document.querySelector('[data-settings-section="sync"]');
+  if (syncSection) syncSection.open = true;
+  if (elements.syncV2Section) elements.syncV2Section.open = true;
+}
+
 function renderV2CredentialUi() {
   const credential = readV2Credential();
   const active = credential?.status === "active" ? credential : null;
@@ -11819,6 +11945,7 @@ function renderV2CredentialUi() {
   }
   if (elements.syncV2UpgradeButton) elements.syncV2UpgradeButton.disabled = syncState.v2Busy || Boolean(active);
   if (elements.syncV2CreateButton) elements.syncV2CreateButton.disabled = syncState.v2Busy || Boolean(active);
+  renderV2RecoveryNotice();
 }
 
 function applySyncIdentityUi(identity = syncRequestRoute()) {
@@ -11996,6 +12123,8 @@ async function createV2Room() {
   setV2Status("新方式の保存先を発行しています…");
   try {
     for (let attempt = 0; attempt < 4; attempt += 1) {
+      // 送信bodyを組む直前の語数。応答待ちの間に増えた分はこの成功では保証されない。
+      const createdWordCount = appState?.words?.length || 0;
       let response;
       try {
         response = await v2Fetch(`${v2SyncEndpoint(credential.roomId)}&create=1`, {
@@ -12020,6 +12149,11 @@ async function createV2Room() {
       const data = await readJsonResponse(response);
       if (response.status === 200 && validSyncPutResponse(data, credential.roomId)) {
         activateV2Credential(credential, data.stateRev);
+        // 段階4: createのPUTで現在の状態を保存できているので、検証済みとして記録する。
+        // これが無いと、既に単語がある人がcreateしても保管を促す注意が出ない。
+        // 語数は送信時点のもの。空でcreateした場合は語数0が記録され、
+        // 実際に単語を送れた時点で改めて記録し直される。
+        recordVerifiedSync(credential.roomId, createdWordCount);
         trackUsage("sync-v2-create");
         setV2Status("✓ 新方式の保存先を発行しました。引き継ぎコードを必ず保存してください。", "live");
         return;
@@ -12137,6 +12271,8 @@ async function joinV2Room() {
       syncState.applyingRemote = false;
     }
     offerUndo(localSnapshot);
+    // 合流先の内容をそのまま採用した＝この保存先に何語入っているかが確定している
+    recordVerifiedSync(credential.roomId, appState.words.length);
     setV2JoinUndoVisible(true);
     renderAll();
     if (elements.syncV2JoinInput) elements.syncV2JoinInput.value = "";
@@ -12189,7 +12325,14 @@ function initV2SyncUi() {
     }
     try {
       await navigator.clipboard.writeText(code);
-      setV2Status("✓ 引き継ぎコードをコピーしました。安全な場所へ保管してください。", "live");
+      // 段階4: コピーは「端末外へ保存した」ことにならない（貼り付け先が残る保証がない）。
+      // markV2CodeSavedFor はここから呼ばない。
+      setV2Status(
+        shouldPromptV2CodeBackup()
+          ? "✓ コピーしました。貼り付け先が端末の外に残らないと復旧できないため、「テキストで保存」かJSON書き出しでの保管もおすすめします。"
+          : "✓ 引き継ぎコードをコピーしました。安全な場所へ保管してください。",
+        "live",
+      );
     } catch {
       setV2Status("コピーできませんでした。表示されたコードを手動でコピーしてください。", "error");
     }
@@ -12210,6 +12353,8 @@ function initV2SyncUi() {
         : "このコードが唯一のアクセス手段です。紛失するとデータを復旧できません。必ず保管してください。",
     ].join("\n");
     downloadBlob(new Blob([text], { type: "text/plain;charset=utf-8" }), "wordbank-v2-hikitsugi-code.txt");
+    // 端末外へ書き出したのでここで保存済みにする（段階4）
+    markV2CodeSavedFor(getActiveV2Credential()?.roomId);
     setV2Status("✓ 引き継ぎコードをテキストファイルで保存しました。", "live");
   });
 }
@@ -12228,6 +12373,9 @@ function describeSyncedAt(ts) {
 
 // ヘッダーの同期インジケーターを、現在の状態に合わせて更新する
 function updateSyncBadge() {
+  // 段階4: 同期の成否が変わるたびに、引き継ぎコードの保管を促すべきか見直す。
+  // V2ネイティブ以外は最初の1判定で即座に抜ける（既存ユーザーには何も起きない）。
+  renderV2RecoveryNotice();
   const badge = elements.syncBadge;
   if (!badge) return;
   const isOffline = navigator.onLine === false;
@@ -12643,6 +12791,9 @@ async function connectV2NativeSync() {
     if (needsPush) {
       await pushWordsnapState({ force: true });
     } else {
+      // 送信不要＝サーバーの内容がこの端末の内容を含んでいると確認できた。
+      // 再読込のたびにここを通るので、記録がDocumentローカルでも復元できる。
+      recordVerifiedSync(requestedId, appState?.words?.length || 0);
       setSyncStatus("✓ サーバーに保存済み（機種変更に備え、引き継ぎコードまたはJSONを安全に保管してください）", "live");
     }
   } catch (error) {
@@ -12804,11 +12955,18 @@ async function pushWordsnapState(options = {}) {
   // 409再送・キー切替に処理を引き継いだら true（finally での再送予約を二重に行わない）
   let handedOff = false;
   let retryNeeded = false;
+  // 送信内容の語数も送信開始時に固定する（応答待ちの間に増えた分は、この成功では保証されない）
+  const sentWordCount = appState?.words?.length || 0;
   try {
     // enrich除去＋（本番では）gzip圧縮した同期用ビューを送る（appState自体は送らない）
     const result = await syncPutState(syncState.rev);
     syncState.rev = Number(result.stateRev) || syncState.rev;
     syncState.connected = true;
+    // 段階4: 送信が通ったので、この保存先への保存を検証済みとして記録する。
+    // 保存先は「応答のsyncIdと照合済み」の値を最優先する。呼び出し前のスナップショットでは、
+    // gzip圧縮のawaitを跨いで別タブが資格情報を切り替えた場合に実際の送信先とずれる。
+    // identity側はその値が無い場合の予備。
+    recordVerifiedSync(result.verifiedSyncTarget || identity.expectedSyncId, sentWordCount);
     setSyncStatus("✓ サーバーに保存しました", "live");
   } catch (error) {
     // キー切替で破棄された送信。切替処理側が以後の状態に責任を持つため、
@@ -12947,9 +13105,14 @@ async function forcePushOverwrite() {
   setSyncBusy(true);
   setSyncStatus("この端末の内容でサーバーを上書きしています…");
   try {
+    // 通信前に保存先と語数を固定する。応答後に取り直すと、別タブが資格情報を
+    // 切り替えていた場合に「通信していない保存先」を検証済みにしてしまう。
+    const forcedTarget = syncRequestRoute().expectedSyncId;
+    const forcedWordCount = appState?.words?.length || 0;
     const result = await syncPutState(null, { force: true }); // V2はforce=1も必須
     syncState.rev = Number(result.stateRev) || syncState.rev;
     syncState.connected = true;
+    recordVerifiedSync(result.verifiedSyncTarget || forcedTarget, forcedWordCount);
     setSyncStatus("✓ この端末の内容でサーバーを更新しました。他の端末で「他の端末に合わせる」を押してください。", "live");
   } catch (error) {
     if (isStaleSyncError(error)) return; // キー切替で破棄された応答は無視
@@ -12982,6 +13145,8 @@ async function forcePullReplace() {
   syncState.pushTimer = 0; // 破棄済み。flushPendingSyncPush が誤って送らないようゼロ化
   syncState.pushQueued = false;
   try {
+    // 通信前に保存先を固定する（応答後に取り直すと別タブの切替先を誤記録しうる）
+    const pulledTarget = syncRequestRoute().expectedSyncId;
     // サーバー内容で置き換える直前の端末状態を、既存の「元に戻す」へ退避する。
     // 取得失敗時は置換自体が起きないため、退避は成功レスポンスを適用する直前で十分。
     const remote = await syncRequest("GET");
@@ -12998,6 +13163,8 @@ async function forcePullReplace() {
     syncState.applyingRemote = false;
     renderAll();
     offerUndo(localSnapshot);
+    // 置換したのでローカル＝サーバー。この保存先に何語入っているかも確定している。
+    recordVerifiedSync(remote.verifiedSyncTarget || pulledTarget, appState.words.length);
     setSyncStatus(
       `✓ サーバーの内容に置き換えました（${appState.words.length}語）。取り消す場合は「保存した単語」の「元に戻す」を押してください。`,
       "live",
@@ -13110,8 +13277,11 @@ async function restoreFromRevision(rev) {
       syncState.applyingRemote = false;
     }
     renderAll();
+    const restoredTarget = syncRequestRoute().expectedSyncId;
+    const restoredWordCount = appState.words.length;
     const result = await syncPutState(null, { force: true });
     syncState.rev = Number(result.stateRev) || syncState.rev;
+    recordVerifiedSync(result.verifiedSyncTarget || restoredTarget, restoredWordCount);
     const message = `✓ 選んだ過去の版に戻しました（${appState.words.length}語）。取り消しは『元に戻す』。`;
     setRestoreHistoryStatus(message);
     setSyncStatus(message, "live");
@@ -21008,6 +21178,8 @@ function renderAll() {
   // populateQuizDeckSelect は起動直後の restoreLastQuizSettings が選択肢に依存する
   // ため、パネルの表示状態に関わらず毎回更新しておく（デッキ数件分で十分安価）。
   renderStreakBadge();
+  // 段階4: 単語数が変われば、引き継ぎコードの保管を促す条件も変わる。
+  renderV2RecoveryNotice();
   // 学習カレンダーを開いたまま同期マージが届いた場合も、他端末で解いた分を
   // その場で数字に反映する（閉じているときは何もしない＝通常コストは増えない）。
   if (elements.streakPanel && elements.streakPanel.hidden === false) renderStreakCalendar();
@@ -22990,6 +23162,9 @@ elements.exportButton.addEventListener("click", () => {
     const payload = buildJsonBackupPayload(includeV2Credential);
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     downloadBlob(blob, "wordsnap-quiz-data.json");
+    // 段階4: 引き継ぎコードを実際に同梱したときだけ「保存済み」にする。
+    // 同梱していないJSONは復旧手段にならない。
+    if (includeV2Credential) markV2CodeSavedFor(getActiveV2Credential()?.roomId);
     trackUsage("json-export");
     setStatus("JSONバックアップを書き出しました。安全な場所に保管してください。");
   } catch {
@@ -23143,6 +23318,8 @@ async function connectImportedV2Credential(credential) {
     activateV2Credential(credential, data.stateRev);
     renderV2CredentialUi();
     if (needsPush) await pushWordsnapState();
+    // 送信不要＝サーバーの内容がこの端末の内容を含むと確認できた
+    else recordVerifiedSync(credential.roomId, appState?.words?.length || 0);
     setV2Status("✓ バックアップの引き継ぎコードで新方式の同期に接続しました。", "live");
   } catch {
     setV2Status("引き継ぎコードの接続を完了できなかったため、保存しませんでした。", "error");

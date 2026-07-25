@@ -687,16 +687,22 @@ new Script(
     "const isStaleSyncError = () => false;\n" +
     "const validSyncGetResponse = () => true;\n" +
     "const applyMergedRemoteState = () => {};\n" +
-    "const syncPutState = async () => { globalThis.__putCalls += 1; if (globalThis.__putCalls === 1) return new Promise((resolve) => { globalThis.__resolveFirst = resolve; }); return { stateRev: globalThis.__putCalls }; };\n" +
+    "const appState = { words: [{ id: 'w1' }] };\n" +
+    // 段階4: 送信成功時に検証済み保存先を記録する。ハーネスに無いとReferenceErrorになり、
+    // 送信が失敗扱いになって再送タイマーが積まれる（＝この検査が壊れる）。
+    "const recordVerifiedSync = (target, wordCount) => { globalThis.__verifiedSyncCalls.push([target, wordCount]); };\n" +
+    // 段階4: 実際の syncRequest は応答へ verifiedSyncTarget を付けて返す。
+    // スタブも同じ形にして、fallbackではなく本番経路を検査する。
+    "const syncPutState = async () => { globalThis.__putCalls += 1; if (globalThis.__putCalls === 1) return new Promise((resolve) => { globalThis.__resolveFirst = resolve; }); return { stateRev: globalThis.__putCalls, verifiedSyncTarget: 'room-from-response' }; };\n" +
     `${publicHtml.slice(syncQueueStart, syncQueueEnd)}\n` +
-    "globalThis.__putCalls = 0; globalThis.__syncQueue = { scheduleSyncPush, pushWordsnapState, syncState };",
+    "globalThis.__putCalls = 0; globalThis.__verifiedSyncCalls = []; globalThis.__syncQueue = { scheduleSyncPush, pushWordsnapState, syncState };",
   { filename: "sync-push-queue-check.js" },
 ).runInNewContext(syncQueueSandbox);
 const firstQueuedPush = syncQueueSandbox.__syncQueue.pushWordsnapState();
 syncQueueSandbox.__syncQueue.scheduleSyncPush();
 assert.equal(syncQueueSandbox.__syncQueue.syncState.pushQueued, true,
   "a local change during PUT must mark one follow-up push as queued");
-syncQueueSandbox.__resolveFirst({ stateRev: 1 });
+syncQueueSandbox.__resolveFirst({ stateRev: 1, verifiedSyncTarget: "room-from-response" });
 await firstQueuedPush;
 assert.equal(queuedTimers.size, 1,
   "finishing the first PUT must schedule exactly one follow-up push");
@@ -710,6 +716,13 @@ assert.equal(syncPutCalls, 2, "the queued local change must be sent exactly once
 assert.equal(syncQueueSandbox.__syncQueue.syncState.pushQueued, false,
   "the follow-up push must consume its queue marker");
 assert.equal(queuedTimers.size, 0, "a successful follow-up must not schedule another push");
+// 段階4: 送信が通るたびに、その保存先と送信時の語数を1回だけ記録すること
+assert.equal(syncQueueSandbox.__verifiedSyncCalls.length, 2,
+  "each verified PUT must record its sync target exactly once");
+// vmは別realmのため、配列そのものではなく値で比較する
+assert.equal(JSON.stringify(syncQueueSandbox.__verifiedSyncCalls),
+  JSON.stringify([["room-from-response", 1], ["room-from-response", 1]]),
+  "the recorded target must come from the verified response, not the pre-send snapshot");
 
 for (const column of ["key", "state", "rev", "updatedAt"]) {
   assert.match(schema, new RegExp(`\\b${column}\\b`), `D1 schema is missing ${column}`);
