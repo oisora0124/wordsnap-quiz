@@ -13456,6 +13456,17 @@ async function switchNativeV2ToForeignLegacy(foreignId, expectedRoomId) {
     return false;
   }
   const previousWordCount = previousSnapshot.words.length;
+  // 段階5-1: 退役から legacy ID の保存までの間、この端末のidentityは一時的に
+  // 完全な不在に見える。その窓を claim で覆い、別タブに新規判定をさせない。
+  const claimToken = await acquireIdentityClaim("switch");
+  if (!claimToken) {
+    setSyncBusy(false);
+    setSyncStatus(
+      "別のタブでこの端末の同期設定を変更中です。少し待ってからもう一度お試しください。",
+      "error",
+    );
+    return false;
+  }
   stopSyncPolling();
   bumpSyncRequestGen();
 
@@ -13468,6 +13479,7 @@ async function switchNativeV2ToForeignLegacy(foreignId, expectedRoomId) {
       // localStorageのactive資格情報は残っているため、このタブのV2同期は継続できる。
     }
     if (syncServerAvailable()) startSyncPolling();
+    releaseIdentityClaim(claimToken);
     setSyncBusy(false);
     setSyncStatus(
       "現在のV2引き継ぎ情報を安全に解除できなかったため、切り替えを中止しました。",
@@ -13525,6 +13537,8 @@ async function switchNativeV2ToForeignLegacy(foreignId, expectedRoomId) {
     );
     return false;
   } finally {
+    // 完了・失敗・例外のいずれでも必ず解放する（TTL切れ待ちにしない）
+    releaseIdentityClaim(claimToken);
     setSyncBusy(false);
   }
 }
@@ -13842,13 +13856,25 @@ function initWordsnapSync() {
     idFromUrl,
     storedSyncId,
   );
+  // 段階5-1: 別タブがこの端末のidentityを書き換えている最中で、かつこの端末にまだ
+  // 確定したidentityが無いときは、**何も決めない**。抑止する決定は3つある:
+  //   ① URLのキー(?w=)を永続化する ② それをメモリのidentityとして採用する
+  //   ③ legacyキーを自動発行する
+  // どれか1つでも通ると、切替タブが直後に SYNC_ID_KEY を上書きしても、このタブは
+  // 別の保存先へ送り続けてデータが割れる。「legacyへ倒す」も別の決定なので行わない。
+  // identityが無いタブは同期しないだけで害はない（段階1で保証済み）。
+  // 文言は下の分岐でまとめて出す（ここで出しても後段の setSyncStatus に上書きされる）。
+  const identityDecisionDeferred = identityClaimBlocksDecision() && !storedSyncId;
+
   const foreignSyncId = startupDecision.foreignSyncId;
-  if (startupDecision.shouldStoreUrlId) localStorage.setItem(SYNC_ID_KEY, idFromUrl);
+  if (startupDecision.shouldStoreUrlId && !identityDecisionDeferred) {
+    localStorage.setItem(SYNC_ID_KEY, idFromUrl);
+  }
   // 確認が済むまでは元のキーのまま（＝リモートと分離。リンク先へは何も送信しない）
-  syncState.id = startupDecision.legacyId;
+  syncState.id = identityDecisionDeferred ? "" : startupDecision.legacyId;
 
   // http/https では、個人キーが無ければ自動発行し、サーバー保存（耐久化）を有効にする。
-  if (startupDecision.shouldAutoGenerateLegacy && syncServerAvailable()) {
+  if (startupDecision.shouldAutoGenerateLegacy && !identityDecisionDeferred && syncServerAvailable()) {
     try {
       const generatedId = generatePrivateKey();
       syncState.id = generatedId;
@@ -14059,6 +14085,12 @@ function initWordsnapSync() {
     connectWordsnapSync({ silent: true });
   } else if (keyGenerationFailed) {
     setSyncStatus("安全な個人キーを生成できないため、サーバー同期を開始しません。単語はこの端末にのみ保存されます。ブラウザを最新版に更新して開き直してください。", "error");
+  } else if (identityDecisionDeferred) {
+    // 段階5-1: 別タブがidentityを書き換え中なので、このタブでは何も決めていない。
+    // 「準備中」だと待てば直ると誤解されるため、再読み込みが要ることを明示する。
+    setSyncStatus(
+      "別のタブでこの端末の同期設定を変更中です。切り替えが終わったら、このページを再読み込みしてください。",
+    );
   } else {
     setSyncStatus("サーバー保存の準備中です…");
   }
@@ -23658,6 +23690,147 @@ if (["auto", "one", "two"].includes(savedOcrLayout)) {
 elements.ocrLayoutSelect.addEventListener("change", () => {
   localStorage.setItem(OCR_LAYOUT_KEY, elements.ocrLayoutSelect.value);
 });
+
+// ---- identity操作の排他（Phase 2 段階5-1）----
+// 「この端末のidentityを書き換えている最中」を localStorage で表す。
+// 目的は2つ:
+//  (a) native→legacy切替は V2資格情報を消してから legacy ID を保存する。その間に別タブが
+//      起動すると identity が完全に不在に見え、新規ユーザーと誤判定されうる
+//  (b) 新規ユーザーが2タブを同時に開いたとき、両方が発行条件を満たすのを防ぐ
+// claimを見た側は legacy へ倒さず「何もしない」。倒すこと自体が別の決定になり、
+// V2とlegacyが同一端末に並立してデータが割れる。identityが無いタブは同期しないだけで害はない。
+const IDENTITY_CLAIM_KEY = "wordsnap-sync-identity-claim:v1";
+// タブが落ちても永久に詰まらせない。identity操作はいずれも数百ms〜数秒で終わる。
+const IDENTITY_CLAIM_TTL_MS = 30_000;
+// localStorageの書き込みがタブ間へ伝播するのを待つ時間（既存のcontext生成排他と同じ考え方）
+const IDENTITY_CLAIM_SETTLE_MS = 60;
+
+function readIdentityClaim() {
+  try {
+    const raw = localStorage.getItem(IDENTITY_CLAIM_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const at = Number(parsed.at);
+    if (!Number.isFinite(at)) return null;
+    const age = Date.now() - at;
+    // 期限切れは無効。端末時計のずれ等で未来時刻が入っていた場合も、
+    // 永久に決定できなくならないよう無効として扱う。
+    if (age < 0 || age > IDENTITY_CLAIM_TTL_MS) return null;
+    return { at, kind: String(parsed.kind || ""), token: String(parsed.token || "") };
+  } catch {
+    return null;
+  }
+}
+
+// 他タブがidentityを操作中なら true。自分のtokenを渡した場合は妨げない。
+function identityClaimBlocksDecision(ownToken = "") {
+  const claim = readIdentityClaim();
+  if (!claim) return false;
+  return !ownToken || claim.token !== ownToken;
+}
+
+// Web Locks を保持している間だけ非nullになる解放関数。
+// Locksはタブが落ちると自動解放されるため、TTLや端末時計に依存しない排他が得られる。
+let identityLockRelease = null;
+
+// 既存の runContextGenerationOnce と同じ方針: Locksを一次手段、localStorageを代替とする。
+// ここでは「取れなければ即座に諦める」意味論を保つため ifAvailable を使う。
+async function acquireIdentityLock() {
+  if (typeof navigator === "undefined" || !navigator?.locks?.request) return true;
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    try {
+      navigator.locks
+        .request("wordsnap-sync-identity", { ifAvailable: true }, (lock) => {
+          if (!lock) {
+            settle(false);
+            return undefined;
+          }
+          settle(true);
+          // このPromiseが解決するまでロックを保持し続ける
+          return new Promise((release) => {
+            identityLockRelease = release;
+          });
+        })
+        // 既存の runContextGenerationOnce と同じ方針: 排他区間に入る前のAPI失敗は
+        // フォールバック（localStorage claimのみ）へ倒す。ここで失敗を返すと、
+        // Locksが投げる環境で切替が恒久に不可能になり、しかも文言が
+        // 「別のタブで変更中」と誤誘導する。
+        .catch(() => settle(true));
+    } catch {
+      settle(true);
+    }
+  });
+}
+
+function releaseIdentityLock() {
+  if (!identityLockRelease) return;
+  try {
+    identityLockRelease();
+  } catch {
+    // 解放できなくても、タブが閉じれば自動で解放される
+  }
+  identityLockRelease = null;
+}
+
+function newIdentityClaimToken() {
+  try {
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";
+  }
+}
+
+// 取得できたら token を返す。既に他タブが保持していれば空文字（＝取得失敗）。
+async function acquireIdentityClaim(kind) {
+  // 1) Web Locks が使えるならそれを一次手段にする（タブ間で確実、タブ死亡時は自動解放）
+  if (!(await acquireIdentityLock())) return "";
+  const fail = () => {
+    releaseIdentityLock();
+    return "";
+  };
+  if (readIdentityClaim()) return fail();
+  const token = newIdentityClaimToken();
+  if (!token) return fail();
+  try {
+    localStorage.setItem(IDENTITY_CLAIM_KEY, JSON.stringify({ at: Date.now(), kind, token }));
+  } catch {
+    // getItemは動くのにsetItemだけ失敗する環境（容量逼迫・一部のプライベートモード）がある。
+    // その場合は排他できないが、切替自体も後段の SYNC_ID_KEY 保存失敗で安全に中止される。
+    // Locksを取れているなら、同じブラウザの他タブに対しては引き続き排他できている。
+    return token;
+  }
+  // 2) localStorageはタブ間でアトミックではない。書いた直後に読み直すだけだと、
+  //    伝播が遅れた相手と両者勝ちになりうる。少し沈静化を待ってから所有者を再確認する。
+  await new Promise((resolve) => window.setTimeout(resolve, IDENTITY_CLAIM_SETTLE_MS));
+  const stored = readIdentityClaim();
+  if (stored && stored.token === token) return token;
+  return fail();
+}
+
+function releaseIdentityClaim(token) {
+  if (!token) return;
+  let owned = true;
+  try {
+    const stored = readIdentityClaim();
+    // 他タブのclaimを消さない（取り違えると排他が壊れる）
+    owned = !stored || stored.token === token;
+    if (owned) localStorage.removeItem(IDENTITY_CLAIM_KEY);
+  } catch {
+    // 消せなくてもTTLで失効する
+  }
+  // lockとclaimの解放条件を揃える。自分のclaimでないならlockにも触らない
+  // （片方だけ落とすと、排他がTTL・端末時計依存のclaim側だけに退化する）。
+  if (owned) releaseIdentityLock();
+}
 
 // ---- 起動時レースのガード（Phase 2 段階3）----
 // IndexedDBからのV2資格情報の復元は非同期で、下の4秒フォールバックはその完了を待たずに
