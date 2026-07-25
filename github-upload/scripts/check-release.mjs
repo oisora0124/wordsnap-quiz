@@ -989,4 +989,11 @@ assert.doesNotMatch(scanned, /sk-(?:proj-)?[0-9A-Za-z_-]{30,}/, "possible OpenAI
 assert.doesNotMatch(scanned, /(?:ghp_|github_pat_)[0-9A-Za-z_]{30,}/, "possible GitHub token committed");
 assert.doesNotMatch(scanned, /ws_[0-9a-f]{60}\b/i, "possible real WordBank sync key committed");
 
+// ソースにNULが混ざると grep も diff もそのファイルをバイナリ扱いにして、以後の
+// レビューや検索から静かに漏れる。実際に一度、一括置換の事故で文字列リテラルへ
+// 混入したまま本番へ出た。テストは通ってしまうので、ここで機械的に弾く。
+for (const file of repositoryTextFiles(repoDir)) {
+  assert.ok(!read(file).includes("\u0000"), `NUL byte in source: ${file}`);
+}
+
 console.log("WordBank release checks passed.");

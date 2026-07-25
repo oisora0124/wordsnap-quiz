@@ -452,6 +452,76 @@ test("生のIPアドレスは保存しない（rate_limits のキーは不可逆
   }
 });
 
+test("胡椒があればIPキーはHMACになり、素のSHA-256と一致しない", async () => {
+  const fetchStub = captureFetch();
+  try {
+    const ipKey = async (env) => {
+      const db = new FakeD1();
+      await post(db, { message: "鍵の違い" }, {
+        env,
+        headers: { "CF-Connecting-IP": "203.0.113.1" },
+      });
+      return db.limitRows().map((row) => row.rl_key).find((key) => key !== "fb-mail:all");
+    };
+    const plain = await ipKey(RESEND_ENV);
+    const peppered = await ipKey({ ...RESEND_ENV, FEEDBACK_RATE_LIMIT_SECRET: "pepper" });
+    const peppered2 = await ipKey({ ...RESEND_ENV, FEEDBACK_RATE_LIMIT_SECRET: "other" });
+    assert.ok(plain && peppered && peppered2);
+    assert.notEqual(peppered, plain, "胡椒を入れたら別のキーになること");
+    assert.notEqual(peppered, peppered2, "胡椒ごとに別のキーになること");
+  } finally {
+    fetchStub.restore();
+  }
+});
+
+test("窓が明けた上限行は掃除して溜めない", async () => {
+  const fetchStub = captureFetch();
+  try {
+    const db = new FakeD1();
+    const stale = Date.now() - 3 * 60 * 60 * 1000;
+    for (let i = 0; i < 5; i += 1) {
+      db.db
+        .prepare("INSERT INTO rate_limits (rl_key, window_start, count) VALUES (?, ?, ?)")
+        .run(`fb-mail:dead${i}`, stale, 3);
+    }
+    // 同期API側の行は掃除の対象外（別機能の状態を壊さない）。
+    db.db
+      .prepare("INSERT INTO rate_limits (rl_key, window_start, count) VALUES (?, ?, ?)")
+      .run("v2-create:1.2.3.4", stale, 3);
+
+    await post(db, { message: "掃除" }, { env: RESEND_ENV });
+
+    const keys = db.limitRows().map((row) => row.rl_key);
+    assert.ok(!keys.some((key) => key.startsWith("fb-mail:dead")), "期限切れ行が残らないこと");
+    assert.ok(keys.includes("v2-create:1.2.3.4"), "同期API側の行に触らないこと");
+  } finally {
+    fetchStub.restore();
+  }
+});
+
+test("上限の書き込みだけが失敗する場合も送らない", async () => {
+  const fetchStub = captureFetch();
+  try {
+    const db = new FakeD1();
+    const inner = db.prepare.bind(db);
+    db.prepare = (sql) => {
+      if (/^INSERT INTO rate_limits/i.test(sql.trim())) {
+        return {
+          bind() { return this; },
+          async run() { throw new Error("d1 write failed"); },
+        };
+      }
+      return inner(sql);
+    };
+    const { response } = await post(db, { message: "書き込みだけ失敗" }, { env: RESEND_ENV });
+    assert.equal(response.status, 200);
+    assert.equal(db.inserted.length, 1);
+    assert.equal(fetchStub.calls.length, 0);
+  } finally {
+    fetchStub.restore();
+  }
+});
+
 test("全体上限で止まったとき、IP側の枠を無駄に減らさない", async () => {
   const fetchStub = captureFetch();
   try {

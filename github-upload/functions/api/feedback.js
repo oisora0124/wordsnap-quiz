@@ -14,8 +14,8 @@
 // 【プライバシー】
 //   同期キー（?w=）・IPアドレスは受け取らないし保存もしない。連絡先は任意。UAも保存しない。
 //   メール通知の送信上限だけは「同じ相手か」を数える必要があるため、IPを
-//   SHA-256 で不可逆に潰した8バイトを rate_limits のキーに使う（feedback テーブル
-//   側には一切入らず、投稿内容とも結び付かない）。
+//   不可逆に潰した8バイトを rate_limits のキーに使う（feedback テーブル側には
+//   一切入らず、投稿内容とも結び付かない）。窓が明けた行は掃除して残さない。
 //
 // 【メール通知】
 //   保存に成功したら、設定されていれば通知メールを1通送る。宛先・差出人・APIキーは
@@ -25,6 +25,7 @@
 //     FEEDBACK_MAIL_FROM   差出人（プロバイダで許可されたアドレス）
 //     RESEND_API_KEY       Resend を使う場合のAPIキー
 //     BREVO_API_KEY        Brevo を使う場合のAPIキー（RESEND_API_KEY が優先）
+//     FEEDBACK_RATE_LIMIT_SECRET  任意。送信上限のIPキーをHMAC化する胡椒
 //   送信は fail-open。失敗しても投稿は D1 に残っており、ユーザーには 200 を返す
 //   （送れなかったことでユーザーの要望が消えるほうが害が大きい）。
 //
@@ -175,9 +176,25 @@ function mailBody({ category, message, contact, appVersion, createdAt }) {
 
 // IPをそのままキーにすると「IPアドレスは保存しない」という本ファイルの契約を破る。
 // 上限判定に必要なのは「同じ相手か」だけなので、不可逆なハッシュに落として保存する。
-async function ipBucket(ip) {
-  const bytes = new TextEncoder().encode(`wordbank-fb-mail ${ip}`);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+// 素のSHA-256はIPv4なら総当たりで逆引きできる。FEEDBACK_RATE_LIMIT_SECRET があれば
+// HMACにして総当たりを封じる。必須にはしない — 未設定で通知が黙って止まるほうが、
+// 「rate_limits を読める者（＝アカウント所有者）だけが逆引きできる」より害が大きい。
+async function ipBucket(env, ip) {
+  const encoder = new TextEncoder();
+  const pepper = String(env?.FEEDBACK_RATE_LIMIT_SECRET || "");
+  let digest;
+  if (pepper) {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(pepper),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    digest = await crypto.subtle.sign("HMAC", key, encoder.encode(ip));
+  } else {
+    digest = await crypto.subtle.digest("SHA-256", encoder.encode(`wordbank-fb-mail ${ip}`));
+  }
   return Array.from(new Uint8Array(digest).slice(0, 8))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -189,11 +206,12 @@ async function ipBucket(ip) {
 // 保存（feedback テーブル）と違い、ここは fail-CLOSED にする。上限を確かめられない
 // まま送ると、公開・無認証の投稿口が無制限のメール送信路になるため。通知を見送っても
 // 投稿本体は D1 に残っているので要望は失われない。
-async function mailRateLimited(db, request) {
+async function mailRateLimited(env, request) {
+  const db = env.DB;
   const now = Date.now();
   let keys;
   try {
-    const bucket = await ipBucket(request.headers.get("CF-Connecting-IP") || "unknown");
+    const bucket = await ipBucket(env, request.headers.get("CF-Connecting-IP") || "unknown");
     keys = MAIL_RATE_LIMITS.map((rule) => ({
       rule,
       key: rule.scope === "ip" ? `fb-mail:${bucket}` : "fb-mail:all",
@@ -238,6 +256,17 @@ async function mailRateLimited(db, request) {
   } catch {
     return true;
   }
+
+  // 窓が明けた行は上限判定にもう使われない。IPごとに1行増えるので、送信のたびに
+  // 期限切れを掃除して滞留させない（送信自体が上限付きなので回数は高々60回/時）。
+  try {
+    await db
+      .prepare("DELETE FROM rate_limits WHERE rl_key LIKE 'fb-mail:%' AND window_start <= ?")
+      .bind(now - MAIL_RATE_LIMITS[0].windowMs)
+      .run();
+  } catch {
+    // 掃除に失敗しても上限判定の結果は変わらない。
+  }
   return false;
 }
 
@@ -247,7 +276,7 @@ async function sendFeedbackMail(env, request, record) {
   const to = parseMailbox(config.to);
   const from = parseMailbox(config.from);
   if (!to || !from) return false;
-  if (await mailRateLimited(env.DB, request)) return false;
+  if (await mailRateLimited(env, request)) return false;
 
   const subject = mailSubject(record.category);
   const text = mailBody(record);
