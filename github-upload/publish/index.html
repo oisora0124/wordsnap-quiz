@@ -2654,6 +2654,17 @@ textarea:focus-visible {
   line-height: 1.6;
 }
 
+#v2AnnounceText p {
+  margin: 0 0 0.7rem;
+  line-height: 1.7;
+  text-align: left;
+}
+
+.v2-announce-note {
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+
 .sync-v2-recovery-notice small {
   display: inline-block;
   margin-top: 0.25rem;
@@ -6467,6 +6478,43 @@ accurate 正確な"
       </section>
     </div>
 
+    <div id="v2AnnounceBackdrop" class="tutorial-backdrop" hidden>
+      <section
+        id="v2AnnounceDialog"
+        class="tutorial-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="v2AnnounceTitle"
+        aria-describedby="v2AnnounceText"
+      >
+        <div aria-live="polite" aria-atomic="true">
+          <p class="tutorial-kicker">お知らせ</p>
+          <h2 id="v2AnnounceTitle">より安全な同期方式を追加しました</h2>
+          <div id="v2AnnounceText">
+            <p>
+              これまでは、アドレスバーのURLに個人キーが含まれていました。
+              そのURLを知っている人は、あなたの単語帳を読み書きできてしまう作りです。
+              新方式では、その秘密がURLに載りません。
+            </p>
+            <p>
+              <strong>移行は任意で、急ぎでもありません。</strong>
+              しなくても今までどおり使えますし、データが消えることもありません。
+              移行しても、いまお使いのリンクはそのまま使い続けられます。
+            </p>
+            <p class="v2-announce-note">
+              移行すると「引き継ぎコード」が表示されます。機種変更やサイトデータ消去に備えて、
+              「テキストで保存」かJSONの書き出しで端末の外に保管してください。
+              なくしても、いまのリンクからはアクセスできます。
+            </p>
+          </div>
+        </div>
+        <div class="tutorial-actions">
+          <button id="v2AnnounceLaterButton" class="ghost" type="button">あとで</button>
+          <button id="v2AnnounceOpenButton" type="button">移行の設定を開く</button>
+        </div>
+      </section>
+    </div>
+
     <p id="saveNotice" class="status save-notice" role="status" aria-live="polite" aria-atomic="true" hidden></p>
 
     <script>
@@ -9437,6 +9485,10 @@ const elements = {
   showTutorialButton: document.querySelector("#showTutorialButton"),
   tutorialBackdrop: document.querySelector("#tutorialBackdrop"),
   tutorialDialog: document.querySelector("#tutorialDialog"),
+  v2AnnounceBackdrop: document.querySelector("#v2AnnounceBackdrop"),
+  v2AnnounceDialog: document.querySelector("#v2AnnounceDialog"),
+  v2AnnounceLaterButton: document.querySelector("#v2AnnounceLaterButton"),
+  v2AnnounceOpenButton: document.querySelector("#v2AnnounceOpenButton"),
   tutorialKicker: document.querySelector("#tutorialKicker"),
   tutorialTitle: document.querySelector("#tutorialTitle"),
   tutorialText: document.querySelector("#tutorialText"),
@@ -10395,6 +10447,82 @@ function completeTutorial() {
   tutorialReturnFocus?.focus?.();
   tutorialReturnFocus = null;
 }
+
+// 起動時点で個人キーを持っていたか（＝元からの利用者か）。お知らせの対象判定に使う。
+let hadStoredLegacyKeyAtStartup = false;
+
+// ---- 既存ユーザーへのV2お知らせ（1回だけ） ----
+// 対象は「個人リンクで使い続けている既存ユーザー」だけ。
+// すでにV2へ移行した人・これから新方式で始まる人・まだデータが無い人には出さない。
+const V2_ANNOUNCE_KEY = "wordsnap-v2-announce:v1";
+let v2AnnounceReturnFocus = null;
+
+function v2AnnounceDismissed() {
+  try {
+    return localStorage.getItem(V2_ANNOUNCE_KEY) === "1";
+  } catch {
+    // 読めない環境では出さない（毎回出すよりは出さない方が害が少ない）
+    return true;
+  }
+}
+
+function dismissV2Announce() {
+  try {
+    localStorage.setItem(V2_ANNOUNCE_KEY, "1");
+  } catch {
+    // 保存不可環境では、このセッション中だけ閉じられればよい
+  }
+  if (elements.v2AnnounceBackdrop) elements.v2AnnounceBackdrop.hidden = true;
+  document.body.classList.remove("tutorial-open");
+  v2AnnounceReturnFocus?.focus?.();
+  v2AnnounceReturnFocus = null;
+}
+
+function shouldShowV2Announce() {
+  if (v2AnnounceDismissed()) return false;
+  if (!syncServerAvailable()) return false;
+  // 起動時に既にlegacyキーを保存していた端末＝既存ユーザーだけを対象にする。
+  // このセッションで新規発行された人や、まだ何も無い人には出さない。
+  if (!hadStoredLegacyKeyAtStartup) return false;
+  const identity = syncRequestRoute();
+  if (identity.kind !== "legacy") return false; // 移行済み・V2ネイティブには出さない
+  if (!(appState?.words?.length > 0)) return false; // 守る対象のデータができてから
+  // チュートリアルと重ねない
+  if (elements.tutorialBackdrop && !elements.tutorialBackdrop.hidden) return false;
+  return true;
+}
+
+function maybeShowV2Announce() {
+  if (!elements.v2AnnounceBackdrop) return;
+  if (!elements.v2AnnounceBackdrop.hidden) return;
+  if (!shouldShowV2Announce()) return;
+  v2AnnounceReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  elements.v2AnnounceBackdrop.hidden = false;
+  document.body.classList.add("tutorial-open");
+  elements.v2AnnounceOpenButton?.focus();
+  trackUsage("v2-announce-shown");
+}
+
+elements.v2AnnounceLaterButton?.addEventListener("click", () => {
+  trackUsage("v2-announce-later");
+  dismissV2Announce();
+});
+elements.v2AnnounceOpenButton?.addEventListener("click", () => {
+  trackUsage("v2-announce-open");
+  dismissV2Announce();
+  const settingsTab = document.querySelector('[data-step-tab="settings"]');
+  if (settingsTab instanceof HTMLElement) settingsTab.click();
+  const syncSection = document.querySelector('[data-settings-section="sync"]');
+  if (syncSection) syncSection.open = true;
+  if (elements.syncV2Section) elements.syncV2Section.open = true;
+  elements.syncV2Section?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+});
+elements.v2AnnounceBackdrop?.addEventListener("click", (event) => {
+  if (event.target === elements.v2AnnounceBackdrop) dismissV2Announce();
+});
+elements.v2AnnounceDialog?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") dismissV2Announce();
+});
 
 function maybeShowInitialTutorial() {
   let completed = false;
@@ -12376,6 +12504,9 @@ function updateSyncBadge() {
   // 段階4: 同期の成否が変わるたびに、引き継ぎコードの保管を促すべきか見直す。
   // V2ネイティブ以外は最初の1判定で即座に抜ける（既存ユーザーには何も起きない）。
   renderV2RecoveryNotice();
+  // 既存ユーザーへのV2お知らせ。起動直後はサーバーから単語が戻っておらず
+  // 0件のことがあるため、同期状態が動いたこのタイミングで判定する。
+  maybeShowV2Announce();
   const badge = elements.syncBadge;
   if (!badge) return;
   const isOffline = navigator.onLine === false;
@@ -13848,6 +13979,9 @@ function initWordsnapSync() {
   // これを怠ると、他人のリンクを開いただけで自分の単語が相手のサーバー領域へ混入する。
   // 同じキーを開き直した通常のケースと、初回（保存キーなし）は従来どおり無確認で動く。
   const storedSyncId = cleanSyncId(localStorage.getItem(SYNC_ID_KEY));
+  // お知らせの対象は「元から個人リンクで使っていた人」だけ。このセッションで
+  // 新規発行された人や、まだ何も無い人と区別するため、起動時点の有無を残す。
+  hadStoredLegacyKeyAtStartup = Boolean(storedSyncId);
   // identityに保存済みlegacyの有無を含めてから判定する。これにより、印付き資格情報が
   // あってもlegacyを持つ既存ユーザーは必ず従来分岐に残る。
   syncState.id = storedSyncId;
