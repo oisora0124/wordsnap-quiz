@@ -281,11 +281,18 @@ function mailLog(stage, detail) {
 async function sendFeedbackMail(env, request, record) {
   const config = mailConfig(env);
   if (!config) {
-    // どの設定が欠けているかだけを真偽で示す。値は出さない。
+    // どの設定が欠けているかだけを示す。値は出さない。
+    // absent（未設定）と empty（設定はされているが中身が空）を分けるのが要点 —
+    // 対話プロンプトへの貼り付けに失敗すると secret list には出るのに空になり、
+    // 真偽だけでは「設定したのに効かない」と見分けがつかない。
+    const state = (value) => {
+      if (value === undefined || value === null) return "absent";
+      return String(value).trim() ? "set" : "empty";
+    };
     mailLog(
       "skip: not configured",
-      `to=${Boolean(env?.FEEDBACK_MAIL_TO)} from=${Boolean(env?.FEEDBACK_MAIL_FROM)}`
-        + ` resend=${Boolean(env?.RESEND_API_KEY)} brevo=${Boolean(env?.BREVO_API_KEY)}`,
+      `to=${state(env?.FEEDBACK_MAIL_TO)} from=${state(env?.FEEDBACK_MAIL_FROM)}`
+        + ` resend=${state(env?.RESEND_API_KEY)} brevo=${state(env?.BREVO_API_KEY)}`,
     );
     return false;
   }

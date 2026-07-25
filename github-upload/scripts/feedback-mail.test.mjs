@@ -120,7 +120,7 @@ test("診断ログに宛先・APIキー・投稿本文を出さない", () => {
     assert.doesNotMatch(block, forbidden, `ログが ${forbidden} を含まないこと`);
   }
   // 設定の有無は真偽だけで示す（値をそのまま出さない）。
-  assert.match(block, /Boolean\(env\?\.FEEDBACK_MAIL_TO\)/);
+  assert.match(block, /state\(env\?\.FEEDBACK_MAIL_TO\)/);
   assert.doesNotMatch(block, /\$\{env\?\.\w+\}/, "環境変数の値を直接埋め込まないこと");
 });
 
