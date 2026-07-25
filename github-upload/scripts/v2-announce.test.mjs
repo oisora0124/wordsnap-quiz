@@ -131,11 +131,19 @@ function handlerSource(startNeedle, endNeedle) {
 }
 
 test("起動時点でキーを持っていたかを、新規発行より前に記録する", () => {
-  const init = handlerSource("function initWordsnapSync", "\n  // 現在の個人キーをURLに反映");
+  // 段階5-3a で新規発行は establishLegacyIdentity() へ切り出した。守る性質は同じで、
+  // 「このセッションで発行したキー」を「元から持っていたキー」と取り違えないこと。
+  const init = handlerSource("function initWordsnapSync", "\n  initV2SyncUi();");
   const record = init.indexOf("hadStoredLegacyKeyAtStartup = Boolean(storedSyncId)");
-  const generate = init.indexOf("generatePrivateKey()");
+  const generate = init.indexOf("establishLegacyIdentity()");
   assert.ok(record >= 0, "起動時点の有無を記録すること");
   assert.ok(generate > record, "このセッションでの新規発行より前に記録すること");
+  // 発行そのものは1か所に集約されていること（別経路で増やすと記録より前に走りうる）
+  assert.equal(
+    (html.match(/localStorage\.setItem\(SYNC_ID_KEY, generatedId\)/g) || []).length,
+    1,
+    "起動時のlegacy発行は establishLegacyIdentity の1か所だけであること",
+  );
 });
 
 test("お知らせは同期状態が動いたタイミングで判定する", () => {

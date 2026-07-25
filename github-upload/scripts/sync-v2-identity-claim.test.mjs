@@ -247,7 +247,7 @@ test("claimを取れなかったら、退役を実行せずに戻る", () => {
 
 // claimは「取る側」だけでは何も守らない。見る側が配線されていることを固定する。
 test("別タブがidentityを操作中は、起動時のlegacy自動発行を行わない", () => {
-  const init = handlerSource("function initWordsnapSync", "\n  // 現在の個人キーをURLに反映");
+  const init = handlerSource("function initWordsnapSync", "\n  initV2SyncUi();");
   assert.match(
     init,
     /const identityDecisionDeferred = identityClaimBlocksDecision\(\) && !storedSyncId/,
@@ -267,21 +267,28 @@ test("identityClaimBlocksDecision は実際に使われている（定義だけ�
 
 // 「準備中」のままだと待てば直ると誤解される。再読み込みが要ることを伝える分岐が要る。
 test("claim中のタブには、再読み込みが必要だと伝える", () => {
-  const init = handlerSource("function initWordsnapSync", "\nfunction saveState");
-  const branch = init.slice(init.indexOf("} else if (identityDecisionDeferred) {"));
-  assert.ok(branch.length > 0, "claim中の専用分岐があること");
-  assert.match(branch, /再読み込み/, "再読み込みを促すこと");
+  // 段階5-3a で、identity確定後の接続開始は startSyncWithEstablishedIdentity に集約した。
+  const exit = handlerSource(
+    "function startSyncWithEstablishedIdentity",
+    "\nfunction initWordsnapSync",
+  );
+  const branchAt = exit.indexOf("if (identityDecisionDeferred) {");
+  assert.ok(branchAt >= 0, "claim中の専用分岐があること");
+  assert.match(exit.slice(branchAt), /再読み込み/, "再読み込みを促すこと");
   // 「準備中」より前に判定されること（後段で上書きされない）
   assert.ok(
-    init.indexOf("} else if (identityDecisionDeferred) {") < init.indexOf("サーバー保存の準備中です"),
+    branchAt < exit.indexOf("サーバー保存の準備中です"),
     "汎用の準備中メッセージより前に分岐すること",
   );
+  // この出口が実際に使われていること（定義だけにしない）
+  const uses = (html.match(/startSyncWithEstablishedIdentity\(/g) || []).length;
+  assert.ok(uses >= 2, `定義と呼び出しの両方があること（出現 ${uses}）`);
 });
 
 // claimが守るべき決定点は3つある。1つでも素通りすると、切替タブが SYNC_ID_KEY を
 // 上書きしても、このタブは別の保存先へ送り続けてデータが割れる。
 test("claim中は URLキーの永続化・採用・legacy自動発行のすべてを行わない", () => {
-  const init = handlerSource("function initWordsnapSync", "\n  // 現在の個人キーをURLに反映");
+  const init = handlerSource("function initWordsnapSync", "\n  initV2SyncUi();");
   // ① URLキーの永続化
   assert.match(
     init,

@@ -13965,6 +13965,70 @@ function syncStartupIdentityDecision(identity, idFromUrl, storedSyncId) {
   };
 }
 
+// 段階5-3a: 新規ユーザーのidentity確立。今はlegacyキーの自動発行だけだが、
+// 5-3bでこの手前にV2の自動発行を挟む。どの経路を通っても**必ずlegacyへ着地する**
+// ことがこの関数の契約で、着地に失敗した場合だけ false を返す。着地しないまま
+// 抜けると、新規ユーザーが同期の無い状態で取り残される。
+function establishLegacyIdentity() {
+  try {
+    const generatedId = generatePrivateKey();
+    syncState.id = generatedId;
+    localStorage.setItem(SYNC_ID_KEY, generatedId);
+    return true;
+  } catch {
+    // 推測可能なキーを作るくらいなら同期を開始しない。ローカル保存は引き続き使える。
+    syncState.id = "";
+    return false;
+  }
+}
+
+// 段階5-3a: 確定したlegacy identityを画面へ反映する。
+// initV2SyncUi() はこの後・applySyncIdentityUi() の前に挟まる（元の順序）。
+// V2 UIの初期化は一度きりなので、5-3bの再適用では applyEstablishedIdentityToUi を使う。
+function applyLegacyIdentityToUi(foreignSyncId) {
+  // 現在の個人キーをURLに反映（個人リンクのコピーと同一端末での再読込に使う）。
+  // 別リンクの確認待ちの間はURLを書き換えない（開いたリンクのキーを保持して確認に使う）。
+  const legacyId = syncRequestRoute().legacyId;
+  if (legacyId && syncServerAvailable() && !foreignSyncId) {
+    rememberSyncIdInUrl(legacyId);
+  }
+  if (elements.syncIdInput) elements.syncIdInput.value = legacyId;
+  updateSyncKeySecurityWarning(legacyId);
+  if (elements.syncPullButton) elements.syncPullButton.disabled = !legacyId;
+  if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = !legacyId;
+}
+
+// 段階5-3a: identityが確定したあとの画面反映一式。identity確立が非同期になる
+// 5-3b以降は「確立できた後にもう一度呼ぶ」ため、何度呼んでも同じ結果になること。
+// 一度きりの初期化（initV2SyncUi）はここに含めない。
+function applyEstablishedIdentityToUi(foreignSyncId) {
+  applyLegacyIdentityToUi(foreignSyncId);
+  applySyncIdentityUi(syncRequestRoute());
+}
+
+// 段階5-3a: identityが決まってからの接続開始。identity確立が非同期になっても
+// 「決まったら必ずここへ来る」1本の出口にしておく。
+function startSyncWithEstablishedIdentity({ keyGenerationFailed, identityDecisionDeferred }) {
+  if (syncRequestRoute().expectedSyncId) {
+    // http/https では個人キーで自動接続し、データをサーバーに保存・復元する
+    connectWordsnapSync({ silent: true });
+    return;
+  }
+  if (keyGenerationFailed) {
+    setSyncStatus("安全な個人キーを生成できないため、サーバー同期を開始しません。単語はこの端末にのみ保存されます。ブラウザを最新版に更新して開き直してください。", "error");
+    return;
+  }
+  if (identityDecisionDeferred) {
+    // 段階5-1: 別タブがidentityを書き換え中なので、このタブでは何も決めていない。
+    // 「準備中」だと待てば直ると誤解されるため、再読み込みが要ることを明示する。
+    setSyncStatus(
+      "別のタブでこの端末の同期設定を変更中です。切り替えが終わったら、このページを再読み込みしてください。",
+    );
+    return;
+  }
+  setSyncStatus("サーバー保存の準備中です…");
+}
+
 function initWordsnapSync() {
   if (!elements.syncIdInput) return;
   let keyGenerationFailed = false;
@@ -14009,27 +14073,10 @@ function initWordsnapSync() {
 
   // http/https では、個人キーが無ければ自動発行し、サーバー保存（耐久化）を有効にする。
   if (startupDecision.shouldAutoGenerateLegacy && !identityDecisionDeferred && syncServerAvailable()) {
-    try {
-      const generatedId = generatePrivateKey();
-      syncState.id = generatedId;
-      localStorage.setItem(SYNC_ID_KEY, generatedId);
-    } catch {
-      // 推測可能なキーを作るくらいなら同期を開始しない。ローカル保存は引き続き使える。
-      syncState.id = "";
-      keyGenerationFailed = true;
-    }
+    keyGenerationFailed = !establishLegacyIdentity();
   }
-  // 現在の個人キーをURLに反映（個人リンクのコピーと同一端末での再読込に使う）。
-  // 別リンクの確認待ちの間はURLを書き換えない（開いたリンクのキーを保持して確認に使う）。
-  const legacyId = syncRequestRoute().legacyId;
-  if (legacyId && syncServerAvailable() && !foreignSyncId) {
-    rememberSyncIdInUrl(legacyId);
-  }
-
-  elements.syncIdInput.value = legacyId;
-  updateSyncKeySecurityWarning(legacyId);
-  if (elements.syncPullButton) elements.syncPullButton.disabled = !legacyId;
-  if (elements.syncCopyLinkButton) elements.syncCopyLinkButton.disabled = !legacyId;
+  // 呼び出し順は元のまま: legacy側のUI反映 → V2 UIの初期化 → identity依存のUI適用。
+  applyLegacyIdentityToUi(foreignSyncId);
   initV2SyncUi();
   applySyncIdentityUi(syncRequestRoute());
 
@@ -14214,20 +14261,7 @@ function initWordsnapSync() {
   }
   // 別の共有リンクを開いている場合は確認バナーを出す（確認までは元のキーで通常同期）
   if (foreignSyncId) showSyncSwitchConfirm(foreignSyncId, storedSyncId);
-  // http/https では個人キーで自動接続し、データをサーバーに保存・復元する
-  if (syncRequestRoute().expectedSyncId) {
-    connectWordsnapSync({ silent: true });
-  } else if (keyGenerationFailed) {
-    setSyncStatus("安全な個人キーを生成できないため、サーバー同期を開始しません。単語はこの端末にのみ保存されます。ブラウザを最新版に更新して開き直してください。", "error");
-  } else if (identityDecisionDeferred) {
-    // 段階5-1: 別タブがidentityを書き換え中なので、このタブでは何も決めていない。
-    // 「準備中」だと待てば直ると誤解されるため、再読み込みが要ることを明示する。
-    setSyncStatus(
-      "別のタブでこの端末の同期設定を変更中です。切り替えが終わったら、このページを再読み込みしてください。",
-    );
-  } else {
-    setSyncStatus("サーバー保存の準備中です…");
-  }
+  startSyncWithEstablishedIdentity({ keyGenerationFailed, identityDecisionDeferred });
 }
 
 function saveState() {
