@@ -72,6 +72,7 @@ async function makeInit({
   claimBlocks = false,
   generateThrows = false,
   storageWriteThrows = false,
+  storageRemoveThrows = false,
   // --- 段階5-3b: V2ネイティブ自動発行 ---
   issueAllowed = false,      // 回復バリアが settled か
   claimAvailable = true,     // claimを取れるか
@@ -154,7 +155,10 @@ async function makeInit({
         if (storageWriteThrows) throw new Error("quota");
         store.set(k, String(v));
       },
-      removeItem: (k) => { store.delete(k); },
+      removeItem(k) {
+        if (storageRemoveThrows) throw new Error("remove failed");
+        store.delete(k);
+      },
     },
     window: {
       location: { search, href: `https://wordbank.example/${search}` },
@@ -287,6 +291,44 @@ test("既存legacyユーザーは新規発行されず、そのまま接続す�
   assert.equal(run.syncState.id, LEGACY_A, "保存済みキーを使うこと");
   assert.ok(!run.names.includes("generatePrivateKey"), "鍵を作り直さないこと");
   assert.ok(run.names.includes("connectWordsnapSync"));
+});
+
+test("4秒フォールバックで自動生成したlegacyだけをV2復元成功後に取り消す", async () => {
+  const run = await makeInit();
+  run.store.set("wordsnap-sync-credential:v2", JSON.stringify({
+    roomId: ROOM_ID,
+    status: "active",
+    provenance: "native-default:v1",
+  }));
+  assert.equal(run.context.revokeStartupGeneratedLegacyIdentity(), true);
+  assert.equal(run.store.has(SYNC_ID_KEY), false, "自動生成した保存値を削除すること");
+  assert.equal(run.syncState.id, "", "メモリ上のlegacyも空にすること");
+  assert.equal(run.context.syncRequestRoute().isV2Native, true, "V2ネイティブへ戻ること");
+});
+
+test("起動前から持っていたlegacyはV2復元後も絶対に削除しない", async () => {
+  const run = await makeInit({ storedSyncId: LEGACY_A });
+  assert.equal(run.context.revokeStartupGeneratedLegacyIdentity(), false);
+  assert.equal(run.store.get(SYNC_ID_KEY), LEGACY_A);
+  assert.equal(run.syncState.id, LEGACY_A);
+});
+
+test("復元待ちの間に差し替わったlegacyは自動生成IDと取り違えて削除しない", async () => {
+  const run = await makeInit();
+  run.store.set(SYNC_ID_KEY, LEGACY_B);
+  run.syncState.id = LEGACY_B;
+  assert.equal(run.context.revokeStartupGeneratedLegacyIdentity(), false);
+  assert.equal(run.store.get(SYNC_ID_KEY), LEGACY_B);
+  assert.equal(run.syncState.id, LEGACY_B);
+});
+
+test("自動生成legacyの削除に失敗しても例外を漏らさず同期経路を残す", async () => {
+  const run = await makeInit({ storageRemoveThrows: true });
+  assert.doesNotThrow(() => {
+    assert.equal(run.context.revokeStartupGeneratedLegacyIdentity(), false);
+  });
+  assert.equal(run.store.get(SYNC_ID_KEY), GENERATED);
+  assert.equal(run.syncState.id, GENERATED);
 });
 
 test("V2ネイティブユーザーにはlegacyキーを発行しない", async () => {

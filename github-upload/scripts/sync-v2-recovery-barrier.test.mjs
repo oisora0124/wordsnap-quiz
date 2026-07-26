@@ -257,6 +257,11 @@ test("recoverPersistedはバリア経由で復元し、素の復元関数を直�
     /await recoverV2CredentialFromIdb\(/,
     "バリアを迂回する直接呼び出しを残さないこと",
   );
+  assert.match(
+    body,
+    /if \(v2CredentialRecoveredFromIdb\) revokeStartupGeneratedLegacyIdentity\(\)/,
+    "復元成功時だけフォールバック生成identityを取り消すこと",
+  );
 });
 
 test("4秒フォールバックは復元完了を待たない前提が維持されている", () => {

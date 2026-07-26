@@ -11245,6 +11245,7 @@ function normalizeWord(word) {
     pos: normalizePos(w.pos),
     enrich: normalizeEnrich(w.enrich),
     favorite: Boolean(w.favorite),
+    favoriteUpdatedAt: nonNegativeInteger(w.favoriteUpdatedAt),
     stats: {
       correct: nonNegativeInteger(w.stats?.correct),
       wrong: nonNegativeInteger(w.stats?.wrong),
@@ -12801,6 +12802,8 @@ function mergeWord(localWord, remoteWord, source) {
   const history = mergeHistory(localWord.history, remoteWord.history);
   const historyCorrect = history.filter((entry) => entry.correct).length;
   const historyWrong = history.length - historyCorrect;
+  const remoteFavoriteIsNewer =
+    remoteWord.favoriteUpdatedAt > localWord.favoriteUpdatedAt;
   const stats = {
     correct: Math.max(localWord.stats.correct, remoteWord.stats.correct, historyCorrect),
     wrong: Math.max(localWord.stats.wrong, remoteWord.stats.wrong, historyWrong),
@@ -12817,6 +12820,10 @@ function mergeWord(localWord, remoteWord, source) {
     cefr: localWord.cefr || remoteWord.cefr,
     pos: localWord.pos || remoteWord.pos,
     enrich: mergeEnrichData(localWord.enrich, remoteWord.enrich),
+    favorite: remoteFavoriteIsNewer ? remoteWord.favorite : localWord.favorite,
+    favoriteUpdatedAt: remoteFavoriteIsNewer
+      ? remoteWord.favoriteUpdatedAt
+      : localWord.favoriteUpdatedAt,
     stats,
     history,
     learning: mergeLearningState(localWord.learning, remoteWord.learning),
@@ -14052,6 +14059,29 @@ function syncStartupIdentityDecision(identity, idFromUrl, storedSyncId) {
   };
 }
 
+// 4秒フォールバックでこの起動中に作ったlegacyだけを、遅れてV2復元できたときに取り消す。
+// 起動前からあったIDや、復元待ちの間に別タブが差し替えたIDには絶対に触れない。
+let startupGeneratedLegacyId = "";
+
+function revokeStartupGeneratedLegacyIdentity() {
+  const generatedId = startupGeneratedLegacyId;
+  if (!generatedId) return false;
+  try {
+    const storedRaw = localStorage.getItem(SYNC_ID_KEY);
+    const storedId = cleanSyncId(storedRaw);
+    const activeLegacyId = syncRequestRoute().legacyId;
+    if (storedRaw !== null && storedId !== generatedId) return false;
+    if (activeLegacyId && activeLegacyId !== generatedId) return false;
+    if (storedId === generatedId) localStorage.removeItem(SYNC_ID_KEY);
+    if (activeLegacyId === generatedId) syncState.id = "";
+    startupGeneratedLegacyId = "";
+    return true;
+  } catch {
+    // 取り消しに失敗した場合はlegacyを残す。同期先を失うより安全側へ倒す。
+    return false;
+  }
+}
+
 // 段階5-3a: 新規ユーザーのidentity確立。今はlegacyキーの自動発行だけだが、
 // 5-3bでこの手前にV2の自動発行を挟む。どの経路を通っても**必ずlegacyへ着地する**
 // ことがこの関数の契約で、着地に失敗した場合だけ false を返す。着地しないまま
@@ -14061,6 +14091,7 @@ function establishLegacyIdentity() {
     const generatedId = generatePrivateKey();
     syncState.id = generatedId;
     localStorage.setItem(SYNC_ID_KEY, generatedId);
+    startupGeneratedLegacyId = generatedId;
     return true;
   } catch {
     // 推測可能なキーを作るくらいなら同期を開始しない。ローカル保存は引き続き使える。
@@ -23465,6 +23496,7 @@ elements.savedList.addEventListener("click", async (event) => {
     const word = appState.words.find((item) => item.id === favoriteButton.dataset.favoriteWord);
     if (word) {
       word.favorite = !word.favorite;
+      word.favoriteUpdatedAt = Date.now();
       saveState();
       setStatus(
         word.favorite
@@ -24879,6 +24911,7 @@ async function recoverPersisted() {
   // localStorage優先の判定はrecoverV2CredentialFromIdb内で読み取り前後の2回行う。
   // 起動バリア経由で呼び、この復元が確定したかどうかを段階5の発行ゲートへ残す。
   v2CredentialRecoveredFromIdb = await settleV2RecoveryFromIdb();
+  if (v2CredentialRecoveredFromIdb) revokeStartupGeneratedLegacyIdentity();
   if (v2CredentialRecoveredFromIdb && syncInitStarted) {
     // 4秒フォールバックでlegacy同期が先に始まっていた場合も、復元したV2へ安全に切り替える。
     stopSyncPolling();
