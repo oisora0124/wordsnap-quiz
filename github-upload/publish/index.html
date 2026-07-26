@@ -12103,7 +12103,18 @@ function renderV2RecoveryNotice(identity = syncRequestRoute()) {
   if (elements.syncV2Section) elements.syncV2Section.open = true;
 }
 
+// 「APIキーも同期する」トグルはV2 active のときだけ出す。新規ユーザーへの資格情報の
+// 自動発行は非同期なので、設定画面の初回描画のほうが先に走る＝そのままだと再読み込み
+// するまでトグルが出ない。表示の要否が変わったときだけ描き直す（入力中の欄を壊さない）。
+function refreshAiKeySyncToggleVisibility() {
+  if (!elements.aiKeyFields) return;
+  const shouldShow = Boolean(getActiveV2Credential());
+  const shown = Boolean(elements.aiKeyFields.querySelector("#aiKeySyncToggle"));
+  if (shouldShow !== shown) renderAiKeyFields();
+}
+
 function renderV2CredentialUi() {
+  refreshAiKeySyncToggleVisibility();
   const credential = readV2Credential();
   const active = credential?.status === "active" ? credential : null;
   if (elements.syncV2CredentialPanel) elements.syncV2CredentialPanel.hidden = !active;
@@ -12125,6 +12136,8 @@ function renderV2CredentialUi() {
 }
 
 function applySyncIdentityUi(identity = syncRequestRoute()) {
+  // 新規ユーザーの自動発行はここより前に終わっている。発行できた場合だけトグルが増える。
+  refreshAiKeySyncToggleVisibility();
   const isV2Native = Boolean(identity?.isV2Native);
   document.querySelectorAll('[data-sync-identity-ui="legacy"]').forEach((element) => {
     element.hidden = isV2Native;
@@ -16446,7 +16459,14 @@ async function adoptAiSecretsFromState(state, expectedSyncId) {
       const entry = opened.keys[provider.id];
       if (!entry) continue;
       if (entry.updatedAt > horizon) continue;
-      if (!(entry.updatedAt > (stamps[provider.id] || 0))) continue;
+      const stamp = stamps[provider.id] || 0;
+      // 同じ時刻でも、手元が空でサーバーに値があるなら復元する。「この端末に保存」は
+      // 既定オフでタブを閉じるとキーが消えるため、これが無いと開き直すたびに
+      // 貼り直しになり、機能の目的そのものが果たせない。
+      // 巻き戻りにはならない（そのスタンプが表す状態へ戻すだけ）。削除の伝搬も、
+      // 空を空で上書きしないので壊れない。
+      const restorable = entry.updatedAt === stamp && !getAiKey(provider.id) && Boolean(entry.value);
+      if (!(entry.updatedAt > stamp) && !restorable) continue;
       setAiKey(provider.id, entry.value, { source: "remote" });
       stamps[provider.id] = entry.updatedAt;
       changed = true;

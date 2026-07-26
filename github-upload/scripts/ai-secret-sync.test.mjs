@@ -546,3 +546,60 @@ test("無効化するとキャッシュを捨て、部屋からも封筒を消�
   assert.ok(disableSource.includes("scheduleSyncPush()"));
   assert.ok(/この端末のキーはそのまま残ります/.test(disableSource), "ローカルのキーは消さないと伝えること");
 });
+
+// ---- 「この端末に保存」オフでの復元（実ブラウザ検証で見つかった欠陥） ----------
+// 既定はオフなので、これがこの機能の最も普通の使われ方になる。
+
+test("持続オフでタブを開き直してキーが消えても、同じ時刻の封筒から復元する", async () => {
+  const app = makeApp({ persist: false });
+  app.setClock(1000);
+  app.ctx.setAiKey("gemini", GEMINI);
+  const envelope = await app.ctx.sealAiSecrets(ROOM_A, VAULT_A, app.ctx.currentAiSecretKeySet());
+  // タブを閉じた＝sessionStorageが消えた状態を作る（スタンプはlocalStorageに残る）
+  app.sessionStorage.map.clear();
+  assert.equal(app.ctx.getAiKey("gemini"), "", "前提: キーが消えていること");
+  const adopted = await app.ctx.adoptAiSecretsFromState({ aiSecrets: envelope }, ROOM_A);
+  assert.equal(adopted, true, "同じ時刻でも復元されること");
+  assert.equal(app.ctx.getAiKey("gemini"), GEMINI);
+});
+
+test("復元は巻き戻りにならない: 手元に値があるなら同じ時刻の封筒で上書きしない", async () => {
+  const app = makeApp();
+  app.setClock(1000);
+  app.ctx.setAiKey("gemini", "LOCAL-VALUE");
+  const stamps = JSON.parse(app.localStorage.getItem("wordsnap-ai-secrets-at"));
+  const envelope = await app.ctx.sealAiSecrets(ROOM_A, VAULT_A, {
+    gemini: { value: "OTHER-VALUE", updatedAt: stamps.gemini },
+  });
+  assert.equal(await app.ctx.adoptAiSecretsFromState({ aiSecrets: envelope }, ROOM_A), false);
+  assert.equal(app.ctx.getAiKey("gemini"), "LOCAL-VALUE");
+});
+
+test("復元は削除の伝搬を壊さない: 空を空で上書きしない", async () => {
+  const app = makeApp();
+  app.setClock(1000);
+  app.ctx.setAiKey("gemini", GEMINI);
+  app.setClock(2000);
+  app.ctx.setAiKey("gemini", ""); // 削除した
+  const stamps = JSON.parse(app.localStorage.getItem("wordsnap-ai-secrets-at"));
+  const envelope = await app.ctx.sealAiSecrets(ROOM_A, VAULT_A, {
+    gemini: { value: "", updatedAt: stamps.gemini },
+  });
+  assert.equal(await app.ctx.adoptAiSecretsFromState({ aiSecrets: envelope }, ROOM_A), false);
+  assert.equal(app.ctx.getAiKey("gemini"), "", "削除された状態が保たれること");
+});
+
+test("V2 active になった時点でトグルの表示を作り直す（新規ユーザーが再読み込み不要）", () => {
+  const source = extractFunction("refreshAiKeySyncToggleVisibility");
+  assert.ok(source.includes("getActiveV2Credential()"), "V2 active を条件にすること");
+  assert.ok(
+    /if \(shouldShow !== shown\) renderAiKeyFields\(\);/.test(source),
+    "表示の要否が変わったときだけ描き直すこと（入力中の欄を壊さない）",
+  );
+  for (const caller of ["renderV2CredentialUi", "applySyncIdentityUi"]) {
+    assert.ok(
+      extractFunction(caller).includes("refreshAiKeySyncToggleVisibility()"),
+      `${caller} から呼ぶこと`,
+    );
+  }
+});
