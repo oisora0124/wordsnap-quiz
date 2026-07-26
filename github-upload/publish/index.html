@@ -11454,6 +11454,9 @@ function normalizeV2Credential(value) {
   // 未知の値は保持しない。既存資格情報にはフィールド自体を追加せず、保存内容を不変にする。
   const provenance =
     value.provenance === SYNC_V2_NATIVE_PROVENANCE ? SYNC_V2_NATIVE_PROVENANCE : "";
+  // AIキー暗号化同期の鍵素材。サーバーへは一度も送らず、引き継ぎコードだけで運ぶ。
+  // provenance と同じく、持っていない既存資格情報にはフィールドを足さない。
+  const vaultKey = /^wv_[0-9a-f]{64}$/.test(String(value.vaultKey || "")) ? value.vaultKey : "";
   if (
     value.v !== 2 ||
     !status ||
@@ -11469,6 +11472,7 @@ function normalizeV2Credential(value) {
     secret,
     origin,
     ...(provenance ? { provenance } : {}),
+    ...(vaultKey ? { vaultKey } : {}),
   };
 }
 
@@ -11535,6 +11539,11 @@ function generateRandomHex(byteLength) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+// AIキー暗号化同期の鍵素材。サーバーへ一度も送らないので、認証用のsecretとは別に持つ。
+function generateVaultKey() {
+  return `wv_${generateRandomHex(32)}`;
+}
+
 function generateV2Credential(secret = "", origin = "") {
   const retainedSecret = /^wk_[0-9a-f]{60}$/.test(secret)
     ? secret
@@ -11545,19 +11554,33 @@ function generateV2Credential(secret = "", origin = "") {
     roomId: `wr_${generateRandomHex(16)}`,
     secret: retainedSecret,
     origin: origin === "upgrade" || origin === "create" ? origin : "",
+    // 新しい部屋は最初からvault keyを持つ。既存の部屋へ後から足す経路は設定UI側。
+    vaultKey: generateVaultKey(),
   };
 }
 
+// 引き継ぎコードは2要素（旧）と3要素（vault key付き）の両方が有効。
+// 既にパスワードマネージャへ保存されている2要素のコードを無効にしない。
 function v2TransferCode(credential) {
   const normalized = normalizeV2Credential(credential);
-  return normalized ? `${normalized.roomId}.${normalized.secret}` : "";
+  if (!normalized) return "";
+  const base = `${normalized.roomId}.${normalized.secret}`;
+  return normalized.vaultKey ? `${base}.${normalized.vaultKey}` : base;
 }
 
 function parseV2TransferCode(value) {
-  const match = String(value || "").trim().match(/^(wr_[0-9a-f]{32})\.(wk_[0-9a-f]{60})$/);
-  return match
-    ? { v: 2, status: "pending", roomId: match[1], secret: match[2], origin: "" }
-    : null;
+  const match = String(value || "")
+    .trim()
+    .match(/^(wr_[0-9a-f]{32})\.(wk_[0-9a-f]{60})(?:\.(wv_[0-9a-f]{64}))?$/);
+  if (!match) return null;
+  return {
+    v: 2,
+    status: "pending",
+    roomId: match[1],
+    secret: match[2],
+    origin: "",
+    ...(match[3] ? { vaultKey: match[3] } : {}),
+  };
 }
 
 let v2CredentialRecoveredFromIdb = false;
@@ -16124,10 +16147,10 @@ function aiSecretCryptoAvailable() {
 function aiSecretSyncRoute() {
   if (!aiKeySyncEnabled() || !aiSecretCryptoAvailable()) return null;
   const credential = getActiveV2Credential();
-  if (!credential) return null;
+  if (!credential?.vaultKey) return null; // 2要素の旧コードで合流した端末は鍵素材を持たない
   const identity = syncRequestRoute();
   if (!identity?.isV2 || identity.roomId !== credential.roomId) return null;
-  return { roomId: credential.roomId, secret: credential.secret };
+  return { roomId: credential.roomId, vaultKey: credential.vaultKey };
 }
 
 function aiSecretBytesToBase64(bytes) {
@@ -16146,14 +16169,15 @@ function aiSecretBase64ToBytes(text) {
   return bytes;
 }
 
-// 鍵は room secret から HKDF で派生する。サーバーは secret を保存せずHMACハッシュしか
-// 持たない（migrations/0004_auth_v2.sql）ため、D1を覗いてもこの鍵は導けない。
+// 鍵は vault key から HKDF で派生する。vault key はサーバーへ一度も送らず、
+// 引き継ぎコードだけで運ぶ（room secret は毎回サーバーへ送られるので使えない。
+// 経緯は docs/ai-secret-sync-design.md の2章）。
 // extractable: false なので派生鍵はJSからも取り出せない。
-async function deriveAiSecretKey(roomId, secret) {
+async function deriveAiSecretKey(roomId, vaultKey) {
   const encoder = new TextEncoder();
   const material = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(secret),
+    encoder.encode(vaultKey),
     "HKDF",
     false,
     ["deriveKey"],
@@ -16224,13 +16248,13 @@ function validAiSecretEnvelope(envelope) {
 
 // 失敗は必ず null で返す。例外を投げると同期経路を巻き込む。
 // ログにも封筒の中身・長さ・キーの断片を一切出さない。
-async function sealAiSecrets(roomId, secret, keys) {
+async function sealAiSecrets(roomId, vaultKey, keys) {
   try {
     const sanitized = sanitizeAiSecretKeys(keys);
     if (!sanitized) return null;
     const updatedAt = aiSecretMaxUpdatedAt(sanitized);
     if (updatedAt <= 0) return null;
-    const key = await deriveAiSecretKey(roomId, secret);
+    const key = await deriveAiSecretKey(roomId, vaultKey);
     // 再暗号化のたびに必ず新しいIVを引く（同じ派生鍵でのIV再利用はGCMを破綻させる）。
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const plaintext = JSON.stringify({
@@ -16257,13 +16281,13 @@ async function sealAiSecrets(roomId, secret, keys) {
   }
 }
 
-async function openAiSecrets(roomId, secret, envelope) {
+async function openAiSecrets(roomId, vaultKey, envelope) {
   if (!validAiSecretEnvelope(envelope)) return null;
   try {
     if (JSON.stringify(envelope).length > AI_SECRET_ENVELOPE_LIMIT) return null;
     const iv = aiSecretBase64ToBytes(envelope.iv);
     if (iv.length !== 12) return null;
-    const key = await deriveAiSecretKey(roomId, secret);
+    const key = await deriveAiSecretKey(roomId, vaultKey);
     const opened = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv, additionalData: aiSecretAad(roomId) },
       key,

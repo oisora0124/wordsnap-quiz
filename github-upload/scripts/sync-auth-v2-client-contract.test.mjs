@@ -159,13 +159,18 @@ test("roomIdとsecretはgetRandomValuesから指定ビット長で生成する",
     },
   };
   const credential = result.generateV2Credential();
-  assert.deepEqual(Object.keys(credential), ["v", "status", "roomId", "secret", "origin"]);
+  // B-1b で vaultKey（AIキー暗号化同期の鍵素材、32バイト）を追加した。
+  // 生成順は secret(30) -> roomId(16) -> vaultKey(32)。
+  // vaultKey はサーバーへ一度も送らず、引き継ぎコードだけで運ぶ
+  // （docs/ai-secret-sync-design.md 5章）。
+  assert.deepEqual(Object.keys(credential), ["v", "status", "roomId", "secret", "origin", "vaultKey"]);
   assert.equal(credential.v, 2);
   assert.equal(credential.status, "pending");
   assert.equal(credential.origin, "");
   assert.match(credential.roomId, /^wr_[0-9a-f]{32}$/);
   assert.match(credential.secret, /^wk_[0-9a-f]{60}$/);
-  assert.deepEqual(requestedByteLengths, [30, 16]);
+  assert.match(credential.vaultKey, /^wv_[0-9a-f]{64}$/);
+  assert.deepEqual(requestedByteLengths, [30, 16, 32]);
 });
 
 test("origin追加前のV2資格情報も有効で、不明として安全側へ正規化する", () => {

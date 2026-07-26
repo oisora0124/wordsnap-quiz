@@ -92,9 +92,9 @@ const {
 } = context;
 
 const ROOM_A = `wr_${"1".repeat(32)}`;
-const SECRET_A = `wk_${"2".repeat(60)}`;
+const VAULT_A = `wv_${"2".repeat(64)}`;
 const ROOM_B = `wr_${"3".repeat(32)}`;
-const SECRET_B = `wk_${"4".repeat(60)}`;
+const VAULT_B = `wv_${"4".repeat(64)}`;
 const GEMINI = "AIzaTESTKEY-gemini-do-not-use";
 const GROQ = "gsk_TESTKEY-groq-do-not-use";
 const T1 = 1753500000000;
@@ -116,16 +116,16 @@ test("実物のAI_PROVIDERSと、このテストが仮定するprovider集合が
 });
 
 test("封筒は作れて、正しい部屋と鍵で開ける", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   assert.ok(envelope, "封筒が作れること");
-  const opened = await openAiSecrets(ROOM_A, SECRET_A, envelope);
+  const opened = await openAiSecrets(ROOM_A, VAULT_A, envelope);
   assert.equal(opened.keys.gemini.value, GEMINI);
   assert.equal(opened.keys.groq.value, GROQ);
 });
 
 // G20の一部（封筒そのものに平文が出ない）。送信経路まで含めた検査はB-2側で行う。
 test("封筒のどこにも平文のAPIキーが現れない", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   const serialized = JSON.stringify(envelope);
   assert.ok(!serialized.includes(GEMINI), "Geminiキーが平文で出ないこと");
   assert.ok(!serialized.includes(GROQ), "Groqキーが平文で出ないこと");
@@ -134,7 +134,7 @@ test("封筒のどこにも平文のAPIキーが現れない", async () => {
 });
 
 test("封筒は上限より十分小さい（同期本文を圧迫しない）", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   assert.ok(
     JSON.stringify(envelope).length < 1024,
     `封筒が1KB未満であること（実測 ${JSON.stringify(envelope).length}B）`,
@@ -143,16 +143,16 @@ test("封筒は上限より十分小さい（同期本文を圧迫しない）",
 
 // G3
 test("別の部屋の資格情報では復号できない", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
-  assert.equal(await openAiSecrets(ROOM_B, SECRET_B, envelope), null);
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
+  assert.equal(await openAiSecrets(ROOM_B, VAULT_B, envelope), null);
 });
 
 // G3: 部屋の束縛は HKDF の salt と AAD の二重で効く。変異検査で確認したとおり、
 // 片方だけを壊してもこのテストは通ってしまう（もう片方が守るため）。
 // AAD の中身そのものは下の「AADは…を含む」と参照派生テストで固定している。
 test("鍵が正しくても部屋IDが違えば復号できない", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
-  assert.equal(await openAiSecrets(ROOM_B, SECRET_A, envelope), null);
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
+  assert.equal(await openAiSecrets(ROOM_B, VAULT_A, envelope), null);
 });
 
 test("AADはドメイン・版・アルゴリズム名・部屋IDを含む", () => {
@@ -166,40 +166,40 @@ test("AADはドメイン・版・アルゴリズム名・部屋IDを含む", () 
 });
 
 test("部屋IDが正しくても鍵が違えば復号できない", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
-  assert.equal(await openAiSecrets(ROOM_A, SECRET_B, envelope), null);
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
+  assert.equal(await openAiSecrets(ROOM_A, VAULT_B, envelope), null);
 });
 
 // G4
 test("暗号文を1ビット改竄すると復号できない（GCMタグ）", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   const bytes = aiSecretBase64ToBytes(envelope.ct);
   bytes[0] ^= 0x01;
   const tampered = { ...envelope, ct: aiSecretBytesToBase64(bytes) };
-  assert.equal(await openAiSecrets(ROOM_A, SECRET_A, tampered), null);
+  assert.equal(await openAiSecrets(ROOM_A, VAULT_A, tampered), null);
 });
 
 test("IVを差し替えると復号できない", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   const iv = aiSecretBase64ToBytes(envelope.iv);
   iv[0] ^= 0xff;
   assert.equal(
-    await openAiSecrets(ROOM_A, SECRET_A, { ...envelope, iv: aiSecretBytesToBase64(iv) }),
+    await openAiSecrets(ROOM_A, VAULT_A, { ...envelope, iv: aiSecretBytesToBase64(iv) }),
     null,
   );
 });
 
 // G5: 外側の updatedAt は復号前に読むため署名対象外。中身と一致しなければ破棄する。
 test("外側のupdatedAtだけを新しく書き換えた封筒は採用しない", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   const forged = { ...envelope, updatedAt: envelope.updatedAt + 999999 };
-  assert.equal(await openAiSecrets(ROOM_A, SECRET_A, forged), null);
+  assert.equal(await openAiSecrets(ROOM_A, VAULT_A, forged), null);
 });
 
 test("外側のupdatedAtは中身のprovider時刻の最大値である", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet(GEMINI, GROQ, T1, T2));
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet(GEMINI, GROQ, T1, T2));
   assert.equal(envelope.updatedAt, T2);
-  const opened = await openAiSecrets(ROOM_A, SECRET_A, envelope);
+  const opened = await openAiSecrets(ROOM_A, VAULT_A, envelope);
   assert.equal(opened.updatedAt, T2);
 });
 
@@ -207,7 +207,7 @@ test("外側のupdatedAtは中身のprovider時刻の最大値である", async 
 test("IVは毎回新しく引かれる（同一派生鍵でのIV再利用がない）", async () => {
   const seen = new Set();
   for (let i = 0; i < 25; i += 1) {
-    const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+    const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
     assert.ok(!seen.has(envelope.iv), "IVが再利用されないこと");
     seen.add(envelope.iv);
     assert.equal(aiSecretBase64ToBytes(envelope.iv).length, 12, "IVは12バイト");
@@ -216,7 +216,7 @@ test("IVは毎回新しく引かれる（同一派生鍵でのIV再利用がな�
 
 // G19
 test("v・alg・kdf は完全一致以外すべて拒否する", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   for (const bad of [
     { ...envelope, v: 2 },
     { ...envelope, v: "1" },
@@ -225,15 +225,15 @@ test("v・alg・kdf は完全一致以外すべて拒否する", async () => {
     { ...envelope, kdf: "PBKDF2" },
     { ...envelope, kdf: "HKDF-SHA-512" },
   ]) {
-    assert.equal(await openAiSecrets(ROOM_A, SECRET_A, bad), null, JSON.stringify(bad).slice(0, 60));
+    assert.equal(await openAiSecrets(ROOM_A, VAULT_A, bad), null, JSON.stringify(bad).slice(0, 60));
   }
 });
 
 test("IV長が12でない封筒は拒否する", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   for (const length of [0, 8, 11, 13, 16]) {
     const bad = { ...envelope, iv: aiSecretBytesToBase64(new Uint8Array(length)) };
-    assert.equal(await openAiSecrets(ROOM_A, SECRET_A, bad), null, `IV長 ${length}`);
+    assert.equal(await openAiSecrets(ROOM_A, VAULT_A, bad), null, `IV長 ${length}`);
   }
 });
 
@@ -251,39 +251,39 @@ test("形の壊れた封筒は例外を投げずに拒否する", async () => {
     { v: 1, alg: "A256GCM", kdf: "HKDF-SHA-256", iv: "x", ct: "x", updatedAt: 1.5 },
     { v: 1, alg: "A256GCM", kdf: "HKDF-SHA-256", iv: "!!!", ct: "!!!", updatedAt: 1 },
   ]) {
-    assert.equal(await openAiSecrets(ROOM_A, SECRET_A, bad), null, JSON.stringify(bad));
+    assert.equal(await openAiSecrets(ROOM_A, VAULT_A, bad), null, JSON.stringify(bad));
   }
 });
 
 test("空文字のキーは削除として封じられ、開ける", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet("", "", T1, T1));
-  const opened = await openAiSecrets(ROOM_A, SECRET_A, envelope);
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet("", "", T1, T1));
+  const opened = await openAiSecrets(ROOM_A, VAULT_A, envelope);
   assert.equal(opened.keys.gemini.value, "");
   assert.equal(opened.keys.groq.value, "");
 });
 
 test("長すぎるキー・不正な時刻は封じない", async () => {
   assert.equal(
-    await sealAiSecrets(ROOM_A, SECRET_A, { gemini: { value: "x".repeat(513), updatedAt: T1 } }),
+    await sealAiSecrets(ROOM_A, VAULT_A, { gemini: { value: "x".repeat(513), updatedAt: T1 } }),
     null,
   );
   assert.equal(
-    await sealAiSecrets(ROOM_A, SECRET_A, { gemini: { value: "x", updatedAt: 0 } }),
+    await sealAiSecrets(ROOM_A, VAULT_A, { gemini: { value: "x", updatedAt: 0 } }),
     null,
   );
   assert.equal(
-    await sealAiSecrets(ROOM_A, SECRET_A, { gemini: { value: "x", updatedAt: "abc" } }),
+    await sealAiSecrets(ROOM_A, VAULT_A, { gemini: { value: "x", updatedAt: "abc" } }),
     null,
   );
-  assert.equal(await sealAiSecrets(ROOM_A, SECRET_A, {}), null, "空の集合は封じない");
-  assert.equal(await sealAiSecrets(ROOM_A, SECRET_A, null), null);
+  assert.equal(await sealAiSecrets(ROOM_A, VAULT_A, {}), null, "空の集合は封じない");
+  assert.equal(await sealAiSecrets(ROOM_A, VAULT_A, null), null);
 });
 
 test("providerが片方だけの封筒も扱える", async () => {
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, {
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, {
     gemini: { value: GEMINI, updatedAt: T1 },
   });
-  const opened = await openAiSecrets(ROOM_A, SECRET_A, envelope);
+  const opened = await openAiSecrets(ROOM_A, VAULT_A, envelope);
   assert.equal(opened.keys.gemini.value, GEMINI);
   assert.equal(opened.keys.groq, undefined, "触っていないproviderは封筒に入らない");
 });
@@ -310,7 +310,7 @@ test("鍵派生は roomId をsalt、固定文字列をinfo とする HKDF-SHA-25
   const encoder = new TextEncoder();
   const material = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(SECRET_A),
+    encoder.encode(VAULT_A),
     "HKDF",
     false,
     ["deriveKey"],
@@ -327,7 +327,7 @@ test("鍵派生は roomId をsalt、固定文字列をinfo とする HKDF-SHA-25
     false,
     ["encrypt", "decrypt"],
   );
-  const envelope = await sealAiSecrets(ROOM_A, SECRET_A, keySet());
+  const envelope = await sealAiSecrets(ROOM_A, VAULT_A, keySet());
   const opened = await crypto.subtle.decrypt(
     {
       name: "AES-GCM",
@@ -348,5 +348,143 @@ test("派生鍵は取り出せない（extractable: false）", async () => {
   assert.ok(
     /\{ name: "AES-GCM", length: 256 \},\s*\n\s*false,/.test(source),
     "deriveKey の extractable が false であること",
+  );
+});
+
+// ---- vault key と引き継ぎコード（B-1b） -------------------------------------
+// 封筒の鍵は room secret ではなく vault key から派生する。vault key はサーバーへ
+// 一度も送られず、引き継ぎコードだけで運ぶ。既に配布済みの2要素コードは無効にしない。
+const credentialContext = {
+  crypto: globalThis.crypto,
+  String,
+  Number,
+  Array,
+  Boolean,
+  Object,
+  Math,
+  RegExp,
+  SYNC_V2_NATIVE_PROVENANCE: "native",
+};
+vm.runInNewContext(
+  [
+    "generateRandomHex",
+    "generateVaultKey",
+    "generateV2Credential",
+    "normalizeV2Credential",
+    "v2TransferCode",
+    "parseV2TransferCode",
+  ]
+    .map(extractFunction)
+    .join("\n"),
+  credentialContext,
+);
+
+const {
+  generateVaultKey,
+  generateV2Credential,
+  normalizeV2Credential,
+  v2TransferCode,
+  parseV2TransferCode,
+} = credentialContext;
+
+// G2d: 既にパスワードマネージャへ保存されている2要素コードが無効にならないこと。
+test("2要素の旧い引き継ぎコードは今までどおり解析できる", () => {
+  const code = `wr_${"a".repeat(32)}.wk_${"b".repeat(60)}`;
+  const parsed = parseV2TransferCode(code);
+  assert.ok(parsed, "旧コードが解析できること");
+  assert.equal(parsed.roomId, `wr_${"a".repeat(32)}`);
+  assert.equal(parsed.secret, `wk_${"b".repeat(60)}`);
+  assert.equal(parsed.vaultKey, undefined, "vault keyは付かないこと");
+});
+
+// G2e
+test("3要素コードは vault key ごと解析でき、往復して一致する", () => {
+  const vaultKey = `wv_${"c".repeat(64)}`;
+  const code = `wr_${"a".repeat(32)}.wk_${"b".repeat(60)}.${vaultKey}`;
+  const parsed = parseV2TransferCode(code);
+  assert.equal(parsed.vaultKey, vaultKey);
+  assert.equal(v2TransferCode({ ...parsed, status: "active" }), code, "文字列化して往復すること");
+});
+
+test("壊れた vault key を含むコードは受理しない", () => {
+  const base = `wr_${"a".repeat(32)}.wk_${"b".repeat(60)}`;
+  for (const bad of [
+    `${base}.wv_${"c".repeat(63)}`,
+    `${base}.wv_${"c".repeat(65)}`,
+    `${base}.wv_${"C".repeat(64)}`,
+    `${base}.wx_${"c".repeat(64)}`,
+    `${base}.${"c".repeat(64)}`,
+    `${base}.wv_${"c".repeat(64)}.extra`,
+  ]) {
+    assert.equal(parseV2TransferCode(bad), null, bad.slice(-24));
+  }
+});
+
+test("新しい資格情報は vault key を持ち、形式が正しい", () => {
+  const credential = generateV2Credential("", "create");
+  assert.match(credential.vaultKey, /^wv_[0-9a-f]{64}$/);
+  assert.notEqual(credential.vaultKey, credential.secret);
+  assert.match(v2TransferCode({ ...credential, status: "active" }), /^wr_[0-9a-f]{32}\.wk_[0-9a-f]{60}\.wv_[0-9a-f]{64}$/);
+});
+
+test("vault key は毎回異なる", () => {
+  const seen = new Set();
+  for (let i = 0; i < 50; i += 1) {
+    const key = generateVaultKey();
+    assert.ok(!seen.has(key), "vault keyが重複しないこと");
+    seen.add(key);
+  }
+});
+
+// 既存ユーザーの保存内容を1バイトも変えないこと。ここが崩れると、
+// 既に保存されている資格情報が書き換わって同期経路に波及する。
+test("vault key を持たない既存の資格情報には、フィールドを足さない", () => {
+  const stored = {
+    v: 2,
+    status: "active",
+    roomId: `wr_${"a".repeat(32)}`,
+    secret: `wk_${"b".repeat(60)}`,
+    origin: "create",
+  };
+  const normalized = normalizeV2Credential(stored);
+  assert.deepEqual(Object.keys(normalized).sort(), ["origin", "roomId", "secret", "status", "v"]);
+  assert.ok(!("vaultKey" in normalized), "vaultKeyキー自体が生えないこと");
+  assert.equal(JSON.stringify(normalized), JSON.stringify(stored), "保存内容が不変であること");
+});
+
+test("不正な vault key は保持せず、資格情報そのものは有効なままにする", () => {
+  for (const bad of ["", "wv_short", `wk_${"b".repeat(60)}`, 123, null, {}]) {
+    const normalized = normalizeV2Credential({
+      v: 2,
+      status: "active",
+      roomId: `wr_${"a".repeat(32)}`,
+      secret: `wk_${"b".repeat(60)}`,
+      origin: "",
+      vaultKey: bad,
+    });
+    assert.ok(normalized, "資格情報自体は有効なままであること");
+    assert.ok(!("vaultKey" in normalized), `不正な vault key を保持しないこと: ${String(bad)}`);
+  }
+});
+
+// G2c: vault key がサーバーへ渡る経路に混ざらないこと（静的な検査）。
+// 実際の送信本文まで含めた検査は B-2 側で行う。
+test("vault key は同期stateの組み立てに現れない", () => {
+  const payloadSource = extractFunction("buildSyncPayloadState");
+  assert.ok(!payloadSource.includes("vaultKey"), "送信stateの組み立てに vaultKey が出ないこと");
+  const headerSource = extractFunction("syncHeaders");
+  assert.ok(!headerSource.includes("vaultKey"), "リクエストヘッダに vaultKey が出ないこと");
+});
+
+test("封筒の鍵は room secret からは導けない（vault key が必要）", async () => {
+  const roomId = `wr_${"1".repeat(32)}`;
+  const secret = `wk_${"2".repeat(60)}`;
+  const vaultKey = `wv_${"3".repeat(64)}`;
+  const envelope = await sealAiSecrets(roomId, vaultKey, keySet());
+  assert.ok(envelope, "vault keyで封筒が作れること");
+  assert.equal(
+    await openAiSecrets(roomId, secret, envelope),
+    null,
+    "room secret では開けないこと",
   );
 });
