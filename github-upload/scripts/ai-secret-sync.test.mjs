@@ -478,3 +478,71 @@ test("採用は verifiedSyncTarget と同じ照合済みIDで行う", () => {
     "応答と照合済みの保存先IDを渡していること",
   );
 });
+
+// ---- 設定UI（B-4） ----------------------------------------------------------
+// この機能で一番まずい失敗は「成立しない安全性を利用者に表示すること」なので、
+// 文言そのものを凍結する。
+
+const renderSource = extractFunction("renderAiKeyFields");
+
+test("トグルONのときは「サーバーへは送信されません」と表示しない", () => {
+  // OFF時の従来文言はそのまま残っていること
+  assert.ok(
+    renderSource.includes("キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。"),
+    "OFF時の従来文言が残っていること",
+  );
+  // ON/OFFで説明文が切り替わること（切り替えが無いと、ONのとき虚偽になる）
+  assert.ok(
+    /const storageDesc = keySyncOn[\s\S]{0,400}: "キーはこの端末のブラウザだけに保存され/.test(renderSource),
+    "トグルの状態で説明文を切り替えていること",
+  );
+  assert.ok(
+    /keySyncOn[\s\S]{0,200}暗号化してから他の端末と同期されます/.test(renderSource),
+    "ON時は暗号化して同期すると書くこと",
+  );
+});
+
+test("ON時の説明は、運営が読み取れることを明示する", () => {
+  assert.ok(
+    renderSource.includes("その気になれば読み取れます"),
+    "運営が読み取れる旨を明示すること（同一オリジンのPWAでは暗号で解けない）",
+  );
+  assert.ok(
+    !/運営(も|には|は)?読めません/.test(renderSource),
+    "「運営も読めません」とは書かないこと",
+  );
+});
+
+test("トグルはV2の同期に接続している端末にだけ出す", () => {
+  assert.ok(
+    /getActiveV2Credential\(\)\s*\?[\s\S]{0,200}aiKeySyncToggle/.test(renderSource),
+    "V2 active のときだけトグルを描画していること",
+  );
+});
+
+test("有効化はユーザー操作からのみで、vault keyもそこでしか作らない", () => {
+  const enableSource = extractFunction("enableAiKeySync");
+  assert.ok(enableSource.includes("generateVaultKey()"), "有効化時にvault keyを作ること");
+  assert.ok(
+    /await syncRequest\("GET"\)/.test(enableSource),
+    "sinceRev無しの完全GETを1回行うこと（無いと有効にしても何も起きない）",
+  );
+  assert.ok(
+    /引き継ぎコードが新しくなりました/.test(enableSource),
+    "コードを作り直したことを利用者へ伝えること",
+  );
+  // 起動・同期経路からvault keyを勝手に作らないこと
+  for (const name of ["initWordsnapSync", "adoptAiSecretsFromState", "refreshAiSecretEnvelope", "connectWordsnapSync"]) {
+    assert.ok(
+      !extractFunction(name).includes("generateVaultKey"),
+      `${name} からvault keyを作らないこと`,
+    );
+  }
+});
+
+test("無効化するとキャッシュを捨て、部屋からも封筒を消しにいく", () => {
+  const disableSource = extractFunction("disableAiKeySync");
+  assert.ok(disableSource.includes("clearAiSecretEnvelopeCache()"));
+  assert.ok(disableSource.includes("scheduleSyncPush()"));
+  assert.ok(/この端末のキーはそのまま残ります/.test(disableSource), "ローカルのキーは消さないと伝えること");
+});

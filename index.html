@@ -22927,6 +22927,58 @@ if (legacyAiKey && !getAiKey("gemini")) {
   localStorage.removeItem("wordsnap-ai-key");
 }
 
+// vault key はサーバーへ送れないので、どの端末の鍵を正とするかをサーバー経由で
+// 合意させることができない。そのため生成は必ずユーザーの明示操作（このトグル）でだけ行い、
+// 起動時や同期中には絶対に作らない。分岐してもデータは失われず、復号できない封筒は
+// 黙って無視されて各端末は手元のキーを使い続ける。
+async function enableAiKeySync() {
+  const credential = getActiveV2Credential();
+  if (!credential) {
+    setStatus("新方式（V2）の同期に接続してから有効にできます。");
+    renderAiKeyFields();
+    return;
+  }
+  let issuedVaultKey = false;
+  try {
+    if (!credential.vaultKey) {
+      writeV2Credential({ ...credential, vaultKey: generateVaultKey() });
+      issuedVaultKey = true;
+    }
+    localStorage.setItem(AI_KEY_SYNC_KEY, "1");
+  } catch {
+    setStatus("この端末では設定を保存できないため、APIキーの同期を有効にできませんでした。");
+    renderAiKeyFields();
+    return;
+  }
+  // 合流直後は部屋のrevisionが変わらないため、定期GETは sinceRev 付きで
+  // state を返してこない。ここで完全GETを1回行わないと、有効にしても何も起きない。
+  try {
+    if (syncServerAvailable()) await syncRequest("GET");
+  } catch {
+    // 取り込めなくても有効化そのものは成立する。次の同期で拾える。
+  }
+  await refreshAiSecretEnvelope({ push: true });
+  renderAiKeyFields();
+  renderV2CredentialUi();
+  setStatus(
+    issuedVaultKey
+      ? "APIキーの同期を有効にしました。この端末で暗号鍵を作ったので、引き継ぎコードが新しくなりました。他の端末では新しいコードを保存し直してください。"
+      : "APIキーの同期を有効にしました。",
+  );
+}
+
+function disableAiKeySync() {
+  try {
+    localStorage.setItem(AI_KEY_SYNC_KEY, "0");
+  } catch {
+    // 保存できなくても、キャッシュを捨てれば送信は止まる
+  }
+  clearAiSecretEnvelopeCache();
+  scheduleSyncPush(); // 次のPUTで部屋から封筒が消える
+  renderAiKeyFields();
+  setStatus("APIキーの同期をオフにしました。この端末のキーはそのまま残ります。");
+}
+
 function renderAiKeyFields() {
   if (!elements.aiKeyFields) return;
   const fields = AI_PROVIDERS.map(
@@ -22940,12 +22992,38 @@ function renderAiKeyFields() {
         </div>
       </label>`,
   ).join("");
-  elements.aiKeyFields.innerHTML = `<p class="settings-desc">APIキーは各サービスの無料枠で取得できます。キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。設定すると例文モードの例文と4択の品質が上がります（未設定でも辞書で使えます）。</p>
+  // トグルONのとき「サーバーへは送信されません」は虚偽になるので、説明文ごと切り替える。
+  const keySyncOn = aiKeySyncEnabled();
+  const storageDesc = keySyncOn
+    ? "キーは暗号化してから他の端末と同期されます。復号に必要な鍵は引き継ぎコードの中だけにあり、WordBankのサーバーへは一度も送られません。"
+    : "キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。";
+  // V2の同期に接続している端末だけに出す。legacy運用中は鍵素材が無いので出さない。
+  const keySyncBlock = getActiveV2Credential()
+    ? `<label class="ai-persist">
+      <input type="checkbox" id="aiKeySyncToggle"${keySyncOn ? " checked" : ""} />
+      APIキーも他の端末と同期する（暗号化して保存）。オフのままなら今までどおりこの端末だけです。
+    </label>
+    <p class="settings-desc">${
+      keySyncOn
+        ? "同じ引き継ぎコードを持つ端末だけが復号できます。保存されたデータベースにも通信ログにも鍵は残りません。<strong>ただしWordBank自体がこのアプリを配信しているため、その気になれば読み取れます。</strong>誰にも預けたくないキーは、この機能をオフのままにしてください。"
+        : "オンにすると、他の端末でAPIキーを貼り直さずに済みます。キーは暗号化してから同期します。"
+    }</p>`
+    : "";
+  elements.aiKeyFields.innerHTML = `<p class="settings-desc">APIキーは各サービスの無料枠で取得できます。${storageDesc}設定すると例文モードの例文と4択の品質が上がります（未設定でも辞書で使えます）。</p>
     ${fields}
     <label class="ai-persist">
       <input type="checkbox" id="aiPersistToggle"${aiKeysPersisted() ? " checked" : ""} />
       この端末に保存（次回も使う）。オフだとタブを閉じると消えます。
-    </label>`;
+    </label>
+    ${keySyncBlock}`;
+
+  const keySyncToggle = elements.aiKeyFields.querySelector("#aiKeySyncToggle");
+  if (keySyncToggle) {
+    keySyncToggle.addEventListener("change", () => {
+      if (keySyncToggle.checked) void enableAiKeySync();
+      else disableAiKeySync();
+    });
+  }
 
   const persistToggle = elements.aiKeyFields.querySelector("#aiPersistToggle");
   persistToggle.addEventListener("change", () => {
