@@ -146,6 +146,7 @@ function makeApp({
     }),
     scheduleSyncPush: () => pushes.push(clock),
     setStatus: () => {},
+    trackUsage: () => {},
     elements: { aiKeyFields: null },
     document: { activeElement: null },
     LEARNING_SCHEMA_VERSION: 1,
@@ -858,4 +859,14 @@ test("トグルOFFの端末には、この通知も出さない", async () => {
   });
   await off.ctx.adoptAiSecretsFromState({ aiSecrets: foreign }, ROOM_A);
   assert.equal(notices.length, 0);
+});
+
+test("引き継ぎコードの案内が3要素に触れている（貼り付け前に不安にさせない）", () => {
+  assert.ok(
+    html.includes('placeholder="wr_….wk_…（.wv_…）を貼り付け"'),
+    "入力欄のプレースホルダが3要素目に触れること",
+  );
+  const joinError = /引き継ぎコードの形式を確認してください。[^"]*/.exec(html);
+  assert.ok(joinError, "形式エラーの文言が見つかること");
+  assert.ok(joinError[0].includes("wv_"), "形式エラーの説明も3要素目に触れること");
 });

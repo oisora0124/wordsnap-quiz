@@ -6122,7 +6122,7 @@ accurate 正確な"
                         autocomplete="off"
                         autocapitalize="off"
                         spellcheck="false"
-                        placeholder="wr_….wk_… を貼り付け"
+                        placeholder="wr_….wk_…（.wv_…）を貼り付け"
                         aria-label="新方式の引き継ぎコード"
                       />
                       <button id="syncV2JoinButton" class="secondary" type="button">このコードで合流</button>
@@ -6598,6 +6598,18 @@ const WordBankTelemetry = (() => {
     "share-tool",
     "streak-panel-open",
     "tutorial-complete",
+    // Phase 2 と告知の計測。呼んでいたのに許可リストへ入れ忘れており、
+    // 一度も記録されていなかった（新規ユーザーへのV2自動発行がどれだけ動いたか、
+    // 既存ユーザーが告知を見たかが、まったく分からない状態だった）。
+    "sync-v2-native-issue",
+    "v2-announce-shown",
+    "v2-announce-open",
+    "v2-announce-later",
+    // AIキーの暗号化同期。失敗をすべて黙って握り潰す設計なので、
+    // これが無いと動いているのか壊れているのかを観測する手段が無い。
+    "ai-key-sync-enable",
+    "ai-key-sync-adopt",
+    "ai-key-sync-mismatch",
   ]);
   // wv_ はAIキー暗号化同期のvault key。封筒の復号鍵そのものなので、
   // 万一エラー文へ混ざっても送信されないよう伏せる対象に含める。
@@ -12388,7 +12400,7 @@ let v2JoinConfirm = { roomId: "", at: 0 };
 async function joinV2Room() {
   const credential = parseV2TransferCode(elements.syncV2JoinInput?.value);
   if (!credential) {
-    setV2Status("引き継ぎコードの形式を確認してください。wr_…とwk_…をドットでつないだ1文字列です。", "error");
+    setV2Status("引き継ぎコードの形式を確認してください。wr_…とwk_…をドットでつないだ1文字列です（APIキーも同期している端末のコードは wv_… が続く3つ目の部分を含みます）。", "error");
     return;
   }
   if (!syncServerAvailable()) {
@@ -16480,6 +16492,7 @@ async function adoptAiSecretsFromState(state, expectedSyncId) {
       // 2台が別々になったことに一生気づけない。部屋ごとに1回だけ知らせる。
       if (aiSecretMismatchNotifiedRoom !== route.roomId) {
         aiSecretMismatchNotifiedRoom = route.roomId;
+        trackUsage("ai-key-sync-mismatch");
         try {
           setStatus(
             "他の端末のAPIキーを復号できませんでした。端末ごとに別の暗号鍵ができています。"
@@ -16517,6 +16530,7 @@ async function adoptAiSecretsFromState(state, expectedSyncId) {
     }
     if (!changed) return false;
     writeAiSecretStamps(stamps);
+    trackUsage("ai-key-sync-adopt");
     syncAiKeyFieldsFromStorage();
     // 採用した内容で封筒を作り直す。ここで作り直さないと、次のPUTが古い
     // キャッシュを送って、受け取ったばかりのキーを巻き戻す。
@@ -23050,6 +23064,7 @@ async function enableAiKeySync() {
   }
   if (adoptedLocalKeys) writeAiSecretStamps(stamps);
   await refreshAiSecretEnvelope({ push: true });
+  trackUsage("ai-key-sync-enable");
   renderAiKeyFields();
   renderV2CredentialUi();
   setStatus(

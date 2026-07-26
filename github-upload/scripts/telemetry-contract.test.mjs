@@ -243,3 +243,36 @@ test("GET has no read path and never touches D1", async () => {
   assert.equal(db.inserted.length, 0);
   assert.equal(db.rateLimits.size, 0);
 });
+
+// 呼んでいるのに許可リストへ入れ忘れると、そのイベントは無言で捨てられる。
+// 実際にPhase 2の sync-v2-native-issue と告知の3イベントがこれで一度も記録されて
+// いなかった。捨てられても誰も気づけない（例外も警告も出ない）ので、ここで固定する。
+test("trackUsage で呼ばれている名前は、すべて USAGE_NAMES に入っている", () => {
+  const html = readFileSync(join(here, "..", "publish", "index.html"), "utf8");
+  const listBlock = /const USAGE_NAMES = new Set\(\[([\s\S]*?)\]\);/.exec(html);
+  assert.ok(listBlock, "USAGE_NAMES が見つかること");
+  const allowed = new Set(
+    [...listBlock[1].matchAll(/"([a-z0-9-]+)"/g)].map((m) => m[1]),
+  );
+  const called = new Set(
+    [...html.matchAll(/trackUsage\("([a-z0-9-]+)"\)/g)].map((m) => m[1]),
+  );
+  const dropped = [...called].filter((name) => !allowed.has(name));
+  assert.deepEqual(dropped, [], `許可リストに無い計測名: ${dropped.join(", ")}`);
+  assert.ok(called.size >= 15, "呼び出しが検出できていること");
+});
+
+test("Phase 2 と AIキー同期の計測名が許可リストにある", () => {
+  const html = readFileSync(join(here, "..", "publish", "index.html"), "utf8");
+  const listBlock = /const USAGE_NAMES = new Set\(\[([\s\S]*?)\]\);/.exec(html);
+  const allowed = new Set([...listBlock[1].matchAll(/"([a-z0-9-]+)"/g)].map((m) => m[1]));
+  for (const name of [
+    "sync-v2-native-issue",
+    "v2-announce-shown",
+    "ai-key-sync-enable",
+    "ai-key-sync-adopt",
+    "ai-key-sync-mismatch",
+  ]) {
+    assert.ok(allowed.has(name), `${name} が許可リストにあること`);
+  }
+});
