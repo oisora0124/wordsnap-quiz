@@ -16040,6 +16040,249 @@ function setAiKeysPersisted(on) {
   }
 }
 
+// ---- AIキーの暗号化同期（封筒） --------------------------------------------
+// 設計: docs/ai-secret-sync-design.md
+// 封筒は appState の外（同期stateのトップレベル）を通る。normalizeState が未知キーを
+// 落とすため、ローカルの保存形式・JSONバックアップ・マージ経路には一切影響しない。
+// 正本は常に各端末のローカルキーで、封筒はキャッシュ。開けなければ黙って無視して
+// 手元のキーを使う（フェイルセーフ）。
+const AI_KEY_SYNC_KEY = "wordsnap-ai-key-sync";
+// 「この端末が今持っているキー集合の時刻」。秘密ではない。巻き戻りと競合の唯一の判定材料。
+// 永続化しないと再読み込み後に古い封筒を採用してしまう。
+const AI_SECRET_STAMP_KEY = "wordsnap-ai-secrets-at";
+const AI_SECRET_ENVELOPE_VERSION = 1;
+const AI_SECRET_ALG = "A256GCM";
+const AI_SECRET_KDF = "HKDF-SHA-256";
+// 版を info に含めるので、将来フォーマットを変えるときは新旧の鍵が混ざらない。
+const AI_SECRET_HKDF_INFO = "wordsnap-ai-secrets-v1";
+// APIキーは長くても100文字程度。封筒は実測254バイト。これを超えるのは異常。
+const AI_SECRET_ENVELOPE_LIMIT = 8192;
+const AI_SECRET_VALUE_LIMIT = 512;
+// 時計が未来へずれた端末の封筒が、正常な端末の更新を恒久的に「古い」にしてしまうのを防ぐ。
+const AI_SECRET_FUTURE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
+
+function aiKeySyncEnabled() {
+  try {
+    return localStorage.getItem(AI_KEY_SYNC_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// スタンプは provider ごとに持つ。全量スナップショットで持つと「端末AがGeminiだけ更新・
+// 端末BがGroqだけ更新」で後からPUTした側が相手の更新を巻き戻す。
+function readAiSecretStamps() {
+  const stamps = {};
+  for (const provider of AI_PROVIDERS) stamps[provider.id] = 0;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AI_SECRET_STAMP_KEY));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const provider of AI_PROVIDERS) {
+        const value = Math.floor(Number(parsed[provider.id]));
+        if (Number.isFinite(value) && value > 0) stamps[provider.id] = value;
+      }
+    }
+  } catch {
+    // 未設定・壊れた値はすべて0。新しい端末と同じ扱いになり、次に届いた封筒を採用する。
+  }
+  return stamps;
+}
+
+function writeAiSecretStamps(stamps) {
+  try {
+    localStorage.setItem(AI_SECRET_STAMP_KEY, JSON.stringify(stamps));
+  } catch {
+    // ストレージ不可環境では単調性を保てないが、同期そのものは止めない。
+  }
+}
+
+// ローカルでキーが実際に変わったときに進める。時計が巻き戻っても単調性を壊さないよう、
+// 既存スタンプより必ず1以上大きい値にする。
+function bumpAiSecretStamp(providerId) {
+  const stamps = readAiSecretStamps();
+  if (!(providerId in stamps)) return stamps;
+  stamps[providerId] = Math.max(Date.now(), stamps[providerId] + 1);
+  writeAiSecretStamps(stamps);
+  return stamps;
+}
+
+function aiSecretCryptoAvailable() {
+  const api = globalThis.crypto;
+  return Boolean(
+    api &&
+      api.subtle &&
+      typeof api.subtle.deriveKey === "function" &&
+      typeof api.subtle.encrypt === "function" &&
+      typeof api.getRandomValues === "function",
+  );
+}
+
+// 封筒を置いてよい／読んでよい保存先か。条件は「経路がV2であること」で書く。
+// 現状 syncRequestRoute() は active なV2資格情報があれば必ずV2経路を返すので
+// 「資格情報の存在」と等価だが、ルーティングの優先順位が将来変わったときに
+// legacyの部屋（同期キーを知る者なら誰でも読める）へ封筒が漏れないよう経路で判定する。
+function aiSecretSyncRoute() {
+  if (!aiKeySyncEnabled() || !aiSecretCryptoAvailable()) return null;
+  const credential = getActiveV2Credential();
+  if (!credential) return null;
+  const identity = syncRequestRoute();
+  if (!identity?.isV2 || identity.roomId !== credential.roomId) return null;
+  return { roomId: credential.roomId, secret: credential.secret };
+}
+
+function aiSecretBytesToBase64(bytes) {
+  let binary = "";
+  const CHUNK = 0x8000; // String.fromCharCodeの引数上限対策（封筒は小さいが共通の作法に合わせる）
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+function aiSecretBase64ToBytes(text) {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// 鍵は room secret から HKDF で派生する。サーバーは secret を保存せずHMACハッシュしか
+// 持たない（migrations/0004_auth_v2.sql）ため、D1を覗いてもこの鍵は導けない。
+// extractable: false なので派生鍵はJSからも取り出せない。
+async function deriveAiSecretKey(roomId, secret) {
+  const encoder = new TextEncoder();
+  const material = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    "HKDF",
+    false,
+    ["deriveKey"],
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: encoder.encode(roomId),
+      info: encoder.encode(AI_SECRET_HKDF_INFO),
+    },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+// AADに版・アルゴリズム名・部屋IDを縛る。別の部屋から封筒をコピーしてきても復号が失敗し、
+// 将来2つ目の方式を足したときの algorithm confusion も塞ぐ。
+function aiSecretAad(roomId) {
+  return new TextEncoder().encode(
+    `wordsnap-ai-secrets|${AI_SECRET_ENVELOPE_VERSION}|${AI_SECRET_ALG}|${AI_SECRET_KDF}|${roomId}`,
+  );
+}
+
+// keys は { gemini: { value, updatedAt }, groq: { value, updatedAt } } の形。
+// provider ごとに時刻を持つので、採用も provider ごとに決まる。
+function sanitizeAiSecretKeys(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const keys = {};
+  for (const provider of AI_PROVIDERS) {
+    const entry = source[provider.id];
+    if (entry === undefined || entry === null) continue;
+    if (typeof entry !== "object" || Array.isArray(entry)) return null;
+    const value = entry.value;
+    const updatedAt = Math.floor(Number(entry.updatedAt));
+    if (typeof value !== "string" || value.length > AI_SECRET_VALUE_LIMIT) return null;
+    if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null;
+    keys[provider.id] = { value: value.trim(), updatedAt };
+  }
+  return Object.keys(keys).length ? keys : null;
+}
+
+function aiSecretMaxUpdatedAt(keys) {
+  let max = 0;
+  for (const id of Object.keys(keys)) {
+    if (keys[id].updatedAt > max) max = keys[id].updatedAt;
+  }
+  return max;
+}
+
+// v / alg / kdf は完全一致以外すべて拒否する（未知の版を推測で開かない）。
+function validAiSecretEnvelope(envelope) {
+  return Boolean(
+    envelope &&
+      typeof envelope === "object" &&
+      !Array.isArray(envelope) &&
+      envelope.v === AI_SECRET_ENVELOPE_VERSION &&
+      envelope.alg === AI_SECRET_ALG &&
+      envelope.kdf === AI_SECRET_KDF &&
+      typeof envelope.iv === "string" &&
+      typeof envelope.ct === "string" &&
+      Number.isInteger(envelope.updatedAt) &&
+      envelope.updatedAt > 0,
+  );
+}
+
+// 失敗は必ず null で返す。例外を投げると同期経路を巻き込む。
+// ログにも封筒の中身・長さ・キーの断片を一切出さない。
+async function sealAiSecrets(roomId, secret, keys) {
+  try {
+    const sanitized = sanitizeAiSecretKeys(keys);
+    if (!sanitized) return null;
+    const updatedAt = aiSecretMaxUpdatedAt(sanitized);
+    if (updatedAt <= 0) return null;
+    const key = await deriveAiSecretKey(roomId, secret);
+    // 再暗号化のたびに必ず新しいIVを引く（同じ派生鍵でのIV再利用はGCMを破綻させる）。
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = JSON.stringify({
+      v: AI_SECRET_ENVELOPE_VERSION,
+      keys: sanitized,
+    });
+    const sealed = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: aiSecretAad(roomId) },
+      key,
+      new TextEncoder().encode(plaintext),
+    );
+    const envelope = {
+      v: AI_SECRET_ENVELOPE_VERSION,
+      alg: AI_SECRET_ALG,
+      kdf: AI_SECRET_KDF,
+      iv: aiSecretBytesToBase64(iv),
+      ct: aiSecretBytesToBase64(new Uint8Array(sealed)),
+      updatedAt,
+    };
+    if (JSON.stringify(envelope).length > AI_SECRET_ENVELOPE_LIMIT) return null;
+    return envelope;
+  } catch {
+    return null;
+  }
+}
+
+async function openAiSecrets(roomId, secret, envelope) {
+  if (!validAiSecretEnvelope(envelope)) return null;
+  try {
+    if (JSON.stringify(envelope).length > AI_SECRET_ENVELOPE_LIMIT) return null;
+    const iv = aiSecretBase64ToBytes(envelope.iv);
+    if (iv.length !== 12) return null;
+    const key = await deriveAiSecretKey(roomId, secret);
+    const opened = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv, additionalData: aiSecretAad(roomId) },
+      key,
+      aiSecretBase64ToBytes(envelope.ct),
+    );
+    const parsed = JSON.parse(new TextDecoder().decode(opened));
+    if (!parsed || typeof parsed !== "object" || parsed.v !== AI_SECRET_ENVELOPE_VERSION) return null;
+    const keys = sanitizeAiSecretKeys(parsed.keys);
+    if (!keys) return null;
+    // 外側の updatedAt は復号前に読むため署名の対象外。中身の最大値と一致しない封筒は、
+    // 外側だけを新しく見せかけた細工なので破棄する。
+    const max = aiSecretMaxUpdatedAt(keys);
+    if (max <= 0 || max !== envelope.updatedAt) return null;
+    return { keys, updatedAt: max };
+  } catch {
+    return null;
+  }
+}
+
 function imageDataUrl(canvas) {
   // Small textbook print loses detail at the old fixed 1600px size. Prefer a
   // sharper image, but stay below Groq's base64 upload limit by stepping down.
