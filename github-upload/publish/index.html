@@ -11817,7 +11817,18 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     error.stateTooLarge = true;
     throw error;
   }
+  // 履歴の版（revision指定）は古い封筒を含むため、AIキーの採用対象にしない。
+  // 単語を過去へ戻すことと、APIキーを過去へ戻すことは別の意思決定。
+  const aiSecretsAdoptable =
+    typeof adoptAiSecretsFromState === "function" &&
+    requestOptions.history !== true &&
+    !(Number.isInteger(Number(requestOptions.revision)) && Number(requestOptions.revision) > 0);
   if (!response.ok) {
+    // 409の本文には相手の最新stateが入っており、呼び出し側はそれをマージして再PUTする。
+    // ここで採用しておかないと、自分の古いキーで相手の新しいキーを上書きしうる。
+    if (response.status === 409 && aiSecretsAdoptable) {
+      await adoptAiSecretsFromState(data?.state, expectedSyncId);
+    }
     const error = new Error(data.error || "同期サーバーへ接続できませんでした。");
     error.status = response.status;
     error.data = data;
@@ -11844,6 +11855,13 @@ async function syncRequest(method, body = null, requestOptions = {}) {
   if (data && typeof data === "object" && !Array.isArray(data)) {
     data.verifiedSyncTarget = expectedSyncId;
   }
+  // AIキーの封筒は return より前に採用しきる。fire-and-forget にすると
+  // 「新しい封筒を受信 → 学習stateをマージ → 即座に再PUT」の流れで、
+  // まだ採用が終わっていない古いキャッシュが送られ、受け取ったばかりのキーを巻き戻す。
+  // 採用の失敗は内部で握り潰すので、await しても同期経路は止まらない。
+  if (method === "GET" && aiSecretsAdoptable) {
+    await adoptAiSecretsFromState(data?.state, expectedSyncId);
+  }
   return data;
 }
 
@@ -11854,7 +11872,7 @@ async function syncRequest(method, body = null, requestOptions = {}) {
 // （受信側は mergeEnrichData がローカル優先なので、enrich無しのリモートとマージしても
 //   手元の enrich は保持される。リモートにしか無い単語は表示時に再取得される。）
 function buildSyncPayloadState() {
-  return {
+  const state = {
     ...appState,
     learningSchemaVersion: Math.max(
       LEARNING_SCHEMA_VERSION,
@@ -11865,6 +11883,13 @@ function buildSyncPayloadState() {
       return rest;
     }),
   };
+  // AIキーの封筒（トグルON・V2経路・vault keyあり・生成済みのときだけ）。
+  // 付けない場合はプロパティ自体を作らないので、OFFのときの送信内容は従来と完全に同一。
+  const aiSecrets = typeof aiSecretEnvelopeForPayload === "function"
+    ? aiSecretEnvelopeForPayload()
+    : null;
+  if (aiSecrets) state.aiSecrets = aiSecrets;
+  return state;
 }
 
 // gzip圧縮が使える環境か（CompressionStream非対応の古いブラウザはプレーン送信に切り替える）
@@ -16035,7 +16060,9 @@ function getAiKey(id) {
   return (sessionStorage.getItem(k) || localStorage.getItem(k) || "").trim();
 }
 
-function setAiKey(id, value) {
+// options.source === "remote" は同期で受け取った値の適用。スタンプは採用側が
+// 封筒の時刻で設定するので、ここでは進めない（進めると自分の時刻で上書きしてしまう）。
+function setAiKey(id, value, options = {}) {
   const k = aiKeyStorageKey(id);
   const v = (value || "").trim();
   const previous = getAiKey(id);
@@ -16049,6 +16076,10 @@ function setAiKey(id, value) {
     geminiUnavailableModels.delete(shortKeyFingerprint(previous));
     geminiUnavailableModels.delete(shortKeyFingerprint(v));
     localStorage.removeItem(GEMINI_MODEL_PREF_KEY);
+  }
+  if (previous !== v && options.source !== "remote") {
+    bumpAiSecretStamp(id);
+    onAiSecretsChangedLocally();
   }
 }
 
@@ -16304,6 +16335,131 @@ async function openAiSecrets(roomId, vaultKey, envelope) {
     return { keys, updatedAt: max };
   } catch {
     return null;
+  }
+}
+
+// この端末が今持っているキー集合。スタンプを持たない provider は入れない
+// （一度も触っていないキーを「空文字＝削除」として他端末へ伝えないため）。
+function currentAiSecretKeySet() {
+  const stamps = readAiSecretStamps();
+  const keys = {};
+  for (const provider of AI_PROVIDERS) {
+    const updatedAt = stamps[provider.id];
+    if (!updatedAt) continue;
+    keys[provider.id] = { value: getAiKey(provider.id), updatedAt };
+  }
+  return Object.keys(keys).length ? keys : null;
+}
+
+// 封筒はメモリにだけ置く。buildSyncPayloadState() は同期関数なので、
+// できあがっている封筒を読むだけにする（暗号化を待たせない）。
+let aiSecretEnvelopeCache = null; // { roomId, envelope }
+let aiSecretEnvelopeGeneration = 0;
+
+function clearAiSecretEnvelopeCache() {
+  aiSecretEnvelopeCache = null;
+  aiSecretEnvelopeGeneration += 1; // 進行中の暗号化の結果を捨てる
+}
+
+// キーが変わるたびに作り直す。K1→K2と続けて変えたときにK1が後から完了して
+// 最新を上書きしないよう、世代番号と roomId の両方を完了時に照合する。
+async function refreshAiSecretEnvelope(options = {}) {
+  const route = aiSecretSyncRoute();
+  if (!route) {
+    clearAiSecretEnvelopeCache();
+    return false;
+  }
+  const keys = currentAiSecretKeySet();
+  if (!keys) {
+    clearAiSecretEnvelopeCache();
+    return false;
+  }
+  const generation = (aiSecretEnvelopeGeneration += 1);
+  let envelope = null;
+  try {
+    envelope = await sealAiSecrets(route.roomId, route.vaultKey, keys);
+  } catch {
+    envelope = null;
+  }
+  if (generation !== aiSecretEnvelopeGeneration) return false; // 追い越された
+  const settled = aiSecretSyncRoute();
+  if (!settled || settled.roomId !== route.roomId) return false; // 暗号化中に部屋が変わった
+  if (!envelope) {
+    aiSecretEnvelopeCache = null;
+    return false;
+  }
+  aiSecretEnvelopeCache = { roomId: route.roomId, envelope };
+  // APIキーだけを変えても単語は変わらないので、通常のpush予約は起きない。
+  // ここで予約しないと、作った封筒が永久に送られない。
+  if (options.push) scheduleSyncPush();
+  return true;
+}
+
+// ローカルでキーが変わったときの入口。トグルOFFなら何もしない
+// （既存ユーザーに余計な暗号化も通信も発生させない）。
+function onAiSecretsChangedLocally() {
+  if (!aiKeySyncEnabled()) return;
+  void refreshAiSecretEnvelope({ push: true });
+}
+
+// 送信stateへ載せてよい封筒。roomId が一致しないキャッシュは絶対に使わない。
+function aiSecretEnvelopeForPayload() {
+  const route = aiSecretSyncRoute();
+  if (!route || !aiSecretEnvelopeCache) return null;
+  return aiSecretEnvelopeCache.roomId === route.roomId ? aiSecretEnvelopeCache.envelope : null;
+}
+
+// 開いている設定画面の入力欄へ、採用した値を反映する。
+// renderAiKeyFields() を呼ぶと入力中の欄まで作り直してしまうので、値だけ差し替える。
+function syncAiKeyFieldsFromStorage() {
+  const container = elements.aiKeyFields;
+  if (!container) return;
+  try {
+    for (const input of container.querySelectorAll(".ai-key")) {
+      const next = getAiKey(input.dataset.provider);
+      if (input.value !== next && document.activeElement !== input) input.value = next;
+    }
+  } catch {
+    // 設定画面が未描画でも同期を止めない
+  }
+}
+
+// 受信したstateから封筒を採用する。失敗はすべて黙って無視し、手元のキーを使い続ける。
+// ログには封筒の中身も長さも出さない。
+async function adoptAiSecretsFromState(state, expectedSyncId) {
+  try {
+    const route = aiSecretSyncRoute();
+    // 通信中に部屋が切り替わっていたら、その応答は今の部屋のものではない。
+    if (!route || !expectedSyncId || route.roomId !== expectedSyncId) return false;
+    const envelope = state && typeof state === "object" ? state.aiSecrets : null;
+    if (!envelope || typeof envelope !== "object") return false;
+    const horizon = Date.now() + AI_SECRET_FUTURE_TOLERANCE_MS;
+    if (!Number.isInteger(envelope.updatedAt) || envelope.updatedAt > horizon) return false;
+    const stamps = readAiSecretStamps();
+    // 復号前の粗いふるい。どのproviderも新しくないなら復号すらしない。
+    const anyNewer = AI_PROVIDERS.some((p) => envelope.updatedAt > (stamps[p.id] || 0));
+    if (!anyNewer) return false;
+    const opened = await openAiSecrets(route.roomId, route.vaultKey, envelope);
+    if (!opened) return false;
+    let changed = false;
+    for (const provider of AI_PROVIDERS) {
+      const entry = opened.keys[provider.id];
+      if (!entry) continue;
+      if (entry.updatedAt > horizon) continue;
+      if (!(entry.updatedAt > (stamps[provider.id] || 0))) continue;
+      setAiKey(provider.id, entry.value, { source: "remote" });
+      stamps[provider.id] = entry.updatedAt;
+      changed = true;
+    }
+    if (!changed) return false;
+    writeAiSecretStamps(stamps);
+    syncAiKeyFieldsFromStorage();
+    // 採用した内容で封筒を作り直す。ここで作り直さないと、次のPUTが古い
+    // キャッシュを送って、受け取ったばかりのキーを巻き戻す。
+    await refreshAiSecretEnvelope();
+    return true;
+  } catch {
+    return false;
   }
 }
 
