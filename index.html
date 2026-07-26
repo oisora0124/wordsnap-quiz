@@ -16437,6 +16437,10 @@ function aiSecretEnvelopeForPayload() {
   return sameTarget ? aiSecretEnvelopeCache.envelope : null;
 }
 
+// 封筒はあるのに開けない状態を、部屋ごとに1回だけ知らせるための記録。
+// 毎回のポーリングで出すと邪魔になるので、同じ部屋では繰り返さない。
+let aiSecretMismatchNotifiedRoom = "";
+
 // 開いている設定画面の入力欄へ、採用した値を反映する。
 // renderAiKeyFields() を呼ぶと入力中の欄まで作り直してしまうので、値だけ差し替える。
 function syncAiKeyFieldsFromStorage() {
@@ -16470,7 +16474,23 @@ async function adoptAiSecretsFromState(state, expectedSyncId) {
     const anyNewer = AI_PROVIDERS.some((p) => envelope.updatedAt > (stamps[p.id] || 0));
     if (!anyNewer) return false;
     const opened = await openAiSecrets(route.roomId, route.vaultKey, envelope);
-    if (!opened) return false;
+    if (!opened) {
+      // 封筒はあるのに開けない＝別の端末が別の vault key でこの機能を使っている。
+      // 復号失敗は握り潰す設計（フェイルセーフ）だが、黙ったままだと利用者は
+      // 2台が別々になったことに一生気づけない。部屋ごとに1回だけ知らせる。
+      if (aiSecretMismatchNotifiedRoom !== route.roomId) {
+        aiSecretMismatchNotifiedRoom = route.roomId;
+        try {
+          setStatus(
+            "他の端末のAPIキーを復号できませんでした。端末ごとに別の暗号鍵ができています。"
+            + "どちらかの端末で引き継ぎコードを取り直し、もう一方でそのコードから合流し直すと揃います。",
+          );
+        } catch {
+          // 表示できなくても同期は続ける
+        }
+      }
+      return false;
+    }
     // 復号は非同期。待っている間に別の部屋へ合流していると、旧部屋のキーを
     // 新しい部屋へ適用し、そのまま新しい部屋の封筒として暗号化して送ってしまう。
     // 部屋IDだけでなく vault key も見る（同じ部屋IDのまま3要素目だけ差し替わる経路がある）。

@@ -145,6 +145,7 @@ function makeApp({
       expectedSyncId: isV2 ? credential?.roomId || "" : "legacy-id",
     }),
     scheduleSyncPush: () => pushes.push(clock),
+    setStatus: () => {},
     elements: { aiKeyFields: null },
     document: { activeElement: null },
     LEARNING_SCHEMA_VERSION: 1,
@@ -164,6 +165,7 @@ function makeApp({
   const source = [
     "let aiSecretEnvelopeCache = null;",
     "let aiSecretEnvelopeGeneration = 0;",
+    "let aiSecretMismatchNotifiedRoom = \"\";",
     ...CONSTS.map(extractSimpleConst),
     ...FUNCTIONS.map(extractFunction),
   ].join("\n");
@@ -486,32 +488,80 @@ test("採用は verifiedSyncTarget と同じ照合済みIDで行う", () => {
 
 const renderSource = extractFunction("renderAiKeyFields");
 
-test("トグルONのときは「サーバーへは送信されません」と表示しない", () => {
-  // OFF時の従来文言はそのまま残っていること
+// 【この機能で最悪の失敗は「成立しない安全性を利用者に表示すること」】
+// 以前はソースを正規表現で照合していたが、それでは実際に出る文字列を確かめていない。
+// renderAiKeyFields() を本当に実行して、生成されたHTMLそのものを検査する。
+function renderSettings({ syncOn, v2Active }) {
+  const listeners = [];
+  const stubEl = () => ({
+    value: "",
+    checked: false,
+    dataset: { provider: "gemini", paste: "gemini", clear: "gemini" },
+    addEventListener(type, fn) { listeners.push({ type, fn }); },
+  });
+  let html = "";
+  const container = {
+    set innerHTML(value) { html = value; },
+    get innerHTML() { return html; },
+    querySelector: () => stubEl(),
+    querySelectorAll: () => [stubEl()],
+  };
+  const app = makeApp({ syncOn, credential: v2Active
+    ? { status: "active", roomId: ROOM_A, secret: `wk_${"9".repeat(60)}`, vaultKey: VAULT_A }
+    : null });
+  app.ctx.elements = { aiKeyFields: container };
+  app.ctx.AI_PROVIDERS = [
+    { id: "gemini", name: "Gemini", keyUrl: "https://example.com/k", placeholder: "AIza…" },
+    { id: "groq", name: "Groq", keyUrl: "https://example.com/g", placeholder: "gsk_…" },
+  ];
+  vm.runInNewContext(extractFunction("renderAiKeyFields"), app.ctx);
+  app.ctx.renderAiKeyFields();
+  return html;
+}
+
+test("実際に描画されるHTML: OFFのときは従来の文言のまま", () => {
+  const html = renderSettings({ syncOn: false, v2Active: true });
   assert.ok(
-    renderSource.includes("キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。"),
-    "OFF時の従来文言が残っていること",
+    html.includes("キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。"),
+    "OFFでは従来の文言が出ること",
   );
-  // ON/OFFで説明文が切り替わること（切り替えが無いと、ONのとき虚偽になる）
+  assert.ok(!html.includes("暗号化してから他の端末と同期されます"), "ONの文言は出ないこと");
+});
+
+test("実際に描画されるHTML: ONのとき「サーバーへは送信されません」を含まない", () => {
+  const html = renderSettings({ syncOn: true, v2Active: true });
   assert.ok(
-    /const storageDesc = keySyncOn[\s\S]{0,400}: "キーはこの端末のブラウザだけに保存され/.test(renderSource),
-    "トグルの状態で説明文を切り替えていること",
+    !html.includes("WordBankのサーバーへは送信されません"),
+    "ONのとき虚偽になる文言を出さないこと",
   );
+  assert.ok(html.includes("暗号化してから他の端末と同期されます"), "暗号化して同期すると書くこと");
+});
+
+test("実際に描画されるHTML: ONのとき運営が読み取れることを明示する", () => {
+  const html = renderSettings({ syncOn: true, v2Active: true });
+  assert.ok(html.includes("その気になれば読み取れます"), "運営が読み取れる旨を明示すること");
+  assert.ok(!/運営(も|には|は)?読めません/.test(html), "「運営も読めません」とは書かないこと");
   assert.ok(
-    /keySyncOn[\s\S]{0,200}暗号化してから他の端末と同期されます/.test(renderSource),
-    "ON時は暗号化して同期すると書くこと",
+    !/サーバーは(中身を)?読めません/.test(html),
+    "「サーバーは読めません」も書かないこと（運営＝配信元なので誤解を招く）",
   );
 });
 
-test("ON時の説明は、運営が読み取れることを明示する", () => {
+test("実際に描画されるHTML: legacy端末にはトグルも同期の説明も出さない", () => {
+  const html = renderSettings({ syncOn: false, v2Active: false });
+  assert.ok(!html.includes("aiKeySyncToggle"), "トグルを出さないこと");
+  assert.ok(!html.includes("APIキーも他の端末と同期する"), "同期の説明も出さないこと");
   assert.ok(
-    renderSource.includes("その気になれば読み取れます"),
-    "運営が読み取れる旨を明示すること（同一オリジンのPWAでは暗号で解けない）",
+    html.includes("キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。"),
+    "説明文は従来のままであること",
   );
-  assert.ok(
-    !/運営(も|には|は)?読めません/.test(renderSource),
-    "「運営も読めません」とは書かないこと",
-  );
+});
+
+test("実際に描画されるHTML: 既定はOFF（checkedが付かない）", () => {
+  const html = renderSettings({ syncOn: false, v2Active: true });
+  const toggle = /<input type="checkbox" id="aiKeySyncToggle"([^>]*)\/>/.exec(html);
+  assert.ok(toggle, "トグルが描画されること");
+  assert.ok(!toggle[1].includes("checked"), "既定でcheckedが付かないこと");
 });
 
 test("トグルはV2の同期に接続している端末にだけ出す", () => {
@@ -762,4 +812,50 @@ test("JSON書き出しは vault key も含める（含めないと復元先が�
     "vault keyを含めること",
   );
   assert.ok(source.includes("secret: active.secret"), "従来どおりsecretも含むこと（同じ明示同意）");
+});
+
+// ---- 分岐の可視化（サイクル1の改善） ----------------------------------------
+// vault key はサーバー経由で合意できないので、2台が別々の鍵を持つ分岐が起こりうる。
+// 復号失敗は握り潰す設計（フェイルセーフ）だが、黙ったままだと利用者は気づけない。
+
+test("封筒はあるのに開けないとき、利用者に知らせる", async () => {
+  const app = makeApp();
+  const notices = [];
+  app.ctx.setStatus = (m) => notices.push(m);
+  app.ctx.setAiKey("gemini", "MY-KEY");
+  // 別の vault key で作られた封筒（＝分岐している相手）
+  const foreign = await makeApp().ctx.sealAiSecrets(ROOM_A, VAULT_B, {
+    gemini: { value: GEMINI, updatedAt: 9753500000000 },
+  });
+  app.setClock(9753500000000);
+  assert.equal(await app.ctx.adoptAiSecretsFromState({ aiSecrets: foreign }, ROOM_A), false);
+  assert.equal(notices.length, 1, "1回知らせること");
+  assert.match(notices[0], /復号できませんでした/);
+  assert.match(notices[0], /引き継ぎコード/, "何をすれば直るかを書くこと");
+  assert.equal(app.ctx.getAiKey("gemini"), "MY-KEY", "手元のキーは変えないこと");
+});
+
+test("同じ部屋では繰り返し知らせない（ポーリングのたびに出さない）", async () => {
+  const app = makeApp();
+  const notices = [];
+  app.ctx.setStatus = (m) => notices.push(m);
+  const foreign = await makeApp().ctx.sealAiSecrets(ROOM_A, VAULT_B, {
+    gemini: { value: GEMINI, updatedAt: 9753500000000 },
+  });
+  app.setClock(9753500000000);
+  for (let i = 0; i < 5; i += 1) {
+    await app.ctx.adoptAiSecretsFromState({ aiSecrets: foreign }, ROOM_A);
+  }
+  assert.equal(notices.length, 1, "5回試しても1回だけであること");
+});
+
+test("トグルOFFの端末には、この通知も出さない", async () => {
+  const off = makeApp({ syncOn: false });
+  const notices = [];
+  off.ctx.setStatus = (m) => notices.push(m);
+  const foreign = await makeApp().ctx.sealAiSecrets(ROOM_A, VAULT_B, {
+    gemini: { value: GEMINI, updatedAt: 9753500000000 },
+  });
+  await off.ctx.adoptAiSecretsFromState({ aiSecrets: foreign }, ROOM_A);
+  assert.equal(notices.length, 0);
 });
