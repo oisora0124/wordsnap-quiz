@@ -16405,12 +16405,15 @@ async function refreshAiSecretEnvelope(options = {}) {
   }
   if (generation !== aiSecretEnvelopeGeneration) return false; // 追い越された
   const settled = aiSecretSyncRoute();
-  if (!settled || settled.roomId !== route.roomId) return false; // 暗号化中に部屋が変わった
+  // 暗号化中に部屋が変わった／同じ部屋のまま vault key だけ差し替わった場合は捨てる。
+  if (!settled || settled.roomId !== route.roomId || settled.vaultKey !== route.vaultKey) {
+    return false;
+  }
   if (!envelope) {
     aiSecretEnvelopeCache = null;
     return false;
   }
-  aiSecretEnvelopeCache = { roomId: route.roomId, envelope };
+  aiSecretEnvelopeCache = { roomId: route.roomId, vaultKey: route.vaultKey, envelope };
   // APIキーだけを変えても単語は変わらないので、通常のpush予約は起きない。
   // ここで予約しないと、作った封筒が永久に送られない。
   if (options.push) scheduleSyncPush();
@@ -16428,7 +16431,10 @@ function onAiSecretsChangedLocally() {
 function aiSecretEnvelopeForPayload() {
   const route = aiSecretSyncRoute();
   if (!route || !aiSecretEnvelopeCache) return null;
-  return aiSecretEnvelopeCache.roomId === route.roomId ? aiSecretEnvelopeCache.envelope : null;
+  const sameTarget =
+    aiSecretEnvelopeCache.roomId === route.roomId &&
+    aiSecretEnvelopeCache.vaultKey === route.vaultKey;
+  return sameTarget ? aiSecretEnvelopeCache.envelope : null;
 }
 
 // 開いている設定画面の入力欄へ、採用した値を反映する。
@@ -16449,10 +16455,12 @@ function syncAiKeyFieldsFromStorage() {
 // 受信したstateから封筒を採用する。失敗はすべて黙って無視し、手元のキーを使い続ける。
 // ログには封筒の中身も長さも出さない。
 async function adoptAiSecretsFromState(state, expectedSyncId) {
+  const route = aiSecretSyncRoute();
+  // 通信中に部屋が切り替わっていたら、その応答は今の部屋のものではない。
+  // ここで返す経路はトグルOFF・legacy・vault key無しも含む。tryの外に出しておくと、
+  // その場合に下の finally（封筒の作り直し）にも入らない＝OFFの利用者には何も起きない。
+  if (!route || !expectedSyncId || route.roomId !== expectedSyncId) return false;
   try {
-    const route = aiSecretSyncRoute();
-    // 通信中に部屋が切り替わっていたら、その応答は今の部屋のものではない。
-    if (!route || !expectedSyncId || route.roomId !== expectedSyncId) return false;
     const envelope = state && typeof state === "object" ? state.aiSecrets : null;
     if (!envelope || typeof envelope !== "object") return false;
     const horizon = Date.now() + AI_SECRET_FUTURE_TOLERANCE_MS;
@@ -16463,6 +16471,13 @@ async function adoptAiSecretsFromState(state, expectedSyncId) {
     if (!anyNewer) return false;
     const opened = await openAiSecrets(route.roomId, route.vaultKey, envelope);
     if (!opened) return false;
+    // 復号は非同期。待っている間に別の部屋へ合流していると、旧部屋のキーを
+    // 新しい部屋へ適用し、そのまま新しい部屋の封筒として暗号化して送ってしまう。
+    // 部屋IDだけでなく vault key も見る（同じ部屋IDのまま3要素目だけ差し替わる経路がある）。
+    const settled = aiSecretSyncRoute();
+    if (!settled || settled.roomId !== route.roomId || settled.vaultKey !== route.vaultKey) {
+      return false;
+    }
     let changed = false;
     for (const provider of AI_PROVIDERS) {
       const entry = opened.keys[provider.id];
@@ -16489,6 +16504,19 @@ async function adoptAiSecretsFromState(state, expectedSyncId) {
     return true;
   } catch {
     return false;
+  } finally {
+    // 【再読み込み対策】封筒のキャッシュはメモリ上にしかないので、再読み込み直後は空。
+    // 起動時のGETで届いた封筒が手元と同じ内容だと changed=false で早期returnし、
+    // キャッシュが空のまま残る。その状態で単語を1つ編集すると、次のPUTから
+    // aiSecrets が落ちて**部屋から封筒が消え、他の端末の同期が止まる**。
+    // 採用の有無にかかわらず、経路が有効ならキャッシュを必ず用意する。
+    if (!aiSecretEnvelopeCache) {
+      try {
+        await refreshAiSecretEnvelope();
+      } catch {
+        // 作り直せなくても採用結果には影響しない
+      }
+    }
   }
 }
 
@@ -24053,6 +24081,10 @@ function buildJsonBackupPayload(includeV2Credential = false) {
       roomId: active.roomId,
       secret: active.secret,
       origin: active.origin,
+      // vault key を欠くと、このJSONから復元した端末はAIキー同期を復旧できず、
+      // 再度有効にすると別のvault keyを作って他端末と分岐する。
+      // secret（部屋への全権限）を既に含めている同じ明示同意の下なので、リスクの区分は変わらない。
+      ...(active.vaultKey ? { vaultKey: active.vaultKey } : {}),
     };
   }
   return payload;

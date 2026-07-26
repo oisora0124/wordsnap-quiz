@@ -679,3 +679,87 @@ test("停止しても引き継ぎコードの3要素解析は残る（配布済�
     "資格情報の正規化もスイッチに依存しないこと",
   );
 });
+
+// ---- 差分レビューで指摘されたデプロイ阻止級の2件 ------------------------------
+
+// 【再読み込みで部屋から封筒が消える】
+// キャッシュはメモリ上にしかない。起動時のGETで届いた封筒が手元と同じ内容だと
+// changed=false で早期returnし、キャッシュが空のまま残る。その状態で単語を編集すると
+// 次のPUTから aiSecrets が落ちて、部屋から封筒が消える＝他端末の同期が止まる。
+test("再読み込み後、同じ内容の封筒を受け取っても、次のPUTで封筒が消えない", async () => {
+  const app = makeApp({ persist: true });
+  app.setClock(1000);
+  app.ctx.setAiKey("gemini", GEMINI);
+  const envelope = await app.ctx.sealAiSecrets(ROOM_A, VAULT_A, app.ctx.currentAiSecretKeySet());
+  // 再読み込みを再現: メモリ上のキャッシュだけが消える（キーとスタンプは残る）
+  app.ctx.clearAiSecretEnvelopeCache();
+  assert.equal(app.ctx.aiSecretEnvelopeForPayload(), null, "前提: キャッシュが空であること");
+
+  const adopted = await app.ctx.adoptAiSecretsFromState({ aiSecrets: envelope }, ROOM_A);
+  assert.equal(adopted, false, "内容が同じなので採用は起きない");
+
+  const payload = app.ctx.buildSyncPayloadState();
+  assert.ok(payload.aiSecrets, "それでも次のPUTには封筒が載ること（部屋から消さない）");
+  const opened = await app.ctx.openAiSecrets(ROOM_A, VAULT_A, payload.aiSecrets);
+  assert.equal(opened.keys.gemini.value, GEMINI);
+});
+
+test("トグルOFFの端末では、この作り直しも起きない", async () => {
+  const off = makeApp({ syncOn: false });
+  off.ctx.clearAiSecretEnvelopeCache();
+  const envelope = await makeApp().ctx.sealAiSecrets(ROOM_A, VAULT_A, {
+    gemini: { value: GEMINI, updatedAt: 1753500000000 },
+  });
+  await off.ctx.adoptAiSecretsFromState({ aiSecrets: envelope }, ROOM_A);
+  assert.equal(off.ctx.aiSecretEnvelopeForPayload(), null);
+  assert.ok(!("aiSecrets" in off.ctx.buildSyncPayloadState()), "OFFでは封筒を作らないこと");
+});
+
+// 【復号中の同期先切替】
+// 復号は非同期。待っている間に別の部屋へ合流していると、旧部屋のキーを新しい部屋へ
+// 適用し、そのまま新しい部屋の封筒として暗号化して送ってしまう。
+test("復号を待っている間に別の部屋へ切り替わったら、キーを適用しない", async () => {
+  const app = makeApp();
+  app.ctx.setAiKey("gemini", "MY-OWN-KEY");
+  const foreign = await makeApp().ctx.sealAiSecrets(ROOM_A, VAULT_A, {
+    gemini: { value: GEMINI, updatedAt: 9753500000000 },
+  });
+  app.setClock(9753500000000);
+  const pending = app.ctx.adoptAiSecretsFromState({ aiSecrets: foreign }, ROOM_A);
+  // 復号の途中で別の部屋へ合流する
+  app.setCredential({ status: "active", roomId: ROOM_B, secret: `wk_${"8".repeat(60)}`, vaultKey: VAULT_B });
+  assert.equal(await pending, false, "採用しないこと");
+  assert.equal(app.ctx.getAiKey("gemini"), "MY-OWN-KEY", "旧部屋のキーを新しい部屋へ持ち込まないこと");
+});
+
+test("同じ部屋IDのまま vault key だけ差し替わった場合も採用しない", async () => {
+  const app = makeApp();
+  app.ctx.setAiKey("gemini", "MY-OWN-KEY");
+  const envelope = await makeApp().ctx.sealAiSecrets(ROOM_A, VAULT_A, {
+    gemini: { value: GEMINI, updatedAt: 9753500000000 },
+  });
+  app.setClock(9753500000000);
+  const pending = app.ctx.adoptAiSecretsFromState({ aiSecrets: envelope }, ROOM_A);
+  app.setCredential({ status: "active", roomId: ROOM_A, secret: `wk_${"9".repeat(60)}`, vaultKey: VAULT_B });
+  assert.equal(await pending, false);
+  assert.equal(app.ctx.getAiKey("gemini"), "MY-OWN-KEY");
+});
+
+test("封筒のキャッシュは vault key も照合する", async () => {
+  const app = makeApp();
+  app.ctx.setAiKey("gemini", GEMINI);
+  await app.ctx.refreshAiSecretEnvelope();
+  assert.ok(app.ctx.aiSecretEnvelopeForPayload(), "前提: 封筒があること");
+  // 同じ部屋のまま vault key だけ差し替える
+  app.setCredential({ status: "active", roomId: ROOM_A, secret: `wk_${"9".repeat(60)}`, vaultKey: VAULT_B });
+  assert.equal(app.ctx.aiSecretEnvelopeForPayload(), null, "旧vault keyの封筒を送らないこと");
+});
+
+test("JSON書き出しは vault key も含める（含めないと復元先が分岐する）", () => {
+  const source = extractFunction("buildJsonBackupPayload");
+  assert.ok(
+    /\.\.\.\(active\.vaultKey \? \{ vaultKey: active\.vaultKey \} : \{\}\)/.test(source),
+    "vault keyを含めること",
+  );
+  assert.ok(source.includes("secret: active.secret"), "従来どおりsecretも含むこと（同じ明示同意）");
+});
