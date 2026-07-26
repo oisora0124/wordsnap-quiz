@@ -6599,7 +6599,9 @@ const WordBankTelemetry = (() => {
     "streak-panel-open",
     "tutorial-complete",
   ]);
-  const SECRET_PATTERN = /w(s|k|r)?_[0-9a-f]{16,}/gi;
+  // wv_ はAIキー暗号化同期のvault key。封筒の復号鍵そのものなので、
+  // 万一エラー文へ混ざっても送信されないよう伏せる対象に含める。
+  const SECRET_PATTERN = /w(s|k|r|v)?_[0-9a-f]{16,}/gi;
   const URL_QUERY_PATTERN = /\b(https?:\/\/[^\s?#]+)\?[^#\s]*/gi;
   const W_QUERY_PATTERN = /([?&]w=)[^&#\s]*/gi;
   let usageFlushPending = false;
@@ -12108,7 +12110,7 @@ function renderV2RecoveryNotice(identity = syncRequestRoute()) {
 // するまでトグルが出ない。表示の要否が変わったときだけ描き直す（入力中の欄を壊さない）。
 function refreshAiKeySyncToggleVisibility() {
   if (!elements.aiKeyFields) return;
-  const shouldShow = Boolean(getActiveV2Credential());
+  const shouldShow = Boolean(AI_KEY_SYNC_AVAILABLE && getActiveV2Credential());
   const shown = Boolean(elements.aiKeyFields.querySelector("#aiKeySyncToggle"));
   if (shouldShow !== shown) renderAiKeyFields();
 }
@@ -16113,6 +16115,12 @@ function setAiKeysPersisted(on) {
 // 落とすため、ローカルの保存形式・JSONバックアップ・マージ経路には一切影響しない。
 // 正本は常に各端末のローカルキーで、封筒はキャッシュ。開けなければ黙って無視して
 // 手元のキーを使う（フェイルセーフ）。
+// 【緊急停止スイッチ】false にすると、封筒の作成・送信・採用と設定トグルの表示が
+// すべて止まる。切り戻しはこの1行で済ませる（コミットのrevertではなく）。
+// revert だと引き継ぎコードの3要素解析まで戻ってしまい、配布済みの新しいコードが
+// 解析できなくなるため。ここを false にしても解析は残るので、誰も締め出さない。
+const AI_KEY_SYNC_AVAILABLE = true;
+
 const AI_KEY_SYNC_KEY = "wordsnap-ai-key-sync";
 // 「この端末が今持っているキー集合の時刻」。秘密ではない。巻き戻りと競合の唯一の判定材料。
 // 永続化しないと再読み込み後に古い封筒を採用してしまう。
@@ -16129,6 +16137,7 @@ const AI_SECRET_VALUE_LIMIT = 512;
 const AI_SECRET_FUTURE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 
 function aiKeySyncEnabled() {
+  if (!AI_KEY_SYNC_AVAILABLE) return false;
   try {
     return localStorage.getItem(AI_KEY_SYNC_KEY) === "1";
   } catch {
@@ -22977,6 +22986,21 @@ async function enableAiKeySync() {
   } catch {
     // 取り込めなくても有効化そのものは成立する。次の同期で拾える。
   }
+  // この端末に既に入っているキーを、機能の対象へ取り込む。
+  // 機能の導入前から入れてあるキーにはスタンプが無く、スタンプが無い provider は
+  // 封筒に入らない（未設定を「空文字＝削除」として伝えないための規則）。
+  // ここで拾わないと、有効にしても何も同期されないまま黙って終わる。
+  // 順序が重要: 先に上のGETで相手の封筒を採用してから、まだスタンプの無いものだけを拾う。
+  // 逆にすると、この端末の「今」のスタンプが相手の封筒より新しくなり、採用を塞いでしまう。
+  const stamps = readAiSecretStamps();
+  let adoptedLocalKeys = false;
+  for (const provider of AI_PROVIDERS) {
+    if (stamps[provider.id]) continue;
+    if (!getAiKey(provider.id)) continue;
+    stamps[provider.id] = Date.now();
+    adoptedLocalKeys = true;
+  }
+  if (adoptedLocalKeys) writeAiSecretStamps(stamps);
   await refreshAiSecretEnvelope({ push: true });
   renderAiKeyFields();
   renderV2CredentialUi();
@@ -23018,7 +23042,7 @@ function renderAiKeyFields() {
     ? "キーは暗号化してから他の端末と同期されます。復号に必要な鍵は引き継ぎコードの中だけにあり、WordBankのサーバーへは一度も送られません。"
     : "キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。";
   // V2の同期に接続している端末だけに出す。legacy運用中は鍵素材が無いので出さない。
-  const keySyncBlock = getActiveV2Credential()
+  const keySyncBlock = AI_KEY_SYNC_AVAILABLE && getActiveV2Credential()
     ? `<label class="ai-persist">
       <input type="checkbox" id="aiKeySyncToggle"${keySyncOn ? " checked" : ""} />
       APIキーも他の端末と同期する（暗号化して保存）。オフのままなら今までどおりこの端末だけです。

@@ -3,8 +3,13 @@
 // fail-open、書き込み専用であることを固定する。
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 import { onRequest } from "../functions/api/telemetry.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 const API_URL = "https://wordbank.example/api/telemetry";
 
@@ -175,23 +180,33 @@ test("detail, count, and appRev enforce their documented boundaries", async () =
   }
 });
 
-test("ws_, wk_, wr_ secrets and URL queries are redacted before storage", async () => {
+test("ws_, wk_, wr_, wv_ secrets and URL queries are redacted before storage", async () => {
   const db = new FakeD1();
   const ws = `ws_${"a".repeat(16)}`;
   const wk = `wk_${"b".repeat(20)}`;
   const wr = `wr_${"c".repeat(32)}`;
+  // wv_ はAIキー暗号化同期のvault key（封筒の復号鍵）。ここが漏れると
+  // サーバー側の封筒がそのまま開けるようになるので、伏せ漏れは致命的。
+  const wv = `wv_${"e".repeat(64)}`;
   const querySecret = `query-${"d".repeat(20)}`;
   const { response } = await post(db, {
     events: [{
       kind: "error",
       name: `failed ${ws} ${wk} ${wr}`,
-      detail: `at https://wordbank.example/app?w=${querySecret}&mode=test`,
+      // wv_ は67文字あり name の120字上限に収まらないので detail 側へ置く
+      detail: `vault ${wv} at https://wordbank.example/app?w=${querySecret}&mode=test`,
     }],
   });
   assert.equal(response.status, 200);
   const saved = `${db.inserted[0].name}\n${db.inserted[0].detail}`;
-  for (const secret of [ws, wk, wr, querySecret]) assert.ok(!saved.includes(secret));
+  for (const secret of [ws, wk, wr, wv, querySecret]) assert.ok(!saved.includes(secret));
   assert.ok(saved.includes("[redacted]"));
+});
+
+test("クライアント側のredactionもwv_を伏せる（送信前に落とす）", () => {
+  const html = readFileSync(join(here, "..", "publish", "index.html"), "utf8");
+  const line = /const SECRET_PATTERN = \/w\(s\|k\|r\|v\)\?_\[0-9a-f\]\{16,\}\/gi;/.exec(html);
+  assert.ok(line, "クライアント側のSECRET_PATTERNがwv_を含むこと");
 });
 
 test("the 61st request from one IP is rate limited with 429", async () => {

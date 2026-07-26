@@ -23,7 +23,9 @@ const MAX_APP_REV = 40;
 const KINDS = new Set(["usage", "error"]);
 const RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
-const SECRET_PATTERN = /w(s|k|r)?_[0-9a-f]{16,}/gi;
+// wv_ はAIキー暗号化同期のvault key。封筒の復号鍵そのものなので、
+// 万一エラー文へ混ざっても保存・表示されないよう伏せる対象に含める。
+const SECRET_PATTERN = /w(s|k|r|v)?_[0-9a-f]{16,}/gi;
 const URL_QUERY_PATTERN = /\b(https?:\/\/[^\s?#]+)\?[^#\s]*/gi;
 const W_QUERY_PATTERN = /([?&]w=)[^&#\s]*/gi;
 

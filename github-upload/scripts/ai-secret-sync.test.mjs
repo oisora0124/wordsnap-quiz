@@ -37,6 +37,7 @@ function extractSimpleConst(name) {
 }
 
 const CONSTS = [
+  "AI_KEY_SYNC_AVAILABLE",
   "AI_KEY_SYNC_KEY",
   "AI_SECRET_STAMP_KEY",
   "AI_SECRET_ENVELOPE_VERSION",
@@ -602,4 +603,79 @@ test("V2 active になった時点でトグルの表示を作り直す（新規�
       `${caller} から呼ぶこと`,
     );
   }
+});
+
+// ---- 導入前から入っているキーの取り込み（デプロイ前監査で見つかった欠陥） --------
+// この機能より前にAPIキーを入れてある利用者（開発者自身がそう）はスタンプを持たない。
+// スタンプの無い provider は封筒に入らないので、これが無いと有効にしても
+// 何も同期されないまま黙って終わる。
+
+test("有効化は、既にこの端末に入っているキーを機能の対象へ取り込む", () => {
+  const source = extractFunction("enableAiKeySync");
+  assert.ok(
+    /if \(stamps\[provider\.id\]\) continue;[\s\S]{0,120}if \(!getAiKey\(provider\.id\)\) continue;/.test(source),
+    "スタンプが無く、かつキーが入っている provider だけを拾うこと",
+  );
+  // 順序: 相手の封筒を採用してから拾う。逆だと自分のスタンプが新しくなり採用を塞ぐ。
+  const getIndex = source.indexOf('await syncRequest("GET")');
+  const stampIndex = source.indexOf("readAiSecretStamps()");
+  assert.ok(getIndex >= 0 && stampIndex > getIndex, "完全GETの後に取り込むこと");
+});
+
+test("スタンプが無いキーは封筒に入らない（取り込み前の状態）", async () => {
+  const app = makeApp();
+  // 機能導入前から入っているキーを再現する（setAiKeyを通さずストレージへ直接置く）
+  app.sessionStorage.setItem("wordsnap-ai-key:gemini", GEMINI);
+  assert.equal(app.ctx.getAiKey("gemini"), GEMINI, "前提: キーは読める");
+  assert.equal(app.ctx.currentAiSecretKeySet(), null, "スタンプが無いので封筒の対象にならない");
+  await app.ctx.refreshAiSecretEnvelope();
+  assert.equal(app.ctx.aiSecretEnvelopeForPayload(), null);
+});
+
+test("スタンプを与えると、そのキーが封筒に入る", async () => {
+  const app = makeApp();
+  app.sessionStorage.setItem("wordsnap-ai-key:gemini", GEMINI);
+  app.ctx.writeAiSecretStamps({ gemini: 1753500000000, groq: 0 });
+  const keys = app.ctx.currentAiSecretKeySet();
+  assert.equal(keys.gemini.value, GEMINI);
+  assert.equal(keys.groq, undefined, "空のままの provider は入らないこと");
+  await app.ctx.refreshAiSecretEnvelope();
+  const opened = await app.ctx.openAiSecrets(ROOM_A, VAULT_A, app.ctx.aiSecretEnvelopeForPayload());
+  assert.equal(opened.keys.gemini.value, GEMINI);
+});
+
+// ---- 緊急停止スイッチ -------------------------------------------------------
+// 切り戻しをコミットのrevertでやると、引き継ぎコードの3要素解析まで戻ってしまい、
+// 配布済みの新しいコードが解析できなくなる＝利用者を締め出す。
+// 1行のスイッチで止められることを固定する。
+
+test("AI_KEY_SYNC_AVAILABLE を false にすると、封筒の作成・採用・トグル表示がすべて止まる", () => {
+  const decl = /^const AI_KEY_SYNC_AVAILABLE = (true|false);$/m.exec(html);
+  assert.ok(decl, "緊急停止スイッチが1行の定数であること");
+  assert.equal(decl[1], "true", "通常はtrueであること");
+  // 経路の入口すべてがスイッチを見ていること
+  assert.ok(
+    extractFunction("aiKeySyncEnabled").includes("if (!AI_KEY_SYNC_AVAILABLE) return false;"),
+    "送信・採用の入口が見ていること",
+  );
+  assert.ok(
+    extractFunction("renderAiKeyFields").includes("AI_KEY_SYNC_AVAILABLE && getActiveV2Credential()"),
+    "トグルの描画が見ていること",
+  );
+  assert.ok(
+    extractFunction("refreshAiKeySyncToggleVisibility").includes("AI_KEY_SYNC_AVAILABLE"),
+    "表示要否の判定が見ていること",
+  );
+});
+
+test("停止しても引き継ぎコードの3要素解析は残る（配布済みのコードを無効にしない）", () => {
+  // 解析はスイッチを参照しない＝停止しても新しいコードで合流できる
+  assert.ok(
+    !extractFunction("parseV2TransferCode").includes("AI_KEY_SYNC_AVAILABLE"),
+    "解析はスイッチに依存しないこと",
+  );
+  assert.ok(
+    !extractFunction("normalizeV2Credential").includes("AI_KEY_SYNC_AVAILABLE"),
+    "資格情報の正規化もスイッチに依存しないこと",
+  );
 });
