@@ -12398,8 +12398,8 @@ async function createV2Room() {
 let v2JoinConfirm = { roomId: "", at: 0 };
 
 async function joinV2Room() {
-  const credential = parseV2TransferCode(elements.syncV2JoinInput?.value);
-  if (!credential) {
+  const parsedCredential = parseV2TransferCode(elements.syncV2JoinInput?.value);
+  if (!parsedCredential) {
     setV2Status("引き継ぎコードの形式を確認してください。wr_…とwk_…をドットでつないだ1文字列です（APIキーも同期している端末のコードは wv_… が続く3つ目の部分を含みます）。", "error");
     return;
   }
@@ -12408,6 +12408,16 @@ async function joinV2Room() {
     return;
   }
   const currentActive = getActiveV2Credential();
+  // 同じ資格情報の旧い2要素コードを貼り直しても、この端末だけが持つvault keyは捨てない。
+  // 3要素目が明示されている場合は入力側を正とし、別の鍵へ揃え直せるようにする。
+  const credential =
+    currentActive &&
+    currentActive.roomId === parsedCredential.roomId &&
+    currentActive.secret === parsedCredential.secret &&
+    !parsedCredential.vaultKey &&
+    currentActive.vaultKey
+      ? { ...parsedCredential, vaultKey: currentActive.vaultKey }
+      : parsedCredential;
   if (currentActive && currentActive.roomId !== credential.roomId) {
     const confirmed =
       v2JoinConfirm.roomId === credential.roomId && Date.now() - v2JoinConfirm.at < 30000;
@@ -16387,7 +16397,7 @@ function currentAiSecretKeySet() {
 
 // 封筒はメモリにだけ置く。buildSyncPayloadState() は同期関数なので、
 // できあがっている封筒を読むだけにする（暗号化を待たせない）。
-let aiSecretEnvelopeCache = null; // { roomId, envelope }
+let aiSecretEnvelopeCache = null; // { roomId, vaultKey, envelope }
 let aiSecretEnvelopeGeneration = 0;
 
 function clearAiSecretEnvelopeCache() {
@@ -16439,14 +16449,25 @@ function onAiSecretsChangedLocally() {
   void refreshAiSecretEnvelope({ push: true });
 }
 
-// 送信stateへ載せてよい封筒。roomId が一致しないキャッシュは絶対に使わない。
+// キャッシュは部屋とvault keyの組に属する。同期先を切り替えた後の旧封筒を
+// 「現在の封筒あり」と数えず、送信側と作り直し側で同じ判定を使う。
+function aiSecretEnvelopeCacheMatches(route) {
+  try {
+    return Boolean(
+      route &&
+      aiSecretEnvelopeCache &&
+      aiSecretEnvelopeCache.roomId === route.roomId &&
+      aiSecretEnvelopeCache.vaultKey === route.vaultKey,
+    );
+  } catch {
+    return false;
+  }
+}
+
+// 送信stateへ載せてよい封筒。保存先が一致しないキャッシュは絶対に使わない。
 function aiSecretEnvelopeForPayload() {
   const route = aiSecretSyncRoute();
-  if (!route || !aiSecretEnvelopeCache) return null;
-  const sameTarget =
-    aiSecretEnvelopeCache.roomId === route.roomId &&
-    aiSecretEnvelopeCache.vaultKey === route.vaultKey;
-  return sameTarget ? aiSecretEnvelopeCache.envelope : null;
+  return aiSecretEnvelopeCacheMatches(route) ? aiSecretEnvelopeCache.envelope : null;
 }
 
 // 封筒はあるのに開けない状態を、部屋ごとに1回だけ知らせるための記録。
@@ -16543,8 +16564,9 @@ async function adoptAiSecretsFromState(state, expectedSyncId) {
     // 起動時のGETで届いた封筒が手元と同じ内容だと changed=false で早期returnし、
     // キャッシュが空のまま残る。その状態で単語を1つ編集すると、次のPUTから
     // aiSecrets が落ちて**部屋から封筒が消え、他の端末の同期が止まる**。
-    // 採用の有無にかかわらず、経路が有効ならキャッシュを必ず用意する。
-    if (!aiSecretEnvelopeCache) {
+    // 採用の有無にかかわらず、現在の経路に合うキャッシュを必ず用意する。
+    // 旧部屋のキャッシュが残っていても、nullと同じく作り直す。
+    if (!aiSecretEnvelopeCacheMatches(aiSecretSyncRoute())) {
       try {
         await refreshAiSecretEnvelope();
       } catch {
@@ -23099,21 +23121,32 @@ function renderAiKeyFields() {
         </div>
       </label>`,
   ).join("");
-  // トグルONのとき「サーバーへは送信されません」は虚偽になるので、説明文ごと切り替える。
+  // トグル値ではなく、現在の部屋とvault keyで実際に封筒を作れるかを表示へ反映する。
+  // 旧い2要素コードで合流して鍵が無い端末を、同期できているようには見せない。
   const keySyncOn = aiKeySyncEnabled();
-  const storageDesc = keySyncOn
+  const activeV2Credential = getActiveV2Credential();
+  const keySyncReady = Boolean(aiSecretSyncRoute());
+  const keySyncUnavailableDesc =
+    keySyncOn && activeV2Credential && !activeV2Credential.vaultKey
+      ? "この端末には暗号鍵がないため、APIキーは他の端末と同期されていません。APIキーを同期している他の端末で引き継ぎコードを取り直し、この端末でそのコードから合流し直してください。"
+      : "現在この端末では暗号化同期を利用できないため、APIキーは他の端末と同期されていません。";
+  const storageDesc = keySyncReady
     ? "キーは暗号化してから他の端末と同期されます。復号に必要な鍵は引き継ぎコードの中だけにあり、WordBankのサーバーへは一度も送られません。"
-    : "キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。";
+    : keySyncOn
+      ? keySyncUnavailableDesc
+      : "キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。";
   // V2の同期に接続している端末だけに出す。legacy運用中は鍵素材が無いので出さない。
-  const keySyncBlock = AI_KEY_SYNC_AVAILABLE && getActiveV2Credential()
+  const keySyncBlock = AI_KEY_SYNC_AVAILABLE && activeV2Credential
     ? `<label class="ai-persist">
       <input type="checkbox" id="aiKeySyncToggle"${keySyncOn ? " checked" : ""} />
       APIキーも他の端末と同期する（暗号化して保存）。オフのままなら今までどおりこの端末だけです。
     </label>
     <p class="settings-desc">${
-      keySyncOn
+      keySyncReady
         ? "同じ引き継ぎコードを持つ端末だけが復号できます。保存されたデータベースにも通信ログにも鍵は残りません。<strong>ただしWordBank自体がこのアプリを配信しているため、その気になれば読み取れます。</strong>誰にも預けたくないキーは、この機能をオフのままにしてください。"
-        : "オンにすると、他の端末でAPIキーを貼り直さずに済みます。キーは暗号化してから同期します。"
+        : keySyncOn
+          ? keySyncUnavailableDesc
+          : "オンにすると、他の端末でAPIキーを貼り直さずに済みます。キーは暗号化してから同期します。"
     }</p>`
     : "";
   elements.aiKeyFields.innerHTML = `<p class="settings-desc">APIキーは各サービスの無料枠で取得できます。${storageDesc}設定すると例文モードの例文と4択の品質が上がります（未設定でも辞書で使えます）。</p>

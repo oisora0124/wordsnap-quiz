@@ -72,6 +72,7 @@ const FUNCTIONS = [
   "openAiSecrets",
   "currentAiSecretKeySet",
   "clearAiSecretEnvelopeCache",
+  "aiSecretEnvelopeCacheMatches",
   "refreshAiSecretEnvelope",
   "onAiSecretsChangedLocally",
   "aiSecretEnvelopeForPayload",
@@ -185,6 +186,56 @@ function makeApp({
     localStorage,
     sessionStorage,
   };
+}
+
+// 合流処理も公開HTMLの関数をそのまま走らせる。通信と描画だけを成功応答へ差し替え、
+// activateV2Credentialへ渡された資格情報を観測する。
+async function runSuccessfulV2Join(app, transferCode) {
+  let activated = null;
+  app.ctx.elements = {
+    ...app.ctx.elements,
+    syncV2JoinInput: { value: transferCode },
+  };
+  Object.assign(app.ctx, {
+    syncServerAvailable: () => true,
+    setV2Status: () => {},
+    setV2Busy: () => {},
+    v2SyncEndpoint: () => "/api/test",
+    v2Fetch: async () => ({ status: 200 }),
+    readJsonResponse: async () => ({
+      stateRev: 7,
+      state: { ...app.ctx.appState },
+    }),
+    validSyncGetResponse: () => true,
+    snapshotState: () => ({ ...app.ctx.appState, words: [...app.ctx.appState.words] }),
+    activateV2Credential: (credential) => {
+      activated = { ...credential, status: "active" };
+      app.setCredential(activated);
+      return activated;
+    },
+    syncState: { applyingRemote: false },
+    normalizeState: (state) => state,
+    defaultState: () => ({ ...app.ctx.appState }),
+    invalidatePersonalFactorCache: () => {},
+    currentQuiz: null,
+    selectedIds: new Set(),
+    persistAppState: () => {},
+    offerUndo: () => {},
+    recordVerifiedSync: () => {},
+    setV2JoinUndoVisible: () => {},
+    renderAll: () => {},
+    renderV2CredentialUi: () => {},
+  });
+  vm.runInNewContext(
+    [
+      'let v2JoinConfirm = { roomId: "", at: 0 };',
+      extractFunction("parseV2TransferCode"),
+      extractFunction("joinV2Room"),
+    ].join("\n"),
+    app.ctx,
+  );
+  await app.ctx.joinV2Room();
+  return activated;
 }
 
 // ---- G1 / G21: 既存ユーザーを守る中心的な性質 -------------------------------
@@ -492,7 +543,7 @@ const renderSource = extractFunction("renderAiKeyFields");
 // 【この機能で最悪の失敗は「成立しない安全性を利用者に表示すること」】
 // 以前はソースを正規表現で照合していたが、それでは実際に出る文字列を確かめていない。
 // renderAiKeyFields() を本当に実行して、生成されたHTMLそのものを検査する。
-function renderSettings({ syncOn, v2Active }) {
+function renderSettings({ syncOn, v2Active, vaultKey = true }) {
   const listeners = [];
   const stubEl = () => ({
     value: "",
@@ -507,9 +558,17 @@ function renderSettings({ syncOn, v2Active }) {
     querySelector: () => stubEl(),
     querySelectorAll: () => [stubEl()],
   };
-  const app = makeApp({ syncOn, credential: v2Active
-    ? { status: "active", roomId: ROOM_A, secret: `wk_${"9".repeat(60)}`, vaultKey: VAULT_A }
-    : null });
+  const app = makeApp({
+    syncOn,
+    credential: v2Active
+      ? {
+          status: "active",
+          roomId: ROOM_A,
+          secret: `wk_${"9".repeat(60)}`,
+          ...(vaultKey ? { vaultKey: VAULT_A } : {}),
+        }
+      : null,
+  });
   app.ctx.elements = { aiKeyFields: container };
   app.ctx.AI_PROVIDERS = [
     { id: "gemini", name: "Gemini", keyUrl: "https://example.com/k", placeholder: "AIza…" },
@@ -548,6 +607,14 @@ test("実際に描画されるHTML: ONのとき運営が読み取れることを
   );
 });
 
+test("実際に描画されるHTML: トグルONでもvault keyが無ければ同期中と表示せず、直し方を示す", () => {
+  const html = renderSettings({ syncOn: true, v2Active: true, vaultKey: false });
+  assert.ok(!html.includes("キーは暗号化してから他の端末と同期されます"), "成立していない同期を表示しないこと");
+  assert.ok(html.includes("暗号鍵がないため"), "同期できない理由を示すこと");
+  assert.ok(html.includes("他の端末で引き継ぎコードを取り直し"), "復旧手順を示すこと");
+  assert.ok(html.includes("そのコードから合流し直してください"), "この端末側の操作を示すこと");
+});
+
 test("実際に描画されるHTML: legacy端末にはトグルも同期の説明も出さない", () => {
   const html = renderSettings({ syncOn: false, v2Active: false });
   assert.ok(!html.includes("aiKeySyncToggle"), "トグルを出さないこと");
@@ -567,7 +634,8 @@ test("実際に描画されるHTML: 既定はOFF（checkedが付かない）", (
 
 test("トグルはV2の同期に接続している端末にだけ出す", () => {
   assert.ok(
-    /getActiveV2Credential\(\)\s*\?[\s\S]{0,200}aiKeySyncToggle/.test(renderSource),
+    /const activeV2Credential = getActiveV2Credential\(\);/.test(renderSource) &&
+      /AI_KEY_SYNC_AVAILABLE && activeV2Credential[\s\S]{0,200}aiKeySyncToggle/.test(renderSource),
     "V2 active のときだけトグルを描画していること",
   );
 });
@@ -710,7 +778,7 @@ test("AI_KEY_SYNC_AVAILABLE を false にすると、封筒の作成・採用・
     "送信・採用の入口が見ていること",
   );
   assert.ok(
-    extractFunction("renderAiKeyFields").includes("AI_KEY_SYNC_AVAILABLE && getActiveV2Credential()"),
+    extractFunction("renderAiKeyFields").includes("AI_KEY_SYNC_AVAILABLE && activeV2Credential"),
     "トグルの描画が見ていること",
   );
   assert.ok(
@@ -729,6 +797,27 @@ test("停止しても引き継ぎコードの3要素解析は残る（配布済�
     !extractFunction("normalizeV2Credential").includes("AI_KEY_SYNC_AVAILABLE"),
     "資格情報の正規化もスイッチに依存しないこと",
   );
+});
+
+// ---- 合流コードの後方互換性 -------------------------------------------------
+
+test("同じ部屋の2要素コードで合流し直しても、既存のvault keyを失わない", async () => {
+  const app = makeApp();
+  const current = app.ctx.getActiveV2Credential();
+  const active = await runSuccessfulV2Join(app, `${current.roomId}.${current.secret}`);
+  assert.ok(active, "合流が完了すること");
+  assert.equal(active.vaultKey, current.vaultKey, "既存のvault keyを保持すること");
+});
+
+test("同じ部屋でも3要素目に異なるvault keyがあれば、入力した鍵へ差し替える", async () => {
+  const app = makeApp();
+  const current = app.ctx.getActiveV2Credential();
+  const active = await runSuccessfulV2Join(
+    app,
+    `${current.roomId}.${current.secret}.${VAULT_B}`,
+  );
+  assert.ok(active, "合流が完了すること");
+  assert.equal(active.vaultKey, VAULT_B, "3要素目を明示した場合は入力側を採用すること");
 });
 
 // ---- 差分レビューで指摘されたデプロイ阻止級の2件 ------------------------------
@@ -804,6 +893,46 @@ test("封筒のキャッシュは vault key も照合する", async () => {
   // 同じ部屋のまま vault key だけ差し替える
   app.setCredential({ status: "active", roomId: ROOM_A, secret: `wk_${"9".repeat(60)}`, vaultKey: VAULT_B });
   assert.equal(app.ctx.aiSecretEnvelopeForPayload(), null, "旧vault keyの封筒を送らないこと");
+});
+
+test("同期先を切り替えた後は旧部屋のキャッシュを無効とみなし、新しい部屋の封筒を作り直す", async () => {
+  const app = makeApp();
+  app.ctx.setAiKey("gemini", GEMINI);
+  await app.ctx.refreshAiSecretEnvelope();
+  assert.equal(
+    app.ctx.aiSecretEnvelopeCacheMatches({ roomId: ROOM_A, vaultKey: VAULT_A }),
+    true,
+    "前提: 旧部屋のキャッシュが有効であること",
+  );
+
+  app.setCredential({
+    status: "active",
+    roomId: ROOM_B,
+    secret: app.ctx.getActiveV2Credential().secret,
+    vaultKey: VAULT_B,
+  });
+  assert.equal(
+    app.ctx.aiSecretEnvelopeCacheMatches({ roomId: ROOM_B, vaultKey: VAULT_B }),
+    false,
+    "旧部屋のキャッシュを新しい部屋のものと数えないこと",
+  );
+  assert.equal(app.ctx.aiSecretEnvelopeForPayload(), null, "旧部屋の封筒を送らないこと");
+
+  const received = await app.ctx.sealAiSecrets(
+    ROOM_B,
+    VAULT_B,
+    app.ctx.currentAiSecretKeySet(),
+  );
+  assert.equal(
+    await app.ctx.adoptAiSecretsFromState({ aiSecrets: received }, ROOM_B),
+    false,
+    "同じ内容なのでキー自体の採用は起きないこと",
+  );
+
+  const payloadEnvelope = app.ctx.aiSecretEnvelopeForPayload();
+  assert.ok(payloadEnvelope, "新しい部屋用の封筒が次のPUTに載ること");
+  const opened = await app.ctx.openAiSecrets(ROOM_B, VAULT_B, payloadEnvelope);
+  assert.equal(opened.keys.gemini.value, GEMINI, "新しい部屋のvault keyで開けること");
 });
 
 test("JSON書き出しは vault key も含める（含めないと復元先が分岐する）", () => {
