@@ -101,6 +101,9 @@ function fakeStorage() {
 // 実コードを走らせるための最小の器。同期・UI・時刻だけを差し替え、
 // 暗号とロジックは実物をそのまま使う。
 function makeApp({
+  // available=false で緊急停止スイッチを切った状態のランタイムを組む。
+  // 文字列一致だけでは「切ったときに本当に止まるか」を確かめられない。
+  available = true,
   syncOn = true,
   credential = { status: "active", roomId: ROOM_A, secret: `wk_${"9".repeat(60)}`, vaultKey: VAULT_A },
   isV2 = true,
@@ -168,7 +171,11 @@ function makeApp({
     "let aiSecretEnvelopeCache = null;",
     "let aiSecretEnvelopeGeneration = 0;",
     "let aiSecretMismatchNotifiedRoom = \"\";",
-    ...CONSTS.map(extractSimpleConst),
+    ...CONSTS.map((name) => (
+      name === "AI_KEY_SYNC_AVAILABLE" && !available
+        ? "const AI_KEY_SYNC_AVAILABLE = false;"
+        : extractSimpleConst(name)
+    )),
     ...FUNCTIONS.map(extractFunction),
   ].join("\n");
   vm.runInNewContext(source, context);
@@ -543,7 +550,7 @@ const renderSource = extractFunction("renderAiKeyFields");
 // 【この機能で最悪の失敗は「成立しない安全性を利用者に表示すること」】
 // 以前はソースを正規表現で照合していたが、それでは実際に出る文字列を確かめていない。
 // renderAiKeyFields() を本当に実行して、生成されたHTMLそのものを検査する。
-function renderSettings({ syncOn, v2Active, vaultKey = true }) {
+function renderSettings({ syncOn, v2Active, vaultKey = true, available = true }) {
   const listeners = [];
   const stubEl = () => ({
     value: "",
@@ -559,6 +566,7 @@ function renderSettings({ syncOn, v2Active, vaultKey = true }) {
     querySelectorAll: () => [stubEl()],
   };
   const app = makeApp({
+    available,
     syncOn,
     credential: v2Active
       ? {
@@ -768,23 +776,48 @@ test("スタンプを与えると、そのキーが封筒に入る", async () =>
 // 配布済みの新しいコードが解析できなくなる＝利用者を締め出す。
 // 1行のスイッチで止められることを固定する。
 
-test("AI_KEY_SYNC_AVAILABLE を false にすると、封筒の作成・採用・トグル表示がすべて止まる", () => {
+test("通常のデプロイでは緊急停止スイッチはtrueである", () => {
   const decl = /^const AI_KEY_SYNC_AVAILABLE = (true|false);$/m.exec(html);
   assert.ok(decl, "緊急停止スイッチが1行の定数であること");
   assert.equal(decl[1], "true", "通常はtrueであること");
-  // 経路の入口すべてがスイッチを見ていること
+});
+
+// スイッチを実際に false にしたランタイムを組んで動かす。
+// 「関数の中に定数名が出てくる」ことだけを見ても、止まる保証にはならない。
+test("AI_KEY_SYNC_AVAILABLE を false にすると、封筒を作らず送らない", async () => {
+  const stopped = makeApp({ available: false, syncOn: true });
+  stopped.ctx.setAiKey("gemini", GEMINI);
+  await stopped.ctx.refreshAiSecretEnvelope({ push: true });
+
+  assert.equal(stopped.ctx.aiKeySyncEnabled(), false, "トグルがONでも無効であること");
+  assert.equal(stopped.ctx.aiSecretSyncRoute(), null, "送信経路が立たないこと");
+  assert.equal(stopped.ctx.aiSecretEnvelopeForPayload(), null, "封筒を持たないこと");
+  const payload = stopped.ctx.buildSyncPayloadState();
+  assert.ok(!("aiSecrets" in payload), "aiSecretsキー自体が存在しないこと");
+  assert.equal(stopped.pushes.length, 0, "余計な送信予約もしないこと");
+});
+
+test("AI_KEY_SYNC_AVAILABLE を false にすると、届いた封筒も採用しない", async () => {
+  // まず有効な端末で封筒を作り、それを停止済みの端末へ渡す。
+  const source = makeApp({ syncOn: true });
+  source.ctx.setAiKey("gemini", GEMINI);
+  await source.ctx.refreshAiSecretEnvelope({ push: true });
+  const envelope = source.ctx.aiSecretEnvelopeForPayload();
+  assert.ok(envelope, "検証の前提として封筒が作れていること");
+
+  const stopped = makeApp({ available: false, syncOn: true });
+  await stopped.ctx.adoptAiSecretsFromState({ aiSecrets: envelope }, ROOM_A);
+  assert.equal(stopped.ctx.getAiKey("gemini"), "", "停止中はキーを取り込まないこと");
+});
+
+test("AI_KEY_SYNC_AVAILABLE を false にすると、設定のトグルを出さない", () => {
+  const markup = renderSettings({ available: false, syncOn: true, v2Active: true });
+  assert.ok(!markup.includes("aiKeySyncToggle"), "停止中はトグル自体を描画しないこと");
   assert.ok(
-    extractFunction("aiKeySyncEnabled").includes("if (!AI_KEY_SYNC_AVAILABLE) return false;"),
-    "送信・採用の入口が見ていること",
+    markup.includes("キーはこの端末のブラウザだけに保存され、WordBankのサーバーへは送信されません。"),
+    "停止中は従来の（同期しない）文言に戻ること",
   );
-  assert.ok(
-    extractFunction("renderAiKeyFields").includes("AI_KEY_SYNC_AVAILABLE && activeV2Credential"),
-    "トグルの描画が見ていること",
-  );
-  assert.ok(
-    extractFunction("refreshAiKeySyncToggleVisibility").includes("AI_KEY_SYNC_AVAILABLE"),
-    "表示要否の判定が見ていること",
-  );
+  assert.ok(!markup.includes("暗号化してから他の端末と同期されます"), "同期する文言を出さないこと");
 });
 
 test("停止しても引き継ぎコードの3要素解析は残る（配布済みのコードを無効にしない）", () => {
