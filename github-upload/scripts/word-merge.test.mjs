@@ -66,6 +66,7 @@ function makeWordRuntime() {
     extractFunction("deletionKeyForWord"),
     extractFunction("defaultState"),
     extractFunction("normalizeState"),
+    extractFunction("stateSignature"),
     extractFunction("mergeAppStates"),
     extractFunction("mergeTrashEntries"),
     extractFunction("mergeWord"),
@@ -74,7 +75,7 @@ function makeWordRuntime() {
     extractFunction("mergeLearningState"),
     extractFunction("minPositiveNumber"),
     "globalThis.__wordRuntime = {" +
-      " normalizeHistory, normalizeLearning, normalizeWord, normalizeState," +
+      " normalizeHistory, normalizeLearning, normalizeWord, normalizeState, stateSignature," +
       " mergeHistory, mergeLearningState, mergeEnrichData, mergeWord, mergeAppStates };",
   ];
   const context = {};
@@ -333,6 +334,57 @@ test("削除後に別端末で学習した単語は成績・履歴・SRS状態�
     merged.words.find((entry) => entry.term === "orange").progressUpdatedAt,
     0,
     "新フィールドが無い既存データは履歴の最新時刻で保護すること",
+  );
+});
+
+// マージが収束しないと、端末は毎回「差分あり」と判断してPUTを送り続ける。
+// 旧データ（進捗更新時刻を持たない）が履歴由来の値を得たあと、値が動かないことを固定する。
+test("旧データのマージは1往復で収束し、以後は差分を出し続けない", () => {
+  const legacyWord = (id, term) => {
+    const entry = word({ id, term });
+    delete entry.progressUpdatedAt;
+    return entry;
+  };
+  const local = runtime.normalizeState(state([legacyWord("w1", "apple"), legacyWord("w2", "banana")]));
+  const remote = runtime.normalizeState(state([legacyWord("w1", "apple"), legacyWord("w2", "banana")]));
+
+  const first = runtime.mergeAppStates(local, remote, { normalized: true });
+  const second = runtime.mergeAppStates(
+    runtime.normalizeState(first),
+    runtime.normalizeState(first),
+    { normalized: true },
+  );
+  assert.equal(
+    runtime.stateSignature(first),
+    runtime.stateSignature(second),
+    "2回目のマージで差分が出ないこと（収束）",
+  );
+  assert.ok(first.words[0].progressUpdatedAt > 0, "旧データにも履歴由来の進捗時刻が入ること");
+});
+
+test("マージは左右を入れ替えても同じ結果になる", () => {
+  const a = runtime.normalizeState(state([word({ id: "w1" })]));
+  const b = runtime.normalizeState(state([
+    word({
+      id: "w1",
+      stats: { correct: 9, wrong: 0 },
+      history: [{ at: "2026-07-25T00:00:00.000Z", correct: true }],
+      progressUpdatedAt: Date.parse("2026-07-25T00:00:00.000Z"),
+    }),
+  ]));
+
+  const ab = runtime.mergeAppStates(a, b, { normalized: true });
+  const ba = runtime.mergeAppStates(b, a, { normalized: true });
+  assert.deepEqual({ ...ab.words[0].stats }, { ...ba.words[0].stats }, "成績が順序に依存しないこと");
+  assert.equal(
+    ab.words[0].progressUpdatedAt,
+    ba.words[0].progressUpdatedAt,
+    "進捗の更新時刻が順序に依存しないこと",
+  );
+  assert.equal(
+    ab.words[0].history.length,
+    ba.words[0].history.length,
+    "履歴の件数が順序に依存しないこと",
   );
 });
 
