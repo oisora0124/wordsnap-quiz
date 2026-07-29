@@ -150,6 +150,22 @@ class FakeD1Statement {
       }
       return { success: true, meta: { changes: 0 } };
     }
+    // 期限切れ行の掃除。実装が「その操作の接頭辞の、窓が明けた行だけ」を消すことを
+    // 実際に再現して検査する（未対応SQLとして例外にすると、実装側のcatchが飲み込んでしまう）。
+    if (/^DELETE FROM rate_limits WHERE rl_key LIKE \? AND window_start <= \?$/i.test(this.sql)) {
+      if (!this.db.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+      const [pattern, cutoff] = this.args;
+      const prefix = String(pattern).replace(/%$/, "");
+      let changes = 0;
+      for (const [key, row] of [...this.db.rateLimits]) {
+        if (!key.startsWith(prefix)) continue;
+        if (row.window_start > cutoff) continue;
+        this.db.rateLimits.delete(key);
+        changes += 1;
+      }
+      this.db.rateLimitCleanups.push({ prefix, cutoff });
+      return { success: true, meta: { changes } };
+    }
     if (/^INSERT INTO states \(key, state, rev, updatedAt\) VALUES \(\?, \?, 1, \?\)$/i.test(this.sql)) {
       const [key, state, updatedAt] = this.args;
       if (this.db.rows.has(key)) throw new Error("UNIQUE constraint failed: states.key");
@@ -214,6 +230,7 @@ class FakeD1 {
     this.revisions = new Map();
     this.rooms = new Map();
     this.rateLimits = new Map();
+    this.rateLimitCleanups = [];
     this.rateLimitReads = new Map();
     this.rateLimitsTableExists = rateLimitsTableExists;
     this.failRoomInserts = failRoomInserts;
@@ -1070,5 +1087,49 @@ test("native既定のフラグは文字列1のときだけ許可する（fail-cl
     });
     assert.equal(refused.response.status, 403, `${JSON.stringify(value)} は拒否すること`);
     assert.equal(db.rows.size, 0, `${JSON.stringify(value)} で部屋を作らないこと`);
+  }
+});
+
+// レート制限行はIPごとに増える。窓が明けても消えないと、IPを変えるだけで
+// rate_limits を無制限に膨らませられる（IPv6は端末側で自由に変えられる）。
+test("窓が明けた行だけを、その操作の分だけ掃除する", async () => {
+  const originalNow = Date.now;
+  let now = FIXED_NOW;
+  Date.now = () => now;
+  try {
+    const db = new FakeD1();
+    const hour = 60 * 60 * 1000;
+    const stale = now - 2 * hour; // v2-create の窓（1時間）より古い
+    db.rateLimits.set("v2-create:198.51.100.1", { window_start: stale, count: 10 });
+    db.rateLimits.set("v2-create:198.51.100.2", { window_start: now, count: 1 });
+    db.rateLimits.set("v2-upgrade:198.51.100.3", { window_start: stale, count: 20 });
+
+    const first = await requestV2(db, {
+      method: "PUT",
+      query: { create: 1 },
+      body: { state: sampleState("prune-1") },
+      ip: "203.0.113.77",
+    });
+    assert.equal(first.response.status, 200, "掃除は本来の処理を妨げないこと");
+    assert.equal(db.rateLimitCleanups.length, 1, "窓が明けたときだけ掃除すること");
+    assert.equal(db.rateLimitCleanups[0].prefix, "v2-create:", "自分の操作の行だけを対象にすること");
+    assert.equal(db.rateLimits.has("v2-create:198.51.100.1"), false, "期限切れ行は消えること");
+    assert.equal(db.rateLimits.has("v2-create:198.51.100.2"), true, "有効な窓の行は残ること");
+    assert.equal(
+      db.rateLimits.has("v2-upgrade:198.51.100.3"),
+      true,
+      "別の操作の行には手を出さないこと",
+    );
+
+    const second = await requestV2(db, {
+      method: "PUT",
+      query: { create: 1 },
+      body: { state: sampleState("prune-2") },
+      ip: "203.0.113.77",
+    });
+    assert.equal(second.response.status, 200);
+    assert.equal(db.rateLimitCleanups.length, 1, "同じ窓の2回目では全表を走査しないこと");
+  } finally {
+    Date.now = originalNow;
   }
 });

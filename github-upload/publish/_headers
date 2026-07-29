@@ -19,7 +19,11 @@
 # - COOP: 別オリジンのポップアップからwindow参照を切り、タブ乗っ取り系の攻撃面を除去。
 # - X-Frame-Options: frame-ancestorsを解さない古い環境向けの二重防御。
 # - CORP: 静的アセットの他オリジンからの埋め込み読み込みを拒否。
+# - HSTS: `.dev` TLDはブラウザのpreloadリストに入っているため大半の環境では既にHTTPS強制だが、
+#   preloadリストを持たない古い・組み込みブラウザや、将来独自ドメインを足したときのために明示する。
+#   preload指示子は付けない（apexドメインを管理していないため、付けても意味がなく取り消せない）。
 /*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), midi=(), magnetometer=(), gyroscope=(), accelerometer=()

@@ -133,6 +133,19 @@ async function consumeTelemetryRateLimit(db, request) {
         RATE_LIMIT,
       )
       .run();
+    // 窓が明けた行はもう上限判定に使われないが、IP単位のキーなので放置すると
+    // 行が増え続ける（IPv6は端末側で無尽蔵に変えられるため、意図的に膨らませられる）。
+    // 掃除するのは自分の窓が明けたときだけ＝IPごとに高々1窓に1回。
+    if (expired) {
+      try {
+        await db
+          .prepare("DELETE FROM rate_limits WHERE rl_key LIKE 'telemetry:%' AND window_start <= ?")
+          .bind(expiryCutoff)
+          .run();
+      } catch {
+        // 掃除の失敗は握り潰す（次に窓が明けた誰かが再試行する）。
+      }
+    }
     return Number(result?.meta?.changes) === 0;
   } catch {
     return false;

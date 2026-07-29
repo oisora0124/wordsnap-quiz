@@ -349,6 +349,20 @@ async function consumeV2RateLimit(db, request, operation) {
       )
       .bind(rateLimitKey, now, expiryCutoff, expiryCutoff, expiryCutoff, rule.limit)
       .run();
+    // 窓が明けた行はもう上限判定に使われないが、IP単位のキーなので放置すると
+    // 行が増え続ける（IPv6は端末側で無尽蔵に変えられるため、意図的に膨らませられる）。
+    // 掃除するのは自分の窓が明けたときだけ＝IPごとに高々1窓に1回で、
+    // 通常のリクエストごとに全表を走査しない。失敗しても上限判定の結果は変えない。
+    if (expired) {
+      try {
+        await db
+          .prepare("DELETE FROM rate_limits WHERE rl_key LIKE ? AND window_start <= ?")
+          .bind(`${operation}:%`, expiryCutoff)
+          .run();
+      } catch {
+        // 掃除の失敗は握り潰す（次に窓が明けた誰かが再試行する）。
+      }
+    }
     return Number(result?.meta?.changes) === 0;
   } catch {
     // 補助テーブル未作成や一時的なD1障害では、V2本来の処理を優先してfail-openにする。

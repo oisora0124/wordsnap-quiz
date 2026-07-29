@@ -19,6 +19,7 @@ class FakeD1 {
     this.rateLimitsTableExists = rateLimitsTableExists;
     this.inserted = [];
     this.rateLimits = new Map();
+    this.cleanupCalls = [];
   }
 
   prepare(sql) {
@@ -54,6 +55,21 @@ class FakeD1 {
             });
           }
           return { meta: { changes: 1 } };
+        }
+        // 期限切れ行の掃除。実装が「自分の接頭辞の、窓が明けた行だけ」を消すことを
+        // ここで実際に再現して検査する（未対応SQLとして握り潰すと検証にならない）。
+        if (/^DELETE FROM rate_limits WHERE rl_key LIKE 'telemetry:%' AND window_start <= \?$/i.test(this.sql)) {
+          if (!self.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+          const [cutoff] = this.args;
+          let changes = 0;
+          for (const [key, row] of [...self.rateLimits]) {
+            if (!key.startsWith("telemetry:")) continue;
+            if (row.window_start > cutoff) continue;
+            self.rateLimits.delete(key);
+            changes += 1;
+          }
+          self.cleanupCalls.push(cutoff);
+          return { meta: { changes } };
         }
         if (/^INSERT INTO telemetry /i.test(this.sql)) {
           if (!self.telemetryTableExists) throw new Error("no such table: telemetry");
@@ -275,4 +291,35 @@ test("Phase 2 と AIキー同期の計測名が許可リストにある", () => 
   ]) {
     assert.ok(allowed.has(name), `${name} が許可リストにあること`);
   }
+});
+
+// レート制限行はIPごとに増える。窓が明けても消えないと、IPを変えるだけで
+// rate_limits を無制限に膨らませられる（IPv6は端末側で自由に変えられる）。
+test("expired rate-limit rows are pruned, and only expired rows of this endpoint", async () => {
+  const db = new FakeD1();
+  const now = Date.now();
+  const stale = now - 25 * 60 * 60 * 1000; // 24時間の窓より古い
+  db.rateLimits.set("telemetry:198.51.100.1", { window_start: stale, count: 60 });
+  db.rateLimits.set("telemetry:198.51.100.2", { window_start: now, count: 1 });
+  db.rateLimits.set("v2-create:198.51.100.3", { window_start: stale, count: 10 });
+
+  const { response } = await post(db, { events: [{ kind: "usage", name: "quiz-answer" }] });
+
+  assert.equal(response.status, 200, "掃除は本来の処理を妨げないこと");
+  assert.equal(db.cleanupCalls.length, 1, "窓が明けたときだけ掃除すること");
+  assert.equal(db.rateLimits.has("telemetry:198.51.100.1"), false, "期限切れ行は消えること");
+  assert.equal(db.rateLimits.has("telemetry:198.51.100.2"), true, "有効な窓の行は残ること");
+  assert.equal(
+    db.rateLimits.has("v2-create:198.51.100.3"),
+    true,
+    "別エンドポイントの行には手を出さないこと",
+  );
+});
+
+test("a live window does not trigger pruning on every request", async () => {
+  const db = new FakeD1();
+  await post(db, { events: [{ kind: "usage", name: "quiz-answer" }] });
+  assert.equal(db.cleanupCalls.length, 1, "初回は窓が無いので掃除が走る");
+  await post(db, { events: [{ kind: "usage", name: "quiz-answer" }] });
+  assert.equal(db.cleanupCalls.length, 1, "同じ窓の2回目では全表を走査しないこと");
 });
