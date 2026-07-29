@@ -553,7 +553,10 @@ test("全体上限で止まったとき、IP側の枠を無駄に減らさない
       headers: { "CF-Connecting-IP": "203.0.113.5" },
     });
     assert.equal(fetchStub.calls.length, 0);
-    const ipRows = db.limitRows().filter((row) => row.rl_key !== "fb-mail:all");
+    // 保存側の枠（fb-save:*）は保存が成立した分だけ消費されるので対象外。
+    // ここで見るのはメール枠のIP側だけ。
+    const ipRows = db.limitRows()
+      .filter((row) => row.rl_key.startsWith("fb-mail:") && row.rl_key !== "fb-mail:all");
     assert.equal(ipRows.length, 0, "送っていないのにIP側を消費しないこと");
   } finally {
     fetchStub.restore();
@@ -596,7 +599,12 @@ test("宛先・差出人が壊れていたら送らない（改行・複数ア�
       assert.equal(fetchStub.calls.length, 0, `送ってはいけない: ${broken}`);
       // 設定不備は送信を試みる前に弾く。後段で例外任せにすると、送っていないのに
       // 送信枠だけが減り、設定を直した直後に上限で止まる。
-      assert.deepEqual(db.limitRows(), [], `設定不備で送信枠を消費しないこと: ${broken}`);
+      // 保存側の枠（fb-save:*）は保存が成立した分だけ消費される。ここで見るのはメール枠だけ。
+      assert.deepEqual(
+        db.limitRows().filter((row) => row.rl_key.startsWith("fb-mail:")),
+        [],
+        `設定不備で送信枠を消費しないこと: ${broken}`,
+      );
     } finally {
       fetchStub.restore();
     }

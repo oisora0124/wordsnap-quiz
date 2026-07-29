@@ -10,9 +10,14 @@ const API_URL = "https://wordbank.example/api/feedback";
 
 // INSERT を記録するだけの最小D1スタブ。
 class FakeD1 {
-  constructor({ hasTable = true } = {}) {
+  // hasTable は feedback テーブルの有無だけを表す。rateLimitsTableExists を false に
+  // すると、上限テーブルだけが無い状況（保存側は fail-open で通す）を再現できる。
+  constructor({ hasTable = true, rateLimitsTableExists = true } = {}) {
     this.hasTable = hasTable;
+    this.rateLimitsTableExists = rateLimitsTableExists;
     this.inserted = [];
+    this.rateLimits = new Map();
+    this.saveCleanups = [];
   }
   prepare(sql) {
     const self = this;
@@ -23,7 +28,47 @@ class FakeD1 {
         this.args = args;
         return this;
       },
+      async first() {
+        if (!/^SELECT window_start, count FROM rate_limits WHERE rl_key = \?$/i.test(this.sql)) {
+          throw new Error(`unexpected first sql: ${this.sql}`);
+        }
+        if (!self.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+        const row = self.rateLimits.get(this.args[0]);
+        return row ? { ...row } : null;
+      },
       async run() {
+        // 上限テーブルの固定窓カウンタ。スタブで握り潰すと上限が検証されないので、
+        // 実装が投げるSQLと同じ意味をここで再現する。
+        if (/^INSERT INTO rate_limits /i.test(this.sql)) {
+          if (!self.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+          const [key, now, expiryCutoff, , , limit] = this.args;
+          const current = self.rateLimits.get(key);
+          if (current && current.window_start > expiryCutoff && current.count >= limit) {
+            return { meta: { changes: 0 } };
+          }
+          if (!current || current.window_start <= expiryCutoff) {
+            self.rateLimits.set(key, { window_start: now, count: 1 });
+          } else {
+            self.rateLimits.set(key, {
+              window_start: current.window_start,
+              count: current.count + 1,
+            });
+          }
+          return { meta: { changes: 1 } };
+        }
+        if (/^DELETE FROM rate_limits WHERE rl_key LIKE '(fb-save|fb-mail):%' AND window_start <= \?$/i.test(this.sql)) {
+          if (!self.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+          const prefix = this.sql.includes("fb-save") ? "fb-save:" : "fb-mail:";
+          const [cutoff] = this.args;
+          let changes = 0;
+          for (const [key, row] of [...self.rateLimits]) {
+            if (!key.startsWith(prefix) || row.window_start > cutoff) continue;
+            self.rateLimits.delete(key);
+            changes += 1;
+          }
+          self.saveCleanups.push({ prefix, cutoff });
+          return { meta: { changes } };
+        }
         if (!self.hasTable) throw new Error("no such table: feedback");
         if (!/^INSERT INTO feedback /i.test(this.sql)) {
           throw new Error(`unexpected sql: ${this.sql}`);
@@ -36,8 +81,11 @@ class FakeD1 {
   }
 }
 
-async function post(db, body, { headers = {}, method = "POST" } = {}) {
-  const init = { method, headers: { "content-type": "application/json", ...headers } };
+async function post(db, body, { headers = {}, method = "POST", ip = "203.0.113.10" } = {}) {
+  const init = {
+    method,
+    headers: { "content-type": "application/json", "CF-Connecting-IP": ip, ...headers },
+  };
   if (body !== undefined) init.body = typeof body === "string" ? body : JSON.stringify(body);
   const response = await onRequest({ request: new Request(API_URL, init), env: { DB: db } });
   let data = null;
@@ -258,4 +306,55 @@ test("別オリジンからのPOSTは保存せず403にする", async () => {
   });
   assert.equal(sameResult.response.status, 200);
   assert.equal(same.inserted.length, 1);
+});
+
+// 保存そのものの上限。これが無いと、公開・無認証の投稿口から feedback テーブルへ
+// 無制限にINSERTできる（メール側の上限は通知しか止めない）。
+test("IP単位の保存上限を超えると429にし、それ以上保存しない", async () => {
+  const db = new FakeD1();
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const { response } = await post(db, { category: "request", message: `要望${attempt}` });
+    assert.equal(response.status, 200, `${attempt}件目までは保存すること`);
+  }
+  assert.equal(db.inserted.length, 30);
+
+  const limited = await post(db, { category: "request", message: "31件目" });
+  assert.equal(limited.response.status, 429);
+  assert.deepEqual(limited.data, { error: "rate limited", code: "rate-limited" });
+  assert.equal(db.inserted.length, 30, "上限超過では1行も増やさないこと");
+});
+
+test("上限は入力が妥当なときだけ消費する（不正な要求で枠を減らせない）", async () => {
+  const db = new FakeD1();
+  for (const invalid of [{ message: "" }, { category: "request" }, "not-json-object"]) {
+    const { response } = await post(db, invalid);
+    assert.ok(response.status >= 400, "不正な要求は拒否すること");
+  }
+  assert.equal(db.rateLimits.size, 0, "不正な要求で上限の枠を消費しないこと");
+});
+
+test("上限テーブルが無い場合は保存を優先してfail-openにする", async () => {
+  const db = new FakeD1({ rateLimitsTableExists: false });
+  const { response } = await post(db, { category: "request", message: "上限表なし" });
+  assert.equal(response.status, 200, "上限を確かめられなくても要望は失わないこと");
+  assert.equal(db.inserted.length, 1);
+});
+
+test("保存側の期限切れ行を掃除する（IPごとに行が増え続けない）", async () => {
+  const db = new FakeD1();
+  const stale = Date.now() - 2 * 60 * 60 * 1000; // 1時間の窓より古い
+  db.rateLimits.set("fb-save:deadbeefdeadbeef", { window_start: stale, count: 30 });
+  db.rateLimits.set("fb-mail:deadbeefdeadbeef", { window_start: stale, count: 5 });
+
+  const { response } = await post(db, { category: "request", message: "掃除" });
+  assert.equal(response.status, 200);
+  assert.ok(
+    db.saveCleanups.some((entry) => entry.prefix === "fb-save:"),
+    "保存側の掃除が走ること",
+  );
+  assert.equal(
+    db.rateLimits.has("fb-save:deadbeefdeadbeef"),
+    false,
+    "期限切れの保存側の行は消えること",
+  );
 });

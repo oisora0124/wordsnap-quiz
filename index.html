@@ -10299,6 +10299,9 @@ async function submitFeedback() {
       }
     } else if (response.status === 413) {
       if (elements.feedbackStatus) elements.feedbackStatus.textContent = "内容が長すぎます。短くして送信してください。";
+    } else if (response.status === 429) {
+      // 内容はフォームに残る（reset は成功時だけ）。時間をおけばそのまま再送できる。
+      if (elements.feedbackStatus) elements.feedbackStatus.textContent = "短い時間に送りすぎました。しばらくしてから送信してください（内容は残っています）。";
     } else if (response.status === 503) {
       if (elements.feedbackStatus) elements.feedbackStatus.textContent = "いまは受け付けできません。少し時間をおいて試してください。";
     } else {

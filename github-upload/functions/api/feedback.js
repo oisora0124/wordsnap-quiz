@@ -295,6 +295,84 @@ async function mailRateLimited(env, request) {
   return false;
 }
 
+// 保存そのものの上限。ここが無いと、公開・無認証の投稿口から D1 の feedback テーブルへ
+// 無制限にINSERTでき、容量と費用を一方的に増やされる（メール側の上限は通知しか止めない）。
+// 利用者2名の実使用は「ごく稀に1件」なので、この枠は実用上まったく当たらない。
+//
+// 枠はメール通知側（MAIL_RATE_LIMITS: IP 5件/時・全体 60件/時）より必ず緩くする。
+// 保存のほうが厳しいと、通知の上限に達する前に保存で止まり、メール側の上限が
+// 一度も効かない死んだ設定になってしまう。保存＝外側の粗い上限、通知＝内側の厳しい上限。
+const SAVE_RATE_LIMITS = [
+  { scope: "ip", limit: 30, windowMs: 60 * 60 * 1000 },
+  { scope: "all", limit: 200, windowMs: 60 * 60 * 1000 },
+];
+
+// メール側と違い、ここは fail-OPEN にする。上限用の rate_limits と保存先の feedback は
+// 同じD1にあるため、上限を確かめられない状況では保存自体も失敗する見込みが高い。
+// 判定できないだけで本物の要望を捨てるほうが害が大きい。
+async function saveRateLimited(env, request) {
+  const db = env.DB;
+  const now = Date.now();
+  let keys;
+  try {
+    const bucket = await ipBucket(env, request.headers.get("CF-Connecting-IP") || "unknown");
+    keys = SAVE_RATE_LIMITS.map((rule) => ({
+      rule,
+      key: rule.scope === "ip" ? `fb-save:${bucket}` : "fb-save:all",
+    }));
+  } catch {
+    return false;
+  }
+
+  try {
+    // 先に両方を読んで判定する。片方だけ消費して他方で止まると、保存していないのに
+    // 枠が減る。消費は判定が全部通ってから行う（メール側と同じ順序）。
+    for (const { rule, key } of keys) {
+      const current = await db
+        .prepare("SELECT window_start, count FROM rate_limits WHERE rl_key = ?")
+        .bind(key)
+        .first();
+      const expired = !current || now >= Number(current.window_start) + rule.windowMs;
+      if (!expired && Number(current.count) >= rule.limit) return true;
+    }
+
+    for (const { rule, key } of keys) {
+      const expiryCutoff = now - rule.windowMs;
+      const result = await db
+        .prepare(
+          `INSERT INTO rate_limits (rl_key, window_start, count) VALUES (?, ?, 1)
+           ON CONFLICT(rl_key) DO UPDATE SET
+             window_start = CASE
+               WHEN rate_limits.window_start <= ? THEN excluded.window_start
+               ELSE rate_limits.window_start
+             END,
+             count = CASE
+               WHEN rate_limits.window_start <= ? THEN 1
+               ELSE rate_limits.count + 1
+             END
+           WHERE rate_limits.window_start <= ? OR rate_limits.count < ?`,
+        )
+        .bind(key, now, expiryCutoff, expiryCutoff, expiryCutoff, rule.limit)
+        .run();
+      // 同時実行で埋まった場合。読み取り判定を通っていても、ここで負けたら保存しない。
+      if (Number(result?.meta?.changes) === 0) return true;
+    }
+  } catch {
+    return false;
+  }
+
+  // 窓が明けた行はもう上限判定に使われない。キーはIP単位なので放置すると増え続ける。
+  try {
+    await db
+      .prepare("DELETE FROM rate_limits WHERE rl_key LIKE 'fb-save:%' AND window_start <= ?")
+      .bind(now - SAVE_RATE_LIMITS[0].windowMs)
+      .run();
+  } catch {
+    // 掃除に失敗しても上限判定の結果は変わらない。
+  }
+  return false;
+}
+
 // 送信の失敗は投稿を落とさないために握り潰す。そのままだと症状が「静かに来ない」
 // だけになり切り分けようがないので、経路の分岐だけを固定文言で残す。
 // 宛先・APIキー・投稿本文はいずれもログに出さない（`wrangler pages deployment tail`
@@ -440,6 +518,12 @@ export async function onRequest(context) {
   // プライバシー優先: User-Agent は保存しない（開示を増やさず、最小データに徹する）。
   // 列はスキーマ安定のため残し、常に空文字を入れる。
   const userAgent = "";
+
+  // 保存の上限は、入力が妥当だと確かめた後・D1へ書く直前に見る。
+  // 先に見ると、形式が不正な要求だけで枠を減らせてしまう。
+  if (await saveRateLimited(env, request)) {
+    return json({ error: "rate limited", code: "rate-limited" }, 429);
+  }
 
   // 時刻は prepare() の後に取る（メール通知の追加前と同じ評価順を保つ）。
   let createdAt;
