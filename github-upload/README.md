@@ -50,3 +50,9 @@ Pages FunctionsのD1バインディング名を `DB` に設定します。既存
 
 GitHubの `main` をCloudflare Pagesへ接続している現在の運用では、変更をpushすると
 `publish/` と `functions/` がデプロイ対象になります。push前に必ず `npm test` を実行します。
+
+pushされた内容は GitHub Actions（`.github/workflows/release-checks.yml`）でも
+`npm run sync:html` の差分確認と `npm test` を回します。ただし**それだけでは
+デプロイは止まりません**。止めるには GitHub の Settings → Branches → `main` の
+必須チェックに `release-checks / test` を指定してください（リポジトリ設定なので
+コードには含められません）。
