@@ -68,6 +68,31 @@ function cleanText(value, maxLength) {
   return out.slice(0, maxLength);
 }
 
+// Content-Typeは「essence（型/サブタイプ）」だけで判定する。部分一致だと
+// `text/plain;x=application/json` のように、ブラウザがプリフライトなしで送れる
+// simple POST（essenceはtext/plain）を通してしまい、クロスサイトからの
+// 書き込み経路になる。パラメータ（charset等）は許可する。
+function isJsonContentType(value) {
+  const essence = String(value || "").split(";", 1)[0].trim().toLowerCase();
+  return essence === "application/json";
+}
+
+// クロスサイトからの書き込みを止める二重目の防御。
+// POSTでは主要ブラウザが必ず Origin を送るため、付いていて自分のオリジンと
+// 違えば拒否する。Origin が無いクライアント（curl等の非ブラウザ）は
+// CSRFの担い手にならないので通す。Sec-Fetch-Site は付いていれば併せて見る。
+function isSameOriginRequest(request) {
+  const site = request.headers.get("Sec-Fetch-Site");
+  if (site && site !== "same-origin" && site !== "none") return false;
+  const origin = request.headers.get("Origin");
+  if (!origin) return true;
+  try {
+    return new URL(origin).origin === new URL(request.url).origin;
+  } catch {
+    return false; // 解釈できない Origin は信用しない
+  }
+}
+
 // body をストリームで読み、上限バイトを超えた時点で打ち切る（Content-Length 詐称・
 // chunked 送信でも request.text() で全量をバッファせずに済ませる DoS 対策）。
 async function readBodyCapped(request, maxBytes) {
@@ -368,9 +393,12 @@ export async function onRequest(context) {
 
   // 現行クライアントはJSONで送信する。simple POSTになり得る非JSON本文は、
   // クロスサイトからの踏み台利用を防ぐためストレージへ触れる前に拒否する。
-  const contentType = String(request.headers.get("content-type") || "").toLowerCase();
-  if (!contentType.includes("application/json")) {
+  if (!isJsonContentType(request.headers.get("content-type"))) {
     return json({ error: "unsupported media type" }, 415);
+  }
+
+  if (!isSameOriginRequest(request)) {
+    return json({ error: "cross-site request" }, 403);
   }
 
   if (!env || !env.DB) {

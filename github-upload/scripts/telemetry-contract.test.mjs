@@ -89,13 +89,14 @@ class FakeD1 {
   }
 }
 
-async function post(db, body, { method = "POST", ip = "203.0.113.10" } = {}) {
+async function post(db, body, { method = "POST", ip = "203.0.113.10", headers = {} } = {}) {
   const init = {
     method,
     headers: {
       "content-type": "application/json",
       "CF-Connecting-IP": ip,
       "user-agent": "TelemetryContractTest/1.0",
+      ...headers,
     },
   };
   if (body !== undefined) init.body = JSON.stringify(body);
@@ -322,4 +323,61 @@ test("a live window does not trigger pruning on every request", async () => {
   assert.equal(db.cleanupCalls.length, 1, "初回は窓が無いので掃除が走る");
   await post(db, { events: [{ kind: "usage", name: "quiz-answer" }] });
   assert.equal(db.cleanupCalls.length, 1, "同じ窓の2回目では全表を走査しないこと");
+});
+
+// `text/plain;x=application/json` は essence が text/plain なので、ブラウザは
+// プリフライトなしの simple POST として送れる。部分一致で受理していると
+// 任意サイトからの書き込み経路になる。essence で判定していることを固定する。
+test("Content-Type essence が application/json でなければ 415 にする", async () => {
+  for (const contentType of [
+    "text/plain;x=application/json",
+    "text/plain",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data; boundary=application/json",
+  ]) {
+    const db = new FakeD1();
+    const { response } = await post(db, { events: [{ kind: "usage", name: "quiz-answer" }] }, {
+      headers: { "content-type": contentType },
+    });
+    assert.equal(response.status, 415, `${contentType} を通さないこと`);
+    assert.equal(db.inserted.length, 0);
+  }
+  // パラメータ付きの正しい指定は通す
+  const ok = new FakeD1();
+  const { response } = await post(ok, { events: [{ kind: "usage", name: "quiz-answer" }] }, {
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+  assert.equal(response.status, 200, "charset付きは受理すること");
+  assert.equal(ok.inserted.length, 1);
+});
+
+test("別オリジンからのPOSTは保存せず403にする", async () => {
+  const cross = new FakeD1();
+  const crossResult = await post(cross, { events: [{ kind: "usage", name: "quiz-answer" }] }, {
+    headers: { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" },
+  });
+  assert.equal(crossResult.response.status, 403);
+  assert.equal(cross.inserted.length, 0, "拒否時は1行も書かないこと");
+
+  // Sec-Fetch-Site が無い古いブラウザでも Origin だけで判定できること
+  const originOnly = new FakeD1();
+  const originResult = await post(originOnly, { events: [{ kind: "usage", name: "quiz-answer" }] }, {
+    headers: { Origin: "https://evil.example" },
+  });
+  assert.equal(originResult.response.status, 403);
+  assert.equal(originOnly.inserted.length, 0);
+
+  // 自分のオリジンからは通す
+  const same = new FakeD1();
+  const sameResult = await post(same, { events: [{ kind: "usage", name: "quiz-answer" }] }, {
+    headers: { Origin: "https://wordbank.example", "Sec-Fetch-Site": "same-origin" },
+  });
+  assert.equal(sameResult.response.status, 200);
+  assert.equal(same.inserted.length, 1);
+
+  // Origin を付けない非ブラウザ経路は従来どおり通す（CSRFの担い手にならない）
+  const noOrigin = new FakeD1();
+  const noOriginResult = await post(noOrigin, { events: [{ kind: "usage", name: "quiz-answer" }] });
+  assert.equal(noOriginResult.response.status, 200);
+  assert.equal(noOrigin.inserted.length, 1);
 });

@@ -215,3 +215,47 @@ test("contact and appVersion are length-capped", async () => {
   assert.ok(db.inserted[0].contact.length <= 200);
   assert.ok(db.inserted[0].app_version.length <= 40);
 });
+
+// `text/plain;x=application/json` は essence が text/plain なので、ブラウザは
+// プリフライトなしの simple POST として送れる。部分一致で受理していると
+// 任意サイトから投稿・メール通知を発火させられる。essence で判定することを固定する。
+test("Content-Type essence が application/json でなければ 415 にする", async () => {
+  for (const contentType of [
+    "text/plain;x=application/json",
+    "text/plain",
+    "application/x-www-form-urlencoded",
+  ]) {
+    const db = new FakeD1();
+    const { response } = await post(db, { category: "request", message: "テスト" }, {
+      headers: { "content-type": contentType },
+    });
+    assert.equal(response.status, 415, `${contentType} を通さないこと`);
+    assert.equal(db.inserted.length, 0);
+  }
+  const ok = new FakeD1();
+  const { response } = await post(ok, { category: "request", message: "テスト" }, {
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+  assert.equal(response.status, 200, "charset付きは受理すること");
+  assert.equal(ok.inserted.length, 1);
+});
+
+test("別オリジンからのPOSTは保存せず403にする", async () => {
+  for (const headers of [
+    { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" },
+    { Origin: "https://evil.example" },
+    { "Sec-Fetch-Site": "cross-site" },
+  ]) {
+    const db = new FakeD1();
+    const { response } = await post(db, { category: "request", message: "テスト" }, { headers });
+    assert.equal(response.status, 403);
+    assert.equal(db.inserted.length, 0, "拒否時は1行も書かないこと");
+  }
+
+  const same = new FakeD1();
+  const sameResult = await post(same, { category: "request", message: "テスト" }, {
+    headers: { Origin: "https://wordbank.example", "Sec-Fetch-Site": "same-origin" },
+  });
+  assert.equal(sameResult.response.status, 200);
+  assert.equal(same.inserted.length, 1);
+});
