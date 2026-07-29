@@ -940,26 +940,82 @@ assert.match(
 );
 
 // 公開物だけでなく、仕様書・fixture・ログ相当のテキストへ誤貼付した秘密も拒否する。
-// .git / node_modules / 画像は対象外。実在し得る長さだけに絞り、UIの省略例は誤検出しない。
-const SECRET_TEXT_EXTENSIONS = new Set([
+//
+// かつては拡張子の許可リストで対象を選んでいたが、それでは `.example`・`.jsonc`・
+// `.jsonl`・`.webmanifest`・拡張子なし（`_headers`）が静かに走査対象外になっていた。
+// 環境変数の例ファイルは秘密を貼りやすい場所なので、盲点として特に悪い。
+// 方式を反転し、「バイナリと分かるものだけを除外して、残りは全部読む」にする。
+const BINARY_EXTENSIONS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".avif",
+  ".woff", ".woff2", ".ttf", ".otf", ".eot",
+  ".pdf", ".zip", ".gz", ".br", ".wasm", ".traineddata",
+  ".mp3", ".mp4", ".webm", ".wav", ".ogg",
+]);
+// NUL混入検査は従来どおり「ソースとして扱う拡張子」だけを対象にする。
+// 新しい種類のバイナリ資産を足したときに、この検査が誤って落ちないようにするため。
+const SOURCE_TEXT_EXTENSIONS = new Set([
   ".html", ".js", ".mjs", ".json", ".md", ".sql", ".txt", ".yml", ".yaml",
 ]);
-function repositoryTextFiles(directory) {
+
+function walkRepository(directory) {
   const files = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.name === ".git" || entry.name === "node_modules") continue;
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...repositoryTextFiles(path));
-    else if (entry.isFile() && SECRET_TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) files.push(path);
+    if (entry.isDirectory()) files.push(...walkRepository(path));
+    else if (entry.isFile()) files.push(path);
   }
   return files;
 }
-const scanned = [publicHtml, ...repositoryTextFiles(repoDir).map(read)].join("\n");
+
+// 秘密スキャンの対象。バイナリ拡張子を外し、さらに中身にNULを含むものは
+// バイナリとみなして読み飛ばす（拡張子が未知のバイナリを取りこぼしても落ちない）。
+function repositoryScanFiles(directory) {
+  return walkRepository(directory).filter((path) => {
+    if (BINARY_EXTENSIONS.has(extname(path).toLowerCase())) return false;
+    try {
+      return !readFileSync(path).includes(0);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function repositoryTextFiles(directory) {
+  return walkRepository(directory)
+    .filter((path) => SOURCE_TEXT_EXTENSIONS.has(extname(path).toLowerCase()));
+}
+
+// 走査対象の選び方が退行しないよう、以前の盲点を実際に含んでいることを確かめる。
+// （許可リストへ戻すと、この検査が落ちる）
+const scanTargets = repositoryScanFiles(repoDir);
+for (const blindSpot of ["_headers", ".example", ".webmanifest"]) {
+  const existing = walkRepository(repoDir).filter((path) => path.endsWith(blindSpot));
+  if (existing.length === 0) continue; // そのファイルが無いリポジトリでは検査しない
+  assert.ok(
+    existing.every((path) => scanTargets.includes(path)),
+    `secret scan must cover ${blindSpot} files`,
+  );
+}
+const scanned = [publicHtml, ...scanTargets.map(read)].join("\n");
 assert.doesNotMatch(scanned, /AIza[0-9A-Za-z_-]{30,}/, "possible Gemini API key committed");
 assert.doesNotMatch(scanned, /gsk_[0-9A-Za-z]{30,}/, "possible Groq API key committed");
 assert.doesNotMatch(scanned, /sk-(?:proj-)?[0-9A-Za-z_-]{30,}/, "possible OpenAI API key committed");
 assert.doesNotMatch(scanned, /(?:ghp_|github_pat_)[0-9A-Za-z_]{30,}/, "possible GitHub token committed");
 assert.doesNotMatch(scanned, /ws_[0-9a-f]{60}\b/i, "possible real WordBank sync key committed");
+// 現行のV2資格情報。roomId(wr_)は秘密ではないが、secret(wk_)とvault key(wv_)は
+// 漏れれば同期データとAPIキー封筒がそのまま開く。3要素の組で貼られる事故が典型なので
+// 個別に検査する。テストの合成値はテンプレート（`wk_${"a".repeat(60)}`）なので当たらない。
+assert.doesNotMatch(scanned, /wk_[0-9a-f]{60}\b/i, "possible real WordBank room secret committed");
+assert.doesNotMatch(scanned, /wv_[0-9a-f]{64}\b/i, "possible real WordBank vault key committed");
+assert.doesNotMatch(scanned, /wr_[0-9a-f]{32}\.wk_/i, "possible real WordBank transfer code committed");
+// サーバー側HMACの鍵リング。これ自体がコミットされたら全部屋の認証が偽造できる。
+for (const path of scanTargets) {
+  assert.ok(
+    !path.endsWith("sync-auth-secrets.json"),
+    `sync auth key ring must never be committed: ${path}`,
+  );
+}
 
 // ソースにNULが混ざると grep も diff もそのファイルをバイナリ扱いにして、以後の
 // レビューや検索から静かに漏れる。実際に一度、一括置換の事故で文字列リテラルへ
