@@ -479,8 +479,15 @@ const mergeStateStart = publicHtml.indexOf("function mergeAppStates(");
 const mergeStateEnd = publicHtml.indexOf("\nfunction applyMergedRemoteState(", mergeStateStart);
 assert.ok(mergeStateStart >= 0 && mergeStateEnd > mergeStateStart,
   "application-state merge source is missing");
+// 進捗時刻の判定は削除の巻き添えを防ぐ要なので、スタブを書かず公開HTMLの実装をそのまま持ち込む。
+const progressMsStart = publicHtml.indexOf("function wordProgressMs(");
+const progressMsEnd = publicHtml.indexOf("\nfunction deletionKeyForWord(", progressMsStart);
+assert.ok(progressMsStart >= 0 && progressMsEnd > progressMsStart,
+  "word progress timestamp source is missing");
 const mergeStateSandbox = {};
 new Script(
+  "const nonNegativeInteger = (value) => { const n = Number(value); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };\n" +
+    `${publicHtml.slice(progressMsStart, progressMsEnd)}\n` +
   "const LEARNING_SCHEMA_VERSION = 1;\n" +
     "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];\n" +
     "const defaultState = () => ({ words: [], decks: [] });\n" +

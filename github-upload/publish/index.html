@@ -11113,6 +11113,23 @@ function wordAddedMs(word) {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+// 学習進捗の最終更新時刻を返す。progressUpdatedAt が無い旧データでは、
+// 回答履歴の最新時刻を使って、削除後に別端末で学習した単語を巻き込まない。
+function wordProgressMs(word) {
+  let latestHistoryAt = 0;
+  if (Array.isArray(word?.history)) {
+    for (const entry of word.history) {
+      try {
+        const at = new Date(entry?.at).getTime();
+        if (Number.isFinite(at)) latestHistoryAt = Math.max(latestHistoryAt, at);
+      } catch {
+        // 壊れた履歴時刻は更新根拠にせず、同期経路へ例外を漏らさない
+      }
+    }
+  }
+  return Math.max(nonNegativeInteger(word?.progressUpdatedAt), latestHistoryAt);
+}
+
 // 墓標のキー（デッキID＋半角スペース＋正規化した単語）。単語の同一性は deckId:term なので、
 // デッキをまたいだ同名語を削除に巻き込まないよう複合キーにする。
 // 旧データ（term単体キー）の墓標は mergeAppStates 側で互換読み込みする。
@@ -11246,6 +11263,8 @@ function normalizeWord(word) {
     enrich: normalizeEnrich(w.enrich),
     favorite: Boolean(w.favorite),
     favoriteUpdatedAt: nonNegativeInteger(w.favoriteUpdatedAt),
+    // 旧データには無いので0で補い、回答時から単調に更新する
+    progressUpdatedAt: nonNegativeInteger(w.progressUpdatedAt),
     stats: {
       correct: nonNegativeInteger(w.stats?.correct),
       wrong: nonNegativeInteger(w.stats?.wrong),
@@ -11390,11 +11409,22 @@ async function resolvePos(term) {
 
 function normalizeHistory(history) {
   if (!Array.isArray(history)) return [];
+  const fallbackAt = new Date().toISOString();
   return history
-    .map((entry) => ({
-      at: entry?.at || new Date().toISOString(),
-      correct: Boolean(entry?.correct),
-    }))
+    .map((entry) => {
+      let at = fallbackAt;
+      try {
+        // 未設定値は従来どおり現在時刻で補い、値がある場合だけ日時として正規化する。
+        if (entry?.at) {
+          const parsedAt = new Date(entry.at).getTime();
+          if (Number.isFinite(parsedAt)) at = new Date(parsedAt).toISOString();
+        }
+      } catch {
+        // 壊れた時刻は現在時刻へ倒し、インポート・同期経路へ例外を漏らさない
+      }
+      return { at, correct: Boolean(entry?.correct) };
+    })
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
     .slice(-50);
 }
 
@@ -12729,17 +12759,29 @@ function mergeAppStates(localState, remoteState, suppliedOptions) {
   const addWord = (word, source) => {
     // local/remoteは上で正規化済み。ここではマージ中にdeckIdだけ読み替えた浅いコピーで十分。
     const next = { ...word, deckId: remapDeckId(word.deckId) };
-    // 追加時刻より後に削除された単語は、合算で復活させない（削除を確実に反映）
+    // 追加・最終学習の両方より後に削除された単語だけを除外する。
+    // 削除後に別端末で回答していれば、成績・履歴・SRS状態を含む単語を残す。
     const term = normalizeTerm(next.term);
     let deletedAt = mergedDeletions[deletionKeyForWord(next)];
     // 旧形式の墓標は、その単語が単一デッキにしか無い場合のみ適用する（別デッキの同名語を守る）
     if (!deletedAt && mergedDeletions[term] && (termDecks.get(term)?.size || 0) <= 1) {
       deletedAt = mergedDeletions[term];
     }
-    if (deletedAt && deletedAt >= wordAddedMs(next)) return;
-    const existing =
-      wordById.get(next.id) ||
-      wordByTermDeck.get(wordKey(next));
+    if (
+      deletedAt &&
+      deletedAt >= wordAddedMs(next) &&
+      deletedAt >= wordProgressMs(next)
+    ) return;
+    const existingById = wordById.get(next.id);
+    // 重複IDが端末ごとに異なる順序で再採番されても、別の単語へ成績を付け替えない。
+    // ID一致を使うのは正規化した単語も一致するときだけ。ここで単語帳の一致まで求めると、
+    // 片方の端末で単語帳を移動した単語（単語帳の削除に伴う移動を含む）が
+    // 移動前後の2件へ複製されてしまうため、判定は単語名にとどめる。
+    const matchingById =
+      existingById && normalizeTerm(existingById.term) === normalizeTerm(next.term)
+        ? existingById
+        : null;
+    const existing = matchingById || wordByTermDeck.get(wordKey(next));
     if (existing) {
       const merged = mergeWord(existing, next, source);
       Object.assign(existing, merged);
@@ -12824,6 +12866,10 @@ function mergeWord(localWord, remoteWord, source) {
     favoriteUpdatedAt: remoteFavoriteIsNewer
       ? remoteWord.favoriteUpdatedAt
       : localWord.favoriteUpdatedAt,
+    progressUpdatedAt: Math.max(
+      wordProgressMs(localWord),
+      wordProgressMs(remoteWord),
+    ),
     stats,
     history,
     learning: mergeLearningState(localWord.learning, remoteWord.learning),
@@ -20902,6 +20948,13 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
   };
   const bumpStreak = () =>
     (learning.correctStreak = Math.max(0, Math.floor(Number(learning.correctStreak) || 0)) + 1);
+  // 端末の時計が後戻りしても、保存済みの進捗更新時刻を巻き戻さない。
+  const savedProgressAt = Number(word.progressUpdatedAt);
+  const answeredAt = Number(now);
+  word.progressUpdatedAt = Math.max(
+    Number.isFinite(savedProgressAt) && savedProgressAt > 0 ? Math.floor(savedProgressAt) : 0,
+    Number.isFinite(answeredAt) && answeredAt > 0 ? Math.floor(answeredAt) : 0,
+  );
   learning.srsUpdatedAt = now;
   learning.lastSrsResult = isCorrect ? "correct" : "wrong";
   if (isCorrect) {
@@ -23423,6 +23476,7 @@ elements.saveParsedButton.addEventListener("click", () => {
       cefr: window.Cefr.peek(item.term),
       pos: null,
       enrich: emptyEnrich(),
+      progressUpdatedAt: 0,
       stats: { correct: 0, wrong: 0 },
       history: [],
       learning: {
@@ -24228,6 +24282,7 @@ elements.importDeckShareInput?.addEventListener("change", async () => {
       pos: item.pos,
       enrich: emptyEnrich(),
       favorite: false,
+      progressUpdatedAt: 0,
       stats: { correct: 0, wrong: 0 },
       history: [],
       learning: {
