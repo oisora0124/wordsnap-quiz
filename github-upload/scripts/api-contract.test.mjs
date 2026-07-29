@@ -35,6 +35,14 @@ class FakeD1Statement {
     this.db.calls.push({ sql: this.sql, args: this.args });
     const rows = this.db.rows;
 
+    // 固定窓レート制限。ここを未対応SQLとして例外にすると、実装側のcatchが
+    // 飲み込んでfail-openになり、上限が一切検証されない。
+    if (/^SELECT window_start, count FROM rate_limits WHERE rl_key = \?$/i.test(this.sql)) {
+      if (!this.db.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+      const row = this.db.rateLimits.get(this.args[0]);
+      return row ? { ...row } : null;
+    }
+
     if (/^SELECT state, rev, updatedAt FROM states WHERE key = \?$/i.test(this.sql)) {
       const row = rows.get(this.args[0]);
       return row ? { state: row.state, rev: row.rev, updatedAt: row.updatedAt } : null;
@@ -94,6 +102,39 @@ class FakeD1Statement {
 
   async run() {
     this.db.calls.push({ sql: this.sql, args: this.args });
+
+    // rate_limits は state_revisions とは別テーブル。履歴テーブル不在の検査で
+    // 巻き添えにしないよう、requireHistoryTable より前に処理する。
+    if (/^INSERT INTO rate_limits /i.test(this.sql)) {
+      if (!this.db.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+      const [key, now, expiryCutoff, , , limit] = this.args;
+      const current = this.db.rateLimits.get(key);
+      if (current && current.window_start > expiryCutoff && current.count >= limit) {
+        return { meta: { changes: 0 } };
+      }
+      if (!current || current.window_start <= expiryCutoff) {
+        this.db.rateLimits.set(key, { window_start: now, count: 1 });
+      } else {
+        this.db.rateLimits.set(key, {
+          window_start: current.window_start,
+          count: current.count + 1,
+        });
+      }
+      return { meta: { changes: 1 } };
+    }
+    if (/^DELETE FROM rate_limits WHERE rl_key LIKE \? AND window_start <= \?$/i.test(this.sql)) {
+      if (!this.db.rateLimitsTableExists) throw new Error("no such table: rate_limits");
+      const [pattern, cutoff] = this.args;
+      const prefix = String(pattern).replace(/%$/, "");
+      let changes = 0;
+      for (const [key, row] of [...this.db.rateLimits]) {
+        if (!key.startsWith(prefix) || row.window_start > cutoff) continue;
+        this.db.rateLimits.delete(key);
+        changes += 1;
+      }
+      return { meta: { changes } };
+    }
+
     this.db.requireHistoryTable();
     if (/^INSERT OR IGNORE INTO state_revisions /i.test(this.sql)) {
       if (this.db.historyInsertError) throw new Error("history insert failed");
@@ -128,10 +169,16 @@ class FakeD1Statement {
 }
 
 class FakeD1 {
-  constructor(seed = [], { historyTable = true, historyInsertError = false } = {}) {
+  constructor(seed = [], {
+    historyTable = true,
+    historyInsertError = false,
+    rateLimitsTableExists = true,
+  } = {}) {
     this.rows = new Map(seed);
     this.revisions = new Map();
     this.calls = [];
+    this.rateLimits = new Map();
+    this.rateLimitsTableExists = rateLimitsTableExists;
     this.historyTable = historyTable;
     this.historyInsertError = historyInsertError;
   }
@@ -588,4 +635,61 @@ test("restoring an archived state through force PUT creates a new revision", asy
   const latest = await requestApi(db);
   assert.equal(latest.data.stateRev, 3);
   assert.deepEqual(latest.data.state, original);
+});
+
+// 旧同期は無認証で、形式を満たす任意のIDへ行を作れる。無制限だと states の行を
+// いくらでも増やせるため、「行を作る」操作だけに上限を掛けている。
+// 既存の行への書き込みはこの上限を通らない（既存利用者の同期は変わらない）。
+test("旧同期の新規キー作成はIP単位で上限を掛け、既存キーへの書き込みは制限しない", async () => {
+  const db = new FakeD1();
+  const ip = { "CF-Connecting-IP": "198.51.100.9" };
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const { response } = await requestApi(db, {
+      method: "PUT",
+      sync: `ws_created_${attempt}`,
+      body: { state: { words: [], decks: [], learningSchemaVersion: 1 } },
+      headers: ip,
+    });
+    assert.equal(response.status, 200, `${attempt + 1}件目までは作成できること`);
+  }
+
+  const limited = await requestApi(db, {
+    method: "PUT",
+    sync: "ws_created_overflow",
+    body: { state: { words: [], decks: [], learningSchemaVersion: 1 } },
+    headers: ip,
+  });
+  assert.equal(limited.response.status, 429);
+  assert.deepEqual(limited.data, { error: "rate limited", code: "rate-limited" });
+  assert.equal(db.rows.has("ws_created_overflow"), false, "上限超過では行を作らないこと");
+
+  // 既存キーへの書き込みは上限とは無関係に通る（既存利用者への影響なし）。
+  const existing = await requestApi(db, {
+    method: "PUT",
+    sync: "ws_created_0",
+    body: { state: { words: [], decks: [], learningSchemaVersion: 1 } },
+    headers: ip,
+  });
+  assert.equal(existing.response.status, 200, "既存キーの更新は制限しないこと");
+
+  // 別IPは自分の枠を持つ
+  const otherIp = await requestApi(db, {
+    method: "PUT",
+    sync: "ws_created_other",
+    body: { state: { words: [], decks: [], learningSchemaVersion: 1 } },
+    headers: { "CF-Connecting-IP": "198.51.100.10" },
+  });
+  assert.equal(otherIp.response.status, 200, "IPごとに枠を持つこと");
+});
+
+test("上限テーブルが無くても旧同期の作成は通す（fail-open）", async () => {
+  const db = new FakeD1([], { rateLimitsTableExists: false });
+  const { response } = await requestApi(db, {
+    method: "PUT",
+    sync: "ws_no_limit_table",
+    body: { state: { words: [], decks: [], learningSchemaVersion: 1 } },
+  });
+  assert.equal(response.status, 200, "上限を確かめられなくても同期は止めないこと");
+  assert.equal(db.rows.has("ws_no_limit_table"), true);
 });

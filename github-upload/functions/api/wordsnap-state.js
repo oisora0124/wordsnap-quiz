@@ -300,6 +300,11 @@ const V2_RATE_LIMITS = {
   "v2-create": { limit: 10, windowMs: 60 * 60 * 1000 },
   "v2-upgrade": { limit: 20, windowMs: 60 * 60 * 1000 },
   "v2-auth-fail": { limit: 30, windowMs: 10 * 60 * 1000 },
+  // 旧同期の「新しいキーで行を作る」操作。既に行がある既存利用者はこの枠を通らないため、
+  // 制限を掛けても現在の同期は一切変わらない。無制限だと、形式を満たす任意のIDを
+  // 送りつけるだけで states の行をいくらでも増やせる（容量と費用の一方的な消費）。
+  // 枠はV2の新規発行（10件/時）と同じ。新規利用者が作る行は1つなので実用上当たらない。
+  "legacy-create": { limit: 10, windowMs: 60 * 60 * 1000 },
 };
 
 function v2Unavailable() {
@@ -967,6 +972,9 @@ export async function onRequest(context) {
     if (current.rev === 0 && !(await rowExists(db, syncId))) {
       // 新規キー: baseRev 未指定 or 0 のときだけ作成（原子的 INSERT）
       if (!hasBase || baseRev === 0) {
+        // 行を作る操作だけに上限を掛ける。既存の行への書き込みはこの分岐に入らないので、
+        // 既存利用者（legacy・V2とも）の同期には影響しない。
+        if (await consumeV2RateLimit(db, request, "legacy-create")) return v2RateLimited();
         const row = await db
           .prepare(
             "INSERT OR IGNORE INTO states (key, state, rev, updatedAt) VALUES (?, ?, 1, ?) RETURNING rev, updatedAt",
