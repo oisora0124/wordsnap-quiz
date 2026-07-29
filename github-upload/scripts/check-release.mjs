@@ -212,13 +212,14 @@ assert.match(
   /<meta\s+name=["']referrer["']\s+content=["']no-referrer["']\s*\/?>/i,
   "sync keys in the page URL must not be sent as referrers",
 );
-assert.match(publicHtml, /function\s+downloadStandalone\s*\(/, "standalone download function is missing");
-assert.match(publicHtml, /const\s+STANDALONE_DOWNLOAD_TIMEOUT_MS\s*=\s*60\s*\*\s*1000/,
-  "standalone download must have a bounded timeout");
-assert.match(publicHtml, /fetch\(sourceUrl,\s*{\s*cache:\s*["']no-store["'],\s*signal:\s*controller\.signal\s*}\)/,
-  "standalone source download must use the timeout signal");
-assert.match(publicHtml, /clearTimeout\(timeout\)[\s\S]*?function\s+storageKeyFor/,
-  "standalone download timeout must be cleared after completion");
+// 「HTMLを保存」（オフライン用の単体HTML書き出し）は廃止した。復活させないよう、
+// ボタン・関数・要素参照のいずれも残っていないことを固定する。
+for (const removed of ["downloadStandalone", "downloadToolButton", "STANDALONE_DOWNLOAD_TIMEOUT_MS"]) {
+  assert.ok(
+    !publicHtml.includes(removed),
+    `removed standalone-download leftover: ${removed}`,
+  );
+}
 const sampleMatch = publicHtml.match(/const\s+SAMPLE_TEXT\s*=\s*`([\s\S]*?)`;/);
 assert.ok(sampleMatch, "built-in vocabulary sample is missing");
 const sampleRows = sampleMatch[1]
@@ -248,25 +249,8 @@ for (const [index, match] of inlineScripts.entries()) {
     `inline script ${index + 1} has a syntax error`,
   );
 }
-assert.doesNotMatch(
-  publicHtml,
-  /fetch\(["'](?:styles\.css|cefr\.js|enrich\.js|app\.js)["']\)/,
-  "standalone download still fetches source files that are not published",
-);
-assert.match(publicHtml, /sourceUrl\.search\s*=\s*["']["']/, "download source must drop URL query secrets");
-assert.match(publicHtml, /sourceUrl\.hash\s*=\s*["']["']/, "download source must drop URL fragments");
-assert.match(
-  publicHtml,
-  /location\.protocol\s*===\s*["']https:["']/,
-  "standalone download must be enabled for the published HTTPS app",
-);
 assert.match(publicHtml, /function\s+downloadBlob[\s\S]*?document\.body\.append\(link\)[\s\S]*?link\.click\(\)[\s\S]*?link\.remove\(\)[\s\S]*?setTimeout\(\(\)\s*=>\s*URL\.revokeObjectURL\(objectUrl\),\s*0\)/,
   "blob downloads must remain attached until the browser has accepted the save action");
-assert.doesNotMatch(
-  publicHtml,
-  /document\.querySelector\(["']link\[rel=[\\"']stylesheet/,
-  "legacy visibility check still hides the standalone download in the bundled app",
-);
 assert.match(
   publicHtml,
   /function\s+forcePullReplace[\s\S]*?offerUndo\(localSnapshot\)/,
@@ -284,25 +268,6 @@ assert.match(
   "durable undo checkpoint must be recovered during startup",
 );
 
-// 実際の保存処理と同じ変換を行い、生成後HTMLも構文・参照・秘密情報を検査する。
-let standaloneHtml = publicHtml.replace(/\s*<link\b[^>]*rel=["']manifest["'][^>]*>/i, "");
-for (const assetPath of ["assets/wordsnap-icon-light.png", "assets/wordsnap-icon-dark.png"]) {
-  const dataUrl = `data:image/png;base64,${readFileSync(join(publishDir, assetPath)).toString("base64")}`;
-  standaloneHtml = standaloneHtml.split(assetPath).join(dataUrl);
-}
-assert.doesNotMatch(standaloneHtml, /rel=["']manifest["']/i, "standalone HTML still has a manifest");
-assert.doesNotMatch(
-  standaloneHtml,
-  /assets\/wordsnap-icon-(?:light|dark)\.png/,
-  "standalone HTML still has external theme icon references",
-);
-const standaloneScripts = [...standaloneHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
-for (const [index, match] of standaloneScripts.entries()) {
-  assert.doesNotThrow(
-    () => new Script(match[1], { filename: `standalone:inline-script-${index + 1}.js` }),
-    `standalone inline script ${index + 1} has a syntax error`,
-  );
-}
 
 assert.equal(manifest.name, "WordBank", "manifest name must be WordBank");
 assert.ok(Array.isArray(manifest.icons) && manifest.icons.length >= 2, "manifest icons are incomplete");
@@ -989,7 +954,7 @@ function repositoryTextFiles(directory) {
   }
   return files;
 }
-const scanned = [standaloneHtml, ...repositoryTextFiles(repoDir).map(read)].join("\n");
+const scanned = [publicHtml, ...repositoryTextFiles(repoDir).map(read)].join("\n");
 assert.doesNotMatch(scanned, /AIza[0-9A-Za-z_-]{30,}/, "possible Gemini API key committed");
 assert.doesNotMatch(scanned, /gsk_[0-9A-Za-z]{30,}/, "possible Groq API key committed");
 assert.doesNotMatch(scanned, /sk-(?:proj-)?[0-9A-Za-z_-]{30,}/, "possible OpenAI API key committed");

@@ -1291,8 +1291,7 @@ button.ghost.danger:hover {
 /* ---------- Hero controls (theme + download) ---------- */
 
 .theme-toggle,
-.sound-toggle,
-.tool-button {
+.sound-toggle {
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -1302,8 +1301,7 @@ button.ghost.danger:hover {
 }
 
 .theme-toggle:hover,
-.sound-toggle:hover,
-.tool-button:hover {
+.sound-toggle:hover {
   color: var(--ink);
   background: var(--surface-2);
 }
@@ -1399,7 +1397,6 @@ button.ghost.danger:hover {
   transform: rotate(45deg);
 }
 
-.tool-icon,
 .button-icon,
 .summary-icon {
   position: relative;
@@ -1407,35 +1404,6 @@ button.ghost.danger:hover {
   width: 1rem;
   height: 1rem;
   flex: none;
-}
-
-.download-icon {
-  border: 2px solid currentColor;
-  border-top: 0;
-  border-radius: 0 0 4px 4px;
-}
-
-.download-icon::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: -0.25rem;
-  width: 2px;
-  height: 0.68rem;
-  background: currentColor;
-  transform: translateX(-50%);
-}
-
-.download-icon::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 0.23rem;
-  width: 0.45rem;
-  height: 0.45rem;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: translateX(-50%) rotate(45deg);
 }
 
 .spark-icon {
@@ -4995,8 +4963,7 @@ body.tutorial-open {
     white-space: normal;
   }
 
-  .theme-toggle,
-  .tool-button {
+  .theme-toggle {
     flex: 1;
   }
 
@@ -5366,10 +5333,6 @@ body.tutorial-open {
             <button id="themeToggle" class="theme-toggle" type="button" aria-label="ダークテーマに切り替える">
               <span class="theme-toggle-icon" aria-hidden="true"></span>
               <span class="theme-toggle-text">ダーク</span>
-            </button>
-            <button id="downloadToolButton" class="tool-button" type="button" aria-label="オフライン用HTMLを保存" title="オフライン用HTMLを保存">
-              <span class="tool-icon download-icon" aria-hidden="true"></span>
-              <span>HTMLを保存</span>
             </button>
           </div>
         </div>
@@ -9491,7 +9454,6 @@ const elements = {
   statsBlock: document.querySelector("#statsBlock"),
   statsGrid: document.querySelector("#statsGrid"),
   resumeQuizButton: document.querySelector("#resumeQuizButton"),
-  downloadToolButton: document.querySelector("#downloadToolButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
   shareToolHeaderButton: document.querySelector("#shareToolHeaderButton"),
   safeShareWarning: document.querySelector("#safeShareWarning"),
@@ -9560,7 +9522,6 @@ const DECK_SHARE_MAX_WORDS = 5000;
 // 同期サーバーが応答しない場合にpulling/pushing状態を無期限に残さない。
 // 1万語級の圧縮送受信と低速回線にも余裕を持たせ、60秒で安全に中断して既存の再試行へ戻す。
 const SYNC_REQUEST_TIMEOUT_MS = 60 * 1000;
-const STANDALONE_DOWNLOAD_TIMEOUT_MS = 60 * 1000;
 const OCR_MAX_FILE_BYTES = 40 * 1024 * 1024; // 画像取り込み(OCR/AI): 40MB
 const OCR_MAX_PIXELS = 80 * 1000 * 1000; // 画像取り込み(OCR/AI): 8,000万画素
 // エラーメッセージ中の上限表記は定数から作る（値を変えたら文言も自動で揃う）
@@ -10660,61 +10621,6 @@ function initStepTabs() {
       nextTab.focus();
       setActiveStep(nextTab.dataset.stepTab, { scroll: true });
     });
-  }
-}
-
-async function downloadStandalone() {
-  setStatus("ツールの保存用HTMLを準備しています…");
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), STANDALONE_DOWNLOAD_TIMEOUT_MS);
-  try {
-    // 公開中の index.html はCSSとJavaScriptをすでに内包している。実行後のDOMを
-    // 直列化すると入力中のAPIキーや一時表示が混入し得るため、未実行の配布元を取得する。
-    const sourceUrl = new URL("index.html", window.location.href);
-    sourceUrl.search = "";
-    sourceUrl.hash = "";
-    const response = await fetch(sourceUrl, { cache: "no-store", signal: controller.signal });
-    if (!response.ok) throw new Error(`配布元を取得できませんでした（HTTP ${response.status}）。`);
-    const html = await response.text();
-    if (!/<title>\s*WordBank\s*<\/title>/i.test(html) || !html.includes("function downloadStandalone")) {
-      throw new Error("取得したファイルがWordBank本体ではありません。");
-    }
-
-    // 保存版を別フォルダやfile://で開いてもロゴが欠けないよう、HTMLから参照する
-    // 2つのテーマ用画像をData URLへ埋め込む。PWA manifestは保存版では不要なので外す。
-    const blobToDataUrl = (blob) =>
-      new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(reader.error || new Error("画像の埋め込みに失敗しました。"));
-        reader.readAsDataURL(blob);
-      });
-    const assetPaths = ["assets/wordsnap-icon-light.png", "assets/wordsnap-icon-dark.png"];
-    const embeddedAssets = await Promise.all(
-      assetPaths.map(async (path) => {
-        const assetResponse = await fetch(new URL(path, sourceUrl), {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!assetResponse.ok) throw new Error(`画像を取得できませんでした（${path}）。`);
-        return [path, await blobToDataUrl(await assetResponse.blob())];
-      }),
-    );
-    let standaloneHtml = html.replace(/\s*<link\b[^>]*rel=["']manifest["'][^>]*>/i, "");
-    for (const [path, dataUrl] of embeddedAssets) {
-      standaloneHtml = standaloneHtml.split(path).join(dataUrl);
-    }
-
-    const blob = new Blob([standaloneHtml], { type: "text/html;charset=utf-8" });
-    downloadBlob(blob, "wordbank.html");
-    setStatus("WordBankをHTMLとして保存しました。現在の単語・成績・個人キー・AIキーはファイルに含まれません。");
-  } catch (error) {
-    const message = error?.name === "AbortError"
-      ? "通信が60秒以内に完了しませんでした。接続を確認して、もう一度お試しください。"
-      : error?.message || "公開URLから開いてお試しください。";
-    setStatus(`保存に失敗しました：${message}`);
-  } finally {
-    window.clearTimeout(timeout);
   }
 }
 
@@ -24664,14 +24570,6 @@ elements.vibrateToggle?.addEventListener("change", () => {
   if (elements.vibrateToggle.checked) vibrateFeedback(15); // ONにした瞬間に体感できるよう1回だけ振動
   playSound("tap");
 });
-// 配布元HTMLを安全に再取得できる http/https 版だけ「HTMLを保存」を表示する。
-// file:// で開いた保存版は fetch できないため、失敗するボタンを出さない。
-if (location.protocol === "http:" || location.protocol === "https:") {
-  elements.downloadToolButton.addEventListener("click", downloadStandalone);
-} else {
-  elements.downloadToolButton.hidden = true;
-}
-
 // 他人に渡すための「共有用リンク」（個人キー ?w= を含まないURL）をワンタップで共有/コピー
 function shareTool() {
   // file:// で直接開いている場合、location由来のURLはこの端末のファイルパスで
