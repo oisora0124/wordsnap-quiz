@@ -358,3 +358,51 @@ test("保存側の期限切れ行を掃除する（IPごとに行が増え続け
     "期限切れの保存側の行は消えること",
   );
 });
+
+// 「動かないので設定を全部貼ります」は必ず起きる。貼られた時点で利用者の手は離れているので、
+// 保存とメール送信の前にこちら側で伏せる。拒否ではなく伏せ字にするのは、
+// 本文に本物の要望が混じっているため。
+test("本文・連絡先に貼られた秘密は保存前に伏せ字にする", async () => {
+  const db = new FakeD1();
+  const wk = `wk_${"a".repeat(60)}`;
+  const wv = `wv_${"b".repeat(64)}`;
+  const ws = `ws_${"c".repeat(60)}`;
+  const gemini = `AIza${"D".repeat(35)}`;
+  const groq = `gsk_${"e".repeat(40)}`;
+  const openai = `sk-proj-${"f".repeat(40)}`;
+
+  const { response } = await post(db, {
+    category: "bug",
+    message: `同期できません。コードは ${wk} と ${wv} です。旧キーは ${ws}。`
+      + ` キーは ${gemini} / ${groq} / ${openai} を入れています。`
+      + ` URLは https://wordbank.pages.dev/?w=${ws}&mode=x です。`,
+    contact: `連絡先: ${gemini}`,
+    appVersion: `web-${wk}`,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(db.inserted.length, 1);
+
+  const row = db.inserted[0];
+  const saved = `${row.message}\n${row.contact}\n${row.app_version}`;
+  for (const secret of [wk, wv, ws, gemini, groq, openai]) {
+    assert.ok(!saved.includes(secret), `伏せ字にすること: ${secret.slice(0, 6)}…`);
+  }
+  assert.ok(saved.includes("[伏せ字]"), "伏せた印が残ること");
+  assert.ok(row.message.includes("同期できません"), "本物の要望は残すこと");
+});
+
+test("秘密だけの投稿も受理する（伏せ字にしたうえで保存する）", async () => {
+  const db = new FakeD1();
+  const { response } = await post(db, { category: "other", message: `wk_${"a".repeat(60)}` });
+  assert.equal(response.status, 200, "伏せ字にした結果が空扱いにならないこと");
+  assert.equal(db.inserted[0].message, "[伏せ字]");
+});
+
+test("伏せ字で伸びても保存長は上限を超えない", async () => {
+  const db = new FakeD1();
+  // 上限いっぱいの本文に秘密を混ぜる。切り詰めてから伏せるので、伏せ字分だけ短くなる。
+  const secret = `wk_${"a".repeat(60)}`;
+  await post(db, { category: "other", message: `${secret} ${"あ".repeat(2000)}` });
+  assert.ok(db.inserted[0].message.length <= 2000, "保存長が上限内であること");
+  assert.ok(!db.inserted[0].message.includes(secret), "上限付近でも伏せること");
+});

@@ -623,3 +623,25 @@ test("Resend への直接HTTP呼び出しには User-Agent を付ける（無い
     fetchStub.restore();
   }
 });
+
+// 保存だけ伏せてもメールで平文が出ていけば意味がない。送信本文でも伏せることを固定する。
+test("メール本文にも秘密を出さない", async () => {
+  const fetchStub = captureFetch();
+  try {
+    const db = new FakeD1();
+    const wk = `wk_${"a".repeat(60)}`;
+    const gemini = `AIza${"D".repeat(35)}`;
+    await post(db, {
+      message: `設定を貼ります: ${wk} / ${gemini}`,
+      contact: gemini,
+    }, { env: RESEND_ENV });
+
+    assert.equal(fetchStub.calls.length, 1, "送信されること");
+    const sent = JSON.stringify(fetchStub.calls[0]);
+    assert.ok(!sent.includes(wk), "同期の秘密がメールへ出ないこと");
+    assert.ok(!sent.includes(gemini), "APIキーがメールへ出ないこと");
+    assert.ok(sent.includes("設定を貼ります"), "本文そのものは届くこと");
+  } finally {
+    fetchStub.restore();
+  }
+});

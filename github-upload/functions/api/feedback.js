@@ -68,6 +68,29 @@ function cleanText(value, maxLength) {
   return out.slice(0, maxLength);
 }
 
+// 投稿欄へ秘密が貼られる事故は必ず起きる（「動かないので設定を全部貼ります」）。
+// 貼られた時点で利用者の手は離れているので、こちら側で保存とメール送信の前に伏せる。
+// 拒否ではなく伏せ字にするのは、本文には本物の要望が混じっているため。
+// telemetry.js と同じ考え方だが、両APIは独立させる方針なので実装は別に持つ。
+const SECRET_PATTERN = /w(s|k|r|v)?_[0-9a-f]{16,}/gi;
+const AI_KEY_PATTERNS = [
+  /AIza[0-9A-Za-z_-]{20,}/g,          // Gemini
+  /gsk_[0-9A-Za-z]{20,}/g,            // Groq
+  /sk-(?:proj-)?[0-9A-Za-z_-]{20,}/g, // OpenAI形式
+  /(?:ghp_|github_pat_)[0-9A-Za-z_]{20,}/g,
+];
+const URL_QUERY_PATTERN = /\b(https?:\/\/[^\s?#]+)\?[^#\s]*/gi;
+const W_QUERY_PATTERN = /([?&]w=)[^&#\s]*/gi;
+
+function redactSecrets(value) {
+  let out = String(value || "")
+    .replace(URL_QUERY_PATTERN, "$1?[伏せ字]")
+    .replace(W_QUERY_PATTERN, "$1[伏せ字]")
+    .replace(SECRET_PATTERN, "[伏せ字]");
+  for (const pattern of AI_KEY_PATTERNS) out = out.replace(pattern, "[伏せ字]");
+  return out;
+}
+
 // Content-Typeは「essence（型/サブタイプ）」だけで判定する。部分一致だと
 // `text/plain;x=application/json` のように、ブラウザがプリフライトなしで送れる
 // simple POST（essenceはtext/plain）を通してしまい、クロスサイトからの
@@ -507,14 +530,17 @@ export async function onRequest(context) {
     return json({ error: "invalid json" }, 400);
   }
 
-  const message = cleanText(payload.message, MAX_MESSAGE).trim();
-  if (!message) {
+  // 長さを切り詰めてから伏せる。先に伏せると、伏せ字で伸びた分だけ本文が削れる。
+  // 空判定は伏せる前の値で行う（伏せ字だけになった投稿も「内容あり」として受ける）。
+  const cleanedMessage = cleanText(payload.message, MAX_MESSAGE).trim();
+  if (!cleanedMessage) {
     return json({ error: "message required" }, 400);
   }
+  const message = redactSecrets(cleanedMessage);
   const rawCategory = String(payload.category || "").trim();
   const category = CATEGORIES.has(rawCategory) ? rawCategory : "other";
-  const contact = cleanText(payload.contact, MAX_CONTACT).trim();
-  const appVersion = cleanText(payload.appVersion, MAX_APP_VERSION).trim();
+  const contact = redactSecrets(cleanText(payload.contact, MAX_CONTACT).trim());
+  const appVersion = redactSecrets(cleanText(payload.appVersion, MAX_APP_VERSION).trim());
   // プライバシー優先: User-Agent は保存しない（開示を増やさず、最小データに徹する）。
   // 列はスキーマ安定のため残し、常に空文字を入れる。
   const userAgent = "";
