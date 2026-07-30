@@ -741,7 +741,17 @@ assert.match(api, /latest\.corrupt[\s\S]*?code:\s*["']corrupt_state["']/,
 // 効かず、Tesseractが動作中に自分で取る worker と core を守れなかったため移行した。
 // ここでは「CDNから実行していないこと」と「置いてあるファイルが正規物のままであること」を
 // 両方固定する。ハッシュは VENDOR.md の表と同じ値。
-const TESSERACT_VENDOR_DIR = join(publishDir, "assets", "tesseract");
+// 版はパスに含める（Service Workerのcache-firstで古いものが残らないようにするため）。
+// アプリ側の宣言と実際のディレクトリ名が食い違うと404でOCRが死ぬので、両方を照合する。
+const tesseractVersionMatch = publicHtml.match(/const TESSERACT_VERSION = "([\d.]+)";/);
+assert.ok(tesseractVersionMatch, "OCR asset version declaration is missing");
+const TESSERACT_VERSION = tesseractVersionMatch[1];
+assert.match(
+  publicHtml,
+  /const TESSERACT_ASSET_BASE = new URL\(`assets\/tesseract\/\$\{TESSERACT_VERSION\}\/`, document\.baseURI\)\.href;/,
+  "OCR assets must be served from a version-scoped path",
+);
+const TESSERACT_VENDOR_DIR = join(publishDir, "assets", "tesseract", TESSERACT_VERSION);
 const TESSERACT_VENDOR_HASHES = {
   "tesseract-core-lstm.wasm.js": "ljppwjVnA7rpAU/v9enQiR6pXDStaEAYw9I+7ddiEynJcmDNnjHCmcvizBeO3cSA",
   "tesseract-core-relaxedsimd-lstm.wasm.js": "/8lT8Rpy0sk4iWEyUA0rKewXOiWu/nV0JjVCd2vMw2nlpqBsk1/6GttRwex7g/S8",
@@ -757,11 +767,6 @@ for (const [name, expected] of Object.entries(TESSERACT_VENDOR_HASHES)) {
 }
 // 実行コードの取得先が自オリジンであること。CDNのURLへ戻ると、整合性検査の掛からない
 // worker/core を再び外部から実行することになる。
-assert.match(
-  publicHtml,
-  /const TESSERACT_ASSET_BASE = new URL\("assets\/tesseract\/", document\.baseURI\)\.href;/,
-  "OCR assets must be loaded from the same origin",
-);
 assert.match(publicHtml, /script\.src = TESSERACT_ASSET_BASE \+ "tesseract\.min\.js";/,
   "the OCR library must be loaded from the vendored copy");
 assert.match(publicHtml, /workerPath: TESSERACT_ASSET_BASE \+ "worker\.min\.js",/,

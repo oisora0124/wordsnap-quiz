@@ -15203,9 +15203,14 @@ function validPair(term, meaning) {
   return { term: cleanTerm, meaning: cleanMeaning };
 }
 
-// OCRの実行コード一式の置き場所。worker から importScripts される core も
-// ここから読む。相対のままだと worker 内での解決基準が変わり得るので絶対URLにする。
-const TESSERACT_ASSET_BASE = new URL("assets/tesseract/", document.baseURI).href;
+// OCRの実行コード一式の置き場所。worker から importScripts される core もここから読む。
+// 相対のままだと worker 内での解決基準が変わり得るので絶対URLにする。
+//
+// パスに版を含めるのは Service Worker 対策。静的アセットは cache-first で保持され、
+// URLが変わらないと版を上げても古いものが配られ続ける（CDNから読んでいた頃は版付きURLだった
+// ので更新が自然に届いていた）。版をディレクトリ名に入れておけば、更新＝別URL＝再取得になる。
+const TESSERACT_VERSION = "7.0.0";
+const TESSERACT_ASSET_BASE = new URL(`assets/tesseract/${TESSERACT_VERSION}/`, document.baseURI).href;
 
 let tesseractLoadPromise = null;
 
