@@ -11980,30 +11980,68 @@ const V2_CODE_SAVED_KEY = "wordsnap-v2-code-saved:v1";
 const V2_CODE_SAVED_MAX = 8;
 const V2_ROOM_ID_PATTERN = /^wr_[0-9a-f]{32}$/;
 
+// 「保存済み」の記録は部屋IDだけでは足りない。引き継ぎコードは
+// roomId.secret[.vaultKey] の組であり、あとから vault key を発行すると
+// コードの中身が変わる。部屋IDだけで判定していると、古いコードを保存した人に
+// 「保存済み」と表示し続け、端末を失ったときに vault 側が復旧不能になる。
+// そこで記録の単位を「部屋ID＋現在のコードの指紋」にする。
+// 指紋は端末内の staleness 判定にしか使わないので、暗号学的強度は要らない。
+function v2CodeSavedToken(credential) {
+  const roomId = credential?.roomId || "";
+  if (!roomId) return "";
+  const vaultKey = credential?.vaultKey || "";
+  // vault key を持たない資格情報は旧形式（部屋IDのみ）と同じ記録にする。
+  // 既に「保存済み」にしてある利用者へ、内容が変わっていないのに再通知しないため。
+  return vaultKey ? `${roomId}#${shortKeyFingerprint(vaultKey)}` : roomId;
+}
+
+// 部屋IDだけを渡された場合の資格情報。現在の資格情報が同じ部屋のときだけ
+// その vault key を使う。別の部屋の鍵を混ぜると、別物の指紋になってしまう。
+function credentialForSavedToken(roomId) {
+  // 資格情報を読む手段が無い文脈（切り出しての検査など）では vault key 無しとして扱う。
+  const active = typeof getActiveV2Credential === "function" ? getActiveV2Credential() : null;
+  return {
+    roomId,
+    vaultKey: active?.roomId === roomId ? (active.vaultKey || "") : "",
+  };
+}
+
 function readV2SavedRooms() {
   try {
     const raw = localStorage.getItem(V2_CODE_SAVED_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((id) => typeof id === "string" && V2_ROOM_ID_PATTERN.test(id));
+    // 旧形式（部屋IDのみ）と新形式（部屋ID#指紋）の両方を受ける。
+    return parsed.filter(
+      (id) => typeof id === "string" && V2_ROOM_ID_PATTERN.test(id.split("#", 1)[0]),
+    );
   } catch {
     // 壊れた値は「保存済みが無い」として扱う。注意が残るだけで安全側。
     return [];
   }
 }
 
-function isV2CodeSavedFor(roomId) {
-  if (!roomId) return false;
-  return readV2SavedRooms().includes(roomId);
+function isV2CodeSavedFor(roomIdOrCredential) {
+  const credential = typeof roomIdOrCredential === "string"
+    ? credentialForSavedToken(roomIdOrCredential)
+    : roomIdOrCredential;
+  const token = v2CodeSavedToken(credential);
+  if (!token) return false;
+  return readV2SavedRooms().includes(token);
 }
 
 // 端末外へ書き出したときだけ呼ぶ。コピー操作からは呼ばない。
-function markV2CodeSavedFor(roomId) {
+function markV2CodeSavedFor(roomIdOrCredential) {
+  const credential = typeof roomIdOrCredential === "string"
+    ? credentialForSavedToken(roomIdOrCredential)
+    : roomIdOrCredential;
+  const roomId = credential?.roomId || "";
   if (!roomId || !V2_ROOM_ID_PATTERN.test(roomId)) return;
+  const token = v2CodeSavedToken(credential);
   try {
-    const rooms = readV2SavedRooms().filter((id) => id !== roomId);
-    rooms.push(roomId);
+    const rooms = readV2SavedRooms().filter((id) => id !== token);
+    rooms.push(token);
     localStorage.setItem(V2_CODE_SAVED_KEY, JSON.stringify(rooms.slice(-V2_CODE_SAVED_MAX)));
   } catch {
     // 保存できない環境では注意が出続けるだけ（安全側）

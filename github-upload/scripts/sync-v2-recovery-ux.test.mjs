@@ -25,7 +25,12 @@ function recoveryUxSource() {
   const end = html.indexOf("\nfunction renderV2CredentialUi", start);
   assert.ok(start >= 0, "回復UXの定義が見つかること");
   assert.ok(end > start, "回復UXの終端が見つかること");
-  return html.slice(start, end);
+  // 保存済みマーカーの指紋計算はこの範囲より後ろで定義されているので併せて持ち込む。
+  // スタブに置き換えると「同じ鍵なら同じ記録・違う鍵なら別の記録」を検証できない。
+  const fingerprintStart = html.indexOf("function shortKeyFingerprint(");
+  assert.ok(fingerprintStart >= 0, "shortKeyFingerprint が見つかること");
+  const fingerprintEnd = html.indexOf("\n}", fingerprintStart) + 2;
+  return `${html.slice(start, end)}\n${html.slice(fingerprintStart, fingerprintEnd)}`;
 }
 
 // identity と appState / syncState を差し替えて条件判定だけを評価する。
@@ -35,6 +40,7 @@ function makeRecoveryUx({
   verifiedSyncTarget = "",
   verifiedWordCount = 1,
   stored = null,
+  activeCredential = null,
 } = {}) {
   const store = new Map();
   if (stored !== null) store.set(SAVED_KEY, stored);
@@ -56,6 +62,8 @@ function makeRecoveryUx({
     elements: { syncV2RecoveryNotice: { hidden: true }, syncV2Section: { open: false } },
     document: { querySelector: () => null },
     syncRequestRoute: () => identity,
+    // 部屋IDだけを渡す呼び出しは、現在の資格情報から vault key を引く。
+    getActiveV2Credential: () => activeCredential,
   };
   vm.runInNewContext(recoveryUxSource(), context);
   if (verifiedSyncTarget) context.recordVerifiedSync(verifiedSyncTarget, verifiedWordCount);
@@ -430,4 +438,102 @@ test("syncRequestの成功returnは、必ず保存先を付けてから返す", 
   for (const guard of ["validSyncGetResponse", "validSyncPutResponse", "if (!response.ok)"]) {
     assert.ok(req.indexOf(guard) < attach, `${guard} の検証より後に付与すること`);
   }
+});
+
+// 引き継ぎコードは roomId.secret[.vaultKey] の組。あとから vault key を発行すると
+// コードの中身が変わるのに、部屋IDだけで「保存済み」を判定していると、
+// 古いコードを保存した人へ通知が出ないまま vault 側が復旧不能になる。
+const VAULT_A = `wv_${"1".repeat(64)}`;
+const VAULT_B = `wv_${"2".repeat(64)}`;
+
+test("vault keyを発行すると、保存済みの記録は無効になり再び保管を促す", () => {
+  // vault key を持たない状態でコードを保存した
+  const { context, store } = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    activeCredential: { roomId: ROOM_A, vaultKey: "" },
+  });
+  context.markV2CodeSavedFor(ROOM_A);
+  assert.equal(context.shouldPromptV2CodeBackup(), false, "保存直後は促さない");
+
+  // あとから vault key を発行＝コードが3要素になった
+  const after = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    stored: store.get(SAVED_KEY),
+    activeCredential: { roomId: ROOM_A, vaultKey: VAULT_A },
+  });
+  assert.equal(
+    after.context.isV2CodeSavedFor(ROOM_A),
+    false,
+    "コードの中身が変わったら未保存へ戻ること",
+  );
+  assert.equal(after.context.shouldPromptV2CodeBackup(), true, "新しいコードの保管を促すこと");
+});
+
+test("同じvault keyのままなら保存済みは保たれる（無用な再通知をしない）", () => {
+  const { context, store } = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    activeCredential: { roomId: ROOM_A, vaultKey: VAULT_A },
+  });
+  context.markV2CodeSavedFor(ROOM_A);
+
+  const again = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    stored: store.get(SAVED_KEY),
+    activeCredential: { roomId: ROOM_A, vaultKey: VAULT_A },
+  });
+  assert.equal(again.context.isV2CodeSavedFor(ROOM_A), true);
+  assert.equal(again.context.shouldPromptV2CodeBackup(), false);
+});
+
+test("vault keyが差し替わった場合も未保存へ戻る", () => {
+  const { context, store } = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    activeCredential: { roomId: ROOM_A, vaultKey: VAULT_A },
+  });
+  context.markV2CodeSavedFor(ROOM_A);
+
+  const swapped = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    stored: store.get(SAVED_KEY),
+    activeCredential: { roomId: ROOM_A, vaultKey: VAULT_B },
+  });
+  assert.equal(swapped.context.isV2CodeSavedFor(ROOM_A), false);
+});
+
+test("別の部屋のvault keyを取り違えて指紋にしない", () => {
+  const { context } = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    // 現在の資格情報は別の部屋のもの
+    activeCredential: { roomId: ROOM_B, vaultKey: VAULT_A },
+  });
+  context.markV2CodeSavedFor(ROOM_A);
+  // ROOM_A は vault key 無しとして記録される＝旧形式と同じ
+  assert.equal(context.isV2CodeSavedFor(ROOM_A), true);
+  const stored = JSON.parse(context.localStorage.getItem(SAVED_KEY));
+  assert.deepEqual(stored, [ROOM_A], "別の部屋の鍵を指紋に混ぜないこと");
+});
+
+test("旧形式の記録（部屋IDのみ）はそのまま保存済みとして読める", () => {
+  const { context } = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    stored: JSON.stringify([ROOM_A]),
+    activeCredential: { roomId: ROOM_A, vaultKey: "" },
+  });
+  assert.equal(context.isV2CodeSavedFor(ROOM_A), true, "既存利用者へ再通知しないこと");
 });
