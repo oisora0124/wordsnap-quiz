@@ -31,20 +31,34 @@ function updateCspScriptSrc(headersText, hashes) {
 // 置換で他のヘッダやルートセレクタを壊していないことを確かめる。
 // ここが崩れると、防御ヘッダが無いまま本番へ出る。
 function assertHeadersIntact(text, label) {
+  // ファイル全体を検索すると、ヘッダ行が `/*` ブロックの外へ出ても通ってしまう。
+  // Cloudflare は各ルール行の下に続く行だけを、そのパターンへのヘッダとして扱う。
+  // 配信されるのは `/*` ブロックの中身なので、その範囲だけを見る。
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line.trim() === "/*");
+  if (start < 0) throw new Error(`_headers が壊れています（${label}）: /* ブロックがありません。`);
+  const block = [];
+  for (const line of lines.slice(start + 1)) {
+    // 次のルール行（インデントなしの非コメント行）でブロックは終わる
+    if (line.trim() !== "" && !/^\s/.test(line) && !line.startsWith("#")) break;
+    block.push(line);
+  }
+  const blockText = block.join("\n");
   const required = [
-    /^\/\*$/m,
-    /^\s*Strict-Transport-Security:/m,
-    /^\s*Referrer-Policy:\s*no-referrer\s*$/m,
-    /^\s*X-Content-Type-Options:\s*nosniff\s*$/m,
-    /^\s*Permissions-Policy:/m,
-    /^\s*Cross-Origin-Opener-Policy:/m,
-    /^\s*Cross-Origin-Resource-Policy:/m,
-    /^\s*X-Frame-Options:\s*DENY\s*$/m,
-    /^\s*Content-Security-Policy:/m,
+    /^\s+Strict-Transport-Security:\s*max-age=\d{7,}/m,
+    /^\s+Referrer-Policy:\s*no-referrer\s*$/m,
+    /^\s+X-Content-Type-Options:\s*nosniff\s*$/m,
+    /^\s+Permissions-Policy:\s*camera=\(\)/m,
+    /^\s+Cross-Origin-Opener-Policy:\s*same-origin\s*$/m,
+    /^\s+Cross-Origin-Resource-Policy:\s*same-origin\s*$/m,
+    /^\s+X-Frame-Options:\s*DENY\s*$/m,
+    /^\s+Content-Security-Policy:\s*default-src 'self';/m,
   ];
   for (const pattern of required) {
-    if (!pattern.test(text)) {
-      throw new Error(`_headers が壊れています（${label}）: ${pattern} が見つかりません。`);
+    if (!pattern.test(blockText)) {
+      throw new Error(
+        `_headers が壊れています（${label}）: /* ブロックの中に ${pattern} が見つかりません。`,
+      );
     }
   }
 }

@@ -79,13 +79,24 @@ const AI_KEY_PATTERNS = [
   /sk-(?:proj-)?[0-9A-Za-z_-]{20,}/g, // OpenAI形式
   /(?:ghp_|github_pat_)[0-9A-Za-z_]{20,}/g,
 ];
-const URL_QUERY_PATTERN = /\b(https?:\/\/[^\s?#]+)\?[^#\s]*/gi;
-const W_QUERY_PATTERN = /([?&]w=)[^&#\s]*/gi;
+// URLのクエリを伏せる。終端は「空白」だけでなく日本語の句読点・閉じ括弧も見る。
+// 日本語には単語間の空白が無いため、空白だけを終端にすると
+// 「https://…?w=xxx。同期できません」の**句点以降が丸ごと消える**。
+// 伏せるつもりで本文を捨てるのは、要望を受け取る口として最悪の壊れ方。
+const URL_TERMINATORS = "\\s、。，．！？」』）】〕〉》・…";
+const URL_QUERY_PATTERN = new RegExp(
+  `\\b(https?://[^${URL_TERMINATORS}?#]+)\\?[^#${URL_TERMINATORS}]*`,
+  "gi",
+);
+// `?w=` / `&w=` に加えて、文字列や行の先頭に置かれた `w=` も伏せる。
+// アプリは `w=...` 断片の貼り付けを正式な入力形式として受理しているため、
+// 利用者はその形のまま貼ってくる。
+const W_QUERY_PATTERN = new RegExp(`(^|[?&\\s])(w=)[^&#${URL_TERMINATORS}]*`, "gim");
 
 function redactSecrets(value) {
   let out = String(value || "")
     .replace(URL_QUERY_PATTERN, "$1?[伏せ字]")
-    .replace(W_QUERY_PATTERN, "$1[伏せ字]")
+    .replace(W_QUERY_PATTERN, "$1$2[伏せ字]")
     .replace(SECRET_PATTERN, "[伏せ字]");
   for (const pattern of AI_KEY_PATTERNS) out = out.replace(pattern, "[伏せ字]");
   return out;

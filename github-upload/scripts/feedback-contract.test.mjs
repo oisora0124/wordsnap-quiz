@@ -406,3 +406,38 @@ test("伏せ字で伸びても保存長は上限を超えない", async () => {
   assert.ok(db.inserted[0].message.length <= 2000, "保存長が上限内であること");
   assert.ok(!db.inserted[0].message.includes(secret), "上限付近でも伏せること");
 });
+
+// 日本語には単語間の空白が無い。URLの終端を空白だけで判定すると、
+// 「https://…?w=xxx。同期できません」の句点以降が丸ごと消える。
+// 伏せるつもりで本文を捨てるのは、要望を受け取る口として最悪の壊れ方。
+test("URLの直後に句読点が続いても、本文を消さずにクエリだけ伏せる", async () => {
+  const db = new FakeD1();
+  const { response } = await post(db, {
+    category: "bug",
+    message: "https://wordbank.pages.dev/?w=abc123def456。同期が動きません。直してください。",
+  });
+  assert.equal(response.status, 200);
+  const saved = db.inserted[0].message;
+  assert.ok(!saved.includes("abc123def456"), "クエリは伏せること");
+  assert.ok(saved.includes("同期が動きません"), "句点以降の本文を残すこと");
+  assert.ok(saved.includes("直してください"), "末尾まで残すこと");
+
+  const comma = new FakeD1();
+  await post(comma, { category: "bug", message: "https://wordbank.pages.dev/?w=zzz999、単語が消えました" });
+  assert.ok(comma.inserted[0].message.includes("単語が消えました"), "読点直結でも本文を残すこと");
+});
+
+// アプリは `w=...` 断片の貼り付けを正式な入力形式として受理している。
+// 利用者はその形のまま貼ってくるので、先頭の `w=` も伏せる必要がある。
+test("先頭や行頭の w= も伏せる", async () => {
+  const db = new FakeD1();
+  const { response } = await post(db, {
+    category: "other",
+    message: "w=abc123def456ghi789 を貼りました\nw=xyz789012345 も貼ります",
+  });
+  assert.equal(response.status, 200);
+  const saved = db.inserted[0].message;
+  assert.ok(!saved.includes("abc123def456ghi789"), "先頭の w= を伏せること");
+  assert.ok(!saved.includes("xyz789012345"), "行頭の w= も伏せること");
+  assert.ok(saved.includes("を貼りました"), "本文は残すこと");
+});

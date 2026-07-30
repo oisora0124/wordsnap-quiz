@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
@@ -296,7 +297,7 @@ for (const icon of manifest.icons) {
 }
 
 assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v\d+["']/, "versioned cache name is missing");
-assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v6["']/, "service worker cache version must be v6");
+assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v7["']/, "service worker cache version must be v7");
 assert.match(
   worker,
   /cache\s*\.add\(CORE_PRECACHE_URL\)[\s\S]*?\.then\(\(\)\s*=>\s*Promise\.allSettled/,
@@ -779,6 +780,12 @@ assert.doesNotMatch(publicHtml, /cdn\.jsdelivr\.net\/npm\/tesseract/,
 // エンジンモードを変えるなら -lstm 無しの3種も置く必要がある（VENDOR.md 参照）。
 assert.match(publicHtml, /const engineMode = Tesseract\.OEM\?\.LSTM_ONLY \?\? 1;/,
   "OCR engine mode must stay LSTM_ONLY, or the non-lstm cores must also be vendored");
+// 定数宣言だけを見ても、createWorker へ別の値を渡されたら気づけない。実引数も固定する。
+assert.match(
+  publicHtml,
+  /Tesseract\.createWorker\(\["eng", "jpn"\], engineMode, options\)/,
+  "createWorker must receive the checked engineMode and the vendored paths",
+);
 assert.match(publicHtml, /id=["']runtimeStorageWarning["']/, "runtime storage warning is missing");
 assert.match(publicHtml, /外部辞書への通信：/, "external dictionary data disclosure is missing");
 assert.match(publicHtml, /例文問題の外部通信：/, "context-question data disclosure is missing");
@@ -1001,28 +1008,64 @@ const SOURCE_TEXT_EXTENSIONS = new Set([
   ".html", ".js", ".mjs", ".json", ".md", ".sql", ".txt", ".yml", ".yaml",
 ]);
 
-function walkRepository(directory) {
+// 走査対象は「gitが追跡しているファイル」を基準にする。公開されるのは追跡分だけであり、
+// 手元にしか無いもの（.DS_Store、作業中の生成物）は漏洩の対象ではない。
+// ファイルシステムを直に歩くと、そういう未追跡ファイルまで検査に巻き込む。
+// gitが使えない環境（tarball展開など）ではファイルシステムへ落とす。
+let trackedFilesCache = null;
+function trackedFiles(directory) {
+  if (trackedFilesCache) return trackedFilesCache;
+  try {
+    const out = execFileSync("git", ["-C", directory, "ls-files", "-z", "--full-name"], {
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    const repoRoot = execFileSync("git", ["-C", directory, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+    }).trim();
+    const files = out.split("\0").filter(Boolean).map((rel) => join(repoRoot, rel));
+    if (files.length > 0) {
+      trackedFilesCache = files.filter((path) => existsSync(path));
+      return trackedFilesCache;
+    }
+  } catch {
+    // gitが無い／リポジトリでない場合はファイルシステムを歩く
+  }
+  trackedFilesCache = walkFilesystem(directory);
+  return trackedFilesCache;
+}
+
+function walkFilesystem(directory) {
   const files = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.name === ".git" || entry.name === "node_modules") continue;
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...walkRepository(path));
+    if (entry.isDirectory()) files.push(...walkFilesystem(path));
     else if (entry.isFile()) files.push(path);
   }
   return files;
 }
 
-// 秘密スキャンの対象。バイナリ拡張子を外し、さらに中身にNULを含むものは
-// バイナリとみなして読み飛ばす（拡張子が未知のバイナリを取りこぼしても落ちない）。
+function walkRepository(directory) {
+  return trackedFiles(directory);
+}
+
+// 秘密スキャンの対象。既知のバイナリ拡張子だけを外す。
+//
+// 以前は「中身にNULを含むものはバイナリとみなして読み飛ばす」としていたが、これは
+// 抜け道だった。`.jsonc` などにNULを1つ混ぜるだけでスキャンを丸ごと回避できる。
+// いまは**読み飛ばさずに失敗させる**。バイナリを追加したいなら BINARY_EXTENSIONS へ
+// 明示的に登録する（登録という行為が記録に残る）。
 function repositoryScanFiles(directory) {
-  return walkRepository(directory).filter((path) => {
-    if (BINARY_EXTENSIONS.has(extname(path).toLowerCase())) return false;
-    try {
-      return !readFileSync(path).includes(0);
-    } catch {
-      return false;
-    }
-  });
+  const files = walkRepository(directory)
+    .filter((path) => !BINARY_EXTENSIONS.has(extname(path).toLowerCase()));
+  for (const path of files) {
+    assert.ok(
+      !readFileSync(path).includes(0),
+      `NUL byte in a scanned file (add its extension to BINARY_EXTENSIONS if it is binary): ${path}`,
+    );
+  }
+  return files;
 }
 
 function repositoryTextFiles(directory) {

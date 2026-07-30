@@ -59,7 +59,11 @@ function makeRecoveryUx({
     },
     appState: { words: Array.from({ length: words }, (_, i) => ({ id: `w${i}` })) },
     syncState: {},
-    elements: { syncV2RecoveryNotice: { hidden: true }, syncV2Section: { open: false } },
+    elements: {
+      syncV2RecoveryNotice: { hidden: true },
+      syncV2VaultNotice: { hidden: true },
+      syncV2Section: { open: false },
+    },
     document: { querySelector: () => null },
     syncRequestRoute: () => identity,
     // 部屋IDだけを渡す呼び出しは、現在の資格情報から vault key を引く。
@@ -177,7 +181,9 @@ test("テキストで保存したときは保存済みにする", () => {
     "\n// 経過時間を",
   );
   assert.match(body, /downloadBlob\(/, "ダウンロード処理であること");
-  assert.match(body, /markV2CodeSavedFor\(getActiveV2Credential\(\)\?\.roomId\)/);
+  // 書き出した資格情報と同じものでマークすること（読み直すと別タブの切替でずれる）
+  assert.match(body, /const credential = getActiveV2Credential\(\);/);
+  assert.match(body, /markV2CodeSavedFor\(credential\);/);
 });
 
 test("JSON書き出しは引き継ぎコードを同梱したときだけ保存済みにする", () => {
@@ -187,7 +193,7 @@ test("JSON書き出しは引き継ぎコードを同梱したときだけ保存�
   );
   assert.match(
     body,
-    /if \(includeV2Credential\) markV2CodeSavedFor\(getActiveV2Credential\(\)\?\.roomId\)/,
+    /if \(includeV2Credential\) markV2CodeSavedFor\(credentialForExport\)/,
     "同梱したときだけ保存済みにすること",
   );
 });
@@ -536,4 +542,51 @@ test("旧形式の記録（部屋IDのみ）はそのまま保存済みとして
     activeCredential: { roomId: ROOM_A, vaultKey: "" },
   });
   assert.equal(context.isV2CodeSavedFor(ROOM_A), true, "既存利用者へ再通知しないこと");
+});
+
+// upgrade経路（legacy＋V2）の利用者には、単語データの回復通知は出さない設計。
+// 個人リンクで単語を取り戻せるため。ただし**金庫鍵は個人リンクでは代替できない**ので、
+// 金庫鍵の再保存だけは分けて促す必要がある。現在のV2利用者はupgrade経路なので、
+// 分けないとこの人だけが「コードが古い」と気づけないまま終わる。
+test("upgrade済みV2でも、金庫鍵を発行したら再保存を促す", () => {
+  const { context } = makeRecoveryUx({
+    identity: UPGRADED,
+    words: 50,
+    verifiedSyncTarget: ROOM_A,
+    activeCredential: { roomId: ROOM_A, vaultKey: VAULT_A },
+  });
+  context.renderV2RecoveryNotice();
+  assert.equal(context.shouldPromptVaultKeyBackup(), true, "金庫鍵の再保存を促すこと");
+  assert.equal(context.elements.syncV2VaultNotice.hidden, false, "金庫鍵の注意を表示すること");
+  assert.equal(
+    context.shouldPromptV2CodeBackup(),
+    false,
+    "単語データ側の通知は従来どおり出さないこと（個人リンクがある）",
+  );
+  assert.equal(context.elements.syncV2RecoveryNotice.hidden, true);
+});
+
+test("金庫鍵を保存し直せば注意は消える", () => {
+  const { context } = makeRecoveryUx({
+    identity: UPGRADED,
+    words: 50,
+    verifiedSyncTarget: ROOM_A,
+    activeCredential: { roomId: ROOM_A, vaultKey: VAULT_A },
+  });
+  context.markV2CodeSavedFor(ROOM_A);
+  context.renderV2RecoveryNotice();
+  assert.equal(context.shouldPromptVaultKeyBackup(), false);
+  assert.equal(context.elements.syncV2VaultNotice.hidden, true);
+});
+
+test("金庫鍵を持たない資格情報では金庫鍵の注意を出さない", () => {
+  const { context } = makeRecoveryUx({
+    identity: UPGRADED,
+    words: 50,
+    verifiedSyncTarget: ROOM_A,
+    activeCredential: { roomId: ROOM_A, vaultKey: "" },
+  });
+  context.renderV2RecoveryNotice();
+  assert.equal(context.shouldPromptVaultKeyBackup(), false);
+  assert.equal(context.elements.syncV2VaultNotice.hidden, true);
 });

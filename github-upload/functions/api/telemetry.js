@@ -26,8 +26,15 @@ const RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // wv_ はAIキー暗号化同期のvault key。封筒の復号鍵そのものなので、
 // 万一エラー文へ混ざっても保存・表示されないよう伏せる対象に含める。
 const SECRET_PATTERN = /w(s|k|r|v)?_[0-9a-f]{16,}/gi;
-const URL_QUERY_PATTERN = /\b(https?:\/\/[^\s?#]+)\?[^#\s]*/gi;
-const W_QUERY_PATTERN = /([?&]w=)[^&#\s]*/gi;
+// 終端に日本語の句読点・閉じ括弧も含める。日本語には単語間の空白が無いため、
+// 空白だけを終端にするとエラー文の後半まで丸ごと消える（feedback.js と同じ理由）。
+const URL_TERMINATORS = "\\s、。，．！？」』）】〕〉》・…";
+const URL_QUERY_PATTERN = new RegExp(
+  `\\b(https?://[^${URL_TERMINATORS}?#]+)\\?[^#${URL_TERMINATORS}]*`,
+  "gi",
+);
+// 文字列や行の先頭に置かれた `w=` も伏せる。
+const W_QUERY_PATTERN = new RegExp(`(^|[?&\\s])(w=)[^&#${URL_TERMINATORS}]*`, "gim");
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -53,7 +60,7 @@ function cleanText(value) {
 function redactSecrets(value) {
   return String(value || "")
     .replace(URL_QUERY_PATTERN, "$1?[redacted]")
-    .replace(W_QUERY_PATTERN, "$1[redacted]")
+    .replace(W_QUERY_PATTERN, "$1$2[redacted]")
     .replace(SECRET_PATTERN, "[redacted]");
 }
 

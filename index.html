@@ -6063,6 +6063,12 @@ accurate 正確な"
                       aria-label="新方式の引き継ぎコード"
                     />
                     <p id="syncV2CredentialWarning" class="sync-v2-code-warning"></p>
+                    <p id="syncV2VaultNotice" class="sync-v2-recovery-notice" role="status" hidden>
+                      ⚠️ <strong>引き継ぎコードが新しくなっています。保存し直してください。</strong><br />
+                      APIキーの同期を有効にしたときに、この端末で暗号鍵を作りました。以前に保存した
+                      コードにはこの鍵が入っていないため、そのコードでは同期済みのAPIキーを復号できません。<br />
+                      <small>単語データは個人リンクからも取り出せますが、APIキーの復号にはこの新しいコードが必要です。</small>
+                    </p>
                     <p id="syncV2RecoveryNotice" class="sync-v2-recovery-notice" role="status" hidden>
                       ⚠️ <strong>この引き継ぎコードはまだ端末の外に保存されていません。</strong><br />
                       単語データが増えています。サイトデータの消去や機種変更でこの端末の中身が失われると、
@@ -9405,6 +9411,7 @@ const elements = {
   syncStatus: document.querySelector("#syncStatus"),
   syncV2Section: document.querySelector("#syncV2Section"),
   syncV2RecoveryNotice: document.querySelector("#syncV2RecoveryNotice"),
+  syncV2VaultNotice: document.querySelector("#syncV2VaultNotice"),
   syncV2UpgradeButton: document.querySelector("#syncV2UpgradeButton"),
   syncV2CreateButton: document.querySelector("#syncV2CreateButton"),
   syncV2CredentialPanel: document.querySelector("#syncV2CredentialPanel"),
@@ -10262,6 +10269,35 @@ function updateFeedbackCharCount() {
   elements.feedbackCharCount.textContent = `${len} / 2000`;
 }
 
+// この端末の同期IDと引き継ぎコードだけは、送信前に端末側で伏せる。
+// 旧同期のIDは任意の英数字を許すため、サーバー側では「どれが秘密か」を形から
+// 判別できない（判別できる定型のものはサーバー側でも伏せている）。
+// 自分のIDが何かを知っているのはこの端末だけなので、ここで完全一致を置き換える。
+function redactOwnSecretsForFeedback(value) {
+  let out = String(value || "");
+  const own = [];
+  try {
+    const identity = typeof syncRequestRoute === "function" ? syncRequestRoute() : null;
+    if (identity?.legacyId) own.push(identity.legacyId);
+    if (identity?.roomId) own.push(identity.roomId);
+  } catch {
+    // 経路が取れない状況でも送信自体は止めない
+  }
+  try {
+    const credential = typeof getActiveV2Credential === "function" ? getActiveV2Credential() : null;
+    if (credential?.secret) own.push(credential.secret);
+    if (credential?.vaultKey) own.push(credential.vaultKey);
+  } catch {
+    // 同上
+  }
+  // 長いものから置換する（短い方が先に当たって部分置換になるのを避ける）
+  for (const secret of own.filter((v) => typeof v === "string" && v.length >= 8)
+    .sort((a, b) => b.length - a.length)) {
+    out = out.split(secret).join("[伏せ字]");
+  }
+  return out;
+}
+
 async function submitFeedback() {
   const form = elements.feedbackForm;
   if (!form) return;
@@ -10275,8 +10311,8 @@ async function submitFeedback() {
   elements.feedbackMessage?.removeAttribute("aria-invalid");
   const payload = {
     category: elements.feedbackCategory?.value || "other",
-    message,
-    contact: (elements.feedbackContact?.value || "").trim(),
+    message: redactOwnSecretsForFeedback(message),
+    contact: redactOwnSecretsForFeedback((elements.feedbackContact?.value || "").trim()),
     appVersion: "web",
   };
   const button = elements.feedbackSubmit;
@@ -12082,11 +12118,25 @@ function recordVerifiedSync(targetId, wordCount) {
 
 let v2RecoveryNoticeShown = false;
 
+// 金庫鍵（vault key）を発行した後に、保存済みのコードが古くなっている状態。
+// 単語データの回復通知（V2ネイティブ限定）とは別に扱う必要がある。
+// upgrade経路の人は個人リンクで単語を取り戻せるので単語側の通知は出さない設計だが、
+// **金庫鍵は個人リンクでは代替できない**。現在のV2利用者はupgrade経路なので、
+// 分けないとこの人だけが「コードが古い」と気づけないまま終わる。
+function shouldPromptVaultKeyBackup() {
+  const credential = typeof getActiveV2Credential === "function" ? getActiveV2Credential() : null;
+  if (!credential?.vaultKey) return false;
+  return !isV2CodeSavedFor(credential);
+}
+
 function renderV2RecoveryNotice(identity = syncRequestRoute()) {
   const notice = elements.syncV2RecoveryNotice;
+  const vaultNotice = elements.syncV2VaultNotice;
+  const vaultPrompt = shouldPromptVaultKeyBackup();
+  if (vaultNotice) vaultNotice.hidden = !vaultPrompt;
   const prompt = shouldPromptV2CodeBackup(identity);
   if (notice) notice.hidden = !prompt;
-  if (!prompt) return;
+  if (!prompt && !vaultPrompt) return;
   // このページで最初に条件を満たした一度だけ、設定を開いて気づけるようにする。
   // 以後は注意表示が残り続けるので、繰り返し開き直さない。
   if (v2RecoveryNoticeShown) return;
@@ -12532,7 +12582,11 @@ function initV2SyncUi() {
     }
   });
   elements.syncV2DownloadCodeButton?.addEventListener("click", () => {
-    const code = v2TransferCode(getActiveV2Credential());
+    // 資格情報はここで一度だけ読む。書き出す内容とマークで別々に読み直すと、
+    // 別タブが処理中に資格情報を切り替えた場合に、古いコードを書き出しておいて
+    // 新しい資格情報を「保存済み」にしてしまう。
+    const credential = getActiveV2Credential();
+    const code = v2TransferCode(credential);
     if (!code) {
       setV2Status("保存できる引き継ぎコードがありません。", "error");
       return;
@@ -12542,13 +12596,14 @@ function initV2SyncUi() {
       "",
       code,
       "",
-      getActiveV2Credential()?.origin === "upgrade"
+      credential?.origin === "upgrade"
         ? "紛失しても、これまでの個人リンクからは引き続きアクセスできますが、再発行はできないので保管を推奨します。"
         : "このコードが唯一のアクセス手段です。紛失するとデータを復旧できません。必ず保管してください。",
     ].join("\n");
     downloadBlob(new Blob([text], { type: "text/plain;charset=utf-8" }), "wordbank-v2-hikitsugi-code.txt");
-    // 端末外へ書き出したのでここで保存済みにする（段階4）
-    markV2CodeSavedFor(getActiveV2Credential()?.roomId);
+    // 端末外へ書き出したのでここで保存済みにする（段階4）。
+    // 書き出したものと同じ資格情報でマークする。
+    markV2CodeSavedFor(credential);
     setV2Status("✓ 引き継ぎコードをテキストファイルで保存しました。", "live");
   });
 }
@@ -24215,12 +24270,15 @@ function buildJsonBackupPayload(includeV2Credential = false) {
 elements.exportButton.addEventListener("click", () => {
   try {
     const includeV2Credential = elements.exportV2CredentialToggle?.checked === true;
+    // payload生成のあとに資格情報を読み直すと、別タブが処理中に切り替えた場合に
+    // 同梱したものと違う資格情報をマークしてしまう。生成前に確定させる。
+    const credentialForExport = includeV2Credential ? getActiveV2Credential() : null;
     const payload = buildJsonBackupPayload(includeV2Credential);
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     downloadBlob(blob, "wordsnap-quiz-data.json");
     // 段階4: 引き継ぎコードを実際に同梱したときだけ「保存済み」にする。
     // 同梱していないJSONは復旧手段にならない。
-    if (includeV2Credential) markV2CodeSavedFor(getActiveV2Credential()?.roomId);
+    if (includeV2Credential) markV2CodeSavedFor(credentialForExport);
     trackUsage("json-export");
     setStatus("JSONバックアップを書き出しました。安全な場所に保管してください。");
   } catch {
