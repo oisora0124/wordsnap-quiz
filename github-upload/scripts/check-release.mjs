@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -104,8 +105,15 @@ for (const origin of htmlExternalOrigins) {
     `external resource origin is missing from Content-Security-Policy: ${origin}`);
 }
 const scriptSources = new Set(cspDirectives.get("script-src") || []);
-assert.ok(scriptSources.has("https://cdn.jsdelivr.net"),
-  "Tesseract.js CDN must be allowed by script-src");
+// OCRの実行コードは自前配信へ移した（publish/assets/tesseract/）。
+// script-src に外部originが戻ると、SRIの掛からないworker/coreを再びCDNから
+// 実行できる状態に逆戻りする。self とハッシュと wasm-unsafe-eval 以外を許さない。
+for (const source of scriptSources) {
+  assert.ok(
+    source === "'self'" || source === "'wasm-unsafe-eval'" || source.startsWith("'sha256-"),
+    `script-src must stay self-hosted; unexpected source: ${source}`,
+  );
+}
 assert.ok(scriptSources.has("'wasm-unsafe-eval'"),
   "Tesseract WebAssembly compilation must be allowed by script-src");
 // ハッシュ型CSP: 'unsafe-inline' は禁止。全インラインscriptのSHA-256が
@@ -729,12 +737,43 @@ assert.doesNotMatch(publicHtml, /壊れた409応答（stateなし）でも[^\n]*
   "the client still documents unsafe retry behavior for a state-less conflict");
 assert.match(api, /latest\.corrupt[\s\S]*?code:\s*["']corrupt_state["']/,
   "API must fail closed when a stored state cannot be decoded");
-assert.ok(
-  publicHtml.includes(
-    'script.integrity = "sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM";',
-  ),
-  "Tesseract.js subresource integrity is missing or has changed",
+// OCRの実行コードは自前配信（publish/assets/tesseract/）。SRIは<script>の読み込みにしか
+// 効かず、Tesseractが動作中に自分で取る worker と core を守れなかったため移行した。
+// ここでは「CDNから実行していないこと」と「置いてあるファイルが正規物のままであること」を
+// 両方固定する。ハッシュは VENDOR.md の表と同じ値。
+const TESSERACT_VENDOR_DIR = join(publishDir, "assets", "tesseract");
+const TESSERACT_VENDOR_HASHES = {
+  "tesseract-core-lstm.wasm.js": "ljppwjVnA7rpAU/v9enQiR6pXDStaEAYw9I+7ddiEynJcmDNnjHCmcvizBeO3cSA",
+  "tesseract-core-relaxedsimd-lstm.wasm.js": "/8lT8Rpy0sk4iWEyUA0rKewXOiWu/nV0JjVCd2vMw2nlpqBsk1/6GttRwex7g/S8",
+  "tesseract-core-simd-lstm.wasm.js": "1PHRxr8cs/w6IDh6HZYHEHS+Li9cfjahWYKnioD1xvjs7wZD20qpwhD2+ZvhDmHU",
+  "tesseract.min.js": "2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM",
+  "worker.min.js": "iUyp1FxLBc4DYaSwxT1/G6elMdSh3vvQffNSmMiySoXDpk2XfS9ZcM4RjPSiqiw3",
+};
+for (const [name, expected] of Object.entries(TESSERACT_VENDOR_HASHES)) {
+  const path = join(TESSERACT_VENDOR_DIR, name);
+  assert.ok(existsSync(path), `vendored OCR asset is missing: ${name}`);
+  const actual = createHash("sha384").update(readFileSync(path)).digest("base64");
+  assert.equal(actual, expected, `vendored OCR asset was modified: ${name}`);
+}
+// 実行コードの取得先が自オリジンであること。CDNのURLへ戻ると、整合性検査の掛からない
+// worker/core を再び外部から実行することになる。
+assert.match(
+  publicHtml,
+  /const TESSERACT_ASSET_BASE = new URL\("assets\/tesseract\/", document\.baseURI\)\.href;/,
+  "OCR assets must be loaded from the same origin",
 );
+assert.match(publicHtml, /script\.src = TESSERACT_ASSET_BASE \+ "tesseract\.min\.js";/,
+  "the OCR library must be loaded from the vendored copy");
+assert.match(publicHtml, /workerPath: TESSERACT_ASSET_BASE \+ "worker\.min\.js",/,
+  "the OCR worker must be loaded from the vendored copy");
+assert.match(publicHtml, /corePath: TESSERACT_ASSET_BASE,/,
+  "the OCR core must be loaded from the vendored copy");
+assert.doesNotMatch(publicHtml, /cdn\.jsdelivr\.net\/npm\/tesseract/,
+  "the OCR library must not fall back to the CDN");
+// core は worker が実行時の機能検査で選ぶ。LSTM_ONLY のままなら -lstm 版の3種で足りるが、
+// エンジンモードを変えるなら -lstm 無しの3種も置く必要がある（VENDOR.md 参照）。
+assert.match(publicHtml, /const engineMode = Tesseract\.OEM\?\.LSTM_ONLY \?\? 1;/,
+  "OCR engine mode must stay LSTM_ONLY, or the non-lstm cores must also be vendored");
 assert.match(publicHtml, /id=["']runtimeStorageWarning["']/, "runtime storage warning is missing");
 assert.match(publicHtml, /外部辞書への通信：/, "external dictionary data disclosure is missing");
 assert.match(publicHtml, /例文問題の外部通信：/, "context-question data disclosure is missing");
@@ -988,7 +1027,14 @@ function repositoryTextFiles(directory) {
 
 // 走査対象の選び方が退行しないよう、以前の盲点を実際に含んでいることを確かめる。
 // （許可リストへ戻すと、この検査が落ちる）
-const scanTargets = repositoryScanFiles(repoDir);
+// 自前配信した第三者コードは、埋め込みwasmのbase64が秘密のパターンに偶然一致する。
+// ただしこれらは上でSHA-384を1バイト単位で固定しているので、秘密を紛れ込ませることは
+// できない（より強い検査が掛かっている）。**ハッシュ固定済みのファイルだけ**を除く。
+// 同じディレクトリに固定されていないファイルを置いた場合は、従来どおり走査される。
+const pinnedVendorPaths = new Set(
+  Object.keys(TESSERACT_VENDOR_HASHES).map((name) => join(TESSERACT_VENDOR_DIR, name)),
+);
+const scanTargets = repositoryScanFiles(repoDir).filter((path) => !pinnedVendorPaths.has(path));
 for (const blindSpot of ["_headers", ".example", ".webmanifest"]) {
   const existing = walkRepository(repoDir).filter((path) => path.endsWith(blindSpot));
   if (existing.length === 0) continue; // そのファイルが無いリポジトリでは検査しない

@@ -15203,6 +15203,10 @@ function validPair(term, meaning) {
   return { term: cleanTerm, meaning: cleanMeaning };
 }
 
+// OCRの実行コード一式の置き場所。worker から importScripts される core も
+// ここから読む。相対のままだと worker 内での解決基準が変わり得るので絶対URLにする。
+const TESSERACT_ASSET_BASE = new URL("assets/tesseract/", document.baseURI).href;
+
 let tesseractLoadPromise = null;
 
 function loadTesseract() {
@@ -15211,12 +15215,12 @@ function loadTesseract() {
 
   tesseractLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    // バージョンを固定し、CDN側の更新で突然挙動が変わらないようにする。
-    script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js";
-    // npm公開物のtesseract.js 7.0.0 dist/tesseract.min.jsから算出したSHA-384。
-    // CDN応答が1byteでも異なる場合は実行せず、OCRだけを安全側に失敗させる。
-    script.integrity = "sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM";
-    script.crossOrigin = "anonymous";
+    // 自前配信（publish/assets/tesseract/）。以前はCDNからSRI付きで読んでいたが、
+    // SRIは<script>の読み込みにしか効かず、Tesseractが動作中に自分で取りに行く
+    // worker と core には掛けられない。実行されるコードを全部自オリジンへ移して、
+    // CDN汚染でOCR中の画像を持ち出される経路そのものを無くした。
+    // 由来と検証手順は publish/assets/tesseract/VENDOR.md を参照。
+    script.src = TESSERACT_ASSET_BASE + "tesseract.min.js";
     script.onload = () => resolve(window.Tesseract);
     script.onerror = () => {
       tesseractLoadPromise = null;
@@ -16903,8 +16907,19 @@ async function getOcrWorker(Tesseract, highAccuracy, run) {
     ensureOcrRunActive(run);
     const workerToken = ++ocrWorkerTokenSerial;
     run.workerToken = workerToken;
-    const options = { logger: (progress) => reportOcrProgress(progress, workerToken) };
+    const options = {
+      logger: (progress) => reportOcrProgress(progress, workerToken),
+      // worker と core（OCR本体）を自オリジンから読む。既定のままだとCDNから
+      // 整合性検査なしで取得され、汚染時にOCR中の画像を持ち出せる。
+      workerPath: TESSERACT_ASSET_BASE + "worker.min.js",
+      corePath: TESSERACT_ASSET_BASE,
+    };
+    // 言語データは実行されないデータなので取得元はCDNのまま（合計26MBあり、
+    // 自前で抱える利点が小さい。壊れたデータでもコード実行にはならない）。
     if (highAccuracy) options.langPath = "https://tessdata.projectnaptha.com/4.0.0_best";
+    // LSTM_ONLY 固定。worker はこの指定に応じて core の -lstm 版を選ぶため、
+    // 置いてある自前ファイルもその3種（素/simd/relaxedsimd）だけでよい。
+    // 変えるなら VENDOR.md の手順で -lstm 無しの3種も追加すること。
     const engineMode = Tesseract.OEM?.LSTM_ONLY ?? 1;
     const worker = await Tesseract.createWorker(["eng", "jpn"], engineMode, options);
     if (run.cancelled || activeOcrRun !== run) {

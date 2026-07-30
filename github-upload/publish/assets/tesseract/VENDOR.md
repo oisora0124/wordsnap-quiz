@@ -1,0 +1,56 @@
+# OCR（Tesseract.js）の自前配信
+
+このディレクトリのファイルは第三者パッケージを**そのまま**置いたもの。手で編集しない。
+
+## なぜ自前で配るのか
+
+SRIは `<script>` タグの読み込みにしか効かない。Tesseract.js は動作中に
+worker と core（OCR本体のwasm）を**自分で取りに行く**ため、そこには整合性検査を
+掛けられない。CDNが汚染されればOCR中の画像を持ち出せる（CSPの `connect-src` に
+そのCDNが入っていれば送信先も確保できる）。実行されるコードを自オリジンへ移すと、
+この経路そのものが無くなる。
+
+言語データ（`.traineddata.gz`）は**実行されないデータ**なので対象外。CDNのままでも
+コード実行にはならない。合計26MBあり、抱える利点が小さい。
+
+## 由来
+
+| パッケージ | 版 | npm integrity |
+|---|---|---|
+| `tesseract.js` | 7.0.0 | `sha512-exPBkd+z+wM1BuMkx/Bjv43OeLBxhL5kKWsz/9JY+DXcXdiBjiAch0V49QR3oAJqCaL5qURE0vx9Eo+G5YE7mA==` |
+| `tesseract.js-core` | 7.0.0 | `sha512-WnNH518NzmbSq9zgTPeoF8c+xmilS8rFIl1YKbk/ptuuc7p6cLNELNuPAzcmsYw450ca6bLa8j3t0VAtq435Vw==` |
+
+取得時（2026-07-30）に次を確認した。
+
+1. npmレジストリの tarball が公開 integrity と一致すること
+2. jsdelivr が配るファイルと tarball 内のファイルが**1バイト一致**すること
+3. `tesseract.min.js` が、それまでコードに書かれていたSRI（`sha384-2BQ3U3Od…`）と一致すること
+
+## 置いてあるファイルのSHA-384
+
+更新時は下の表を作り直し、`scripts/check-release.mjs` のゲートも同じ値になる。
+
+| ファイル | バイト | SHA-384 |
+|---|---|---|
+| `tesseract-core-lstm.wasm.js` | 3896484 | `sha384-ljppwjVnA7rpAU/v9enQiR6pXDStaEAYw9I+7ddiEynJcmDNnjHCmcvizBeO3cSA` |
+| `tesseract-core-relaxedsimd-lstm.wasm.js` | 3905767 | `sha384-/8lT8Rpy0sk4iWEyUA0rKewXOiWu/nV0JjVCd2vMw2nlpqBsk1/6GttRwex7g/S8` |
+| `tesseract-core-simd-lstm.wasm.js` | 3899472 | `sha384-1PHRxr8cs/w6IDh6HZYHEHS+Li9cfjahWYKnioD1xvjs7wZD20qpwhD2+ZvhDmHU` |
+| `tesseract.min.js` | 62961 | `sha384-2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM` |
+| `worker.min.js` | 111307 | `sha384-iUyp1FxLBc4DYaSwxT1/G6elMdSh3vvQffNSmMiySoXDpk2XfS9ZcM4RjPSiqiw3` |
+
+## core を3種置いてある理由
+
+worker は実行時の機能検査で `relaxedsimd` → `simd` → 素の順に選ぶ。どれが選ばれるかは
+ブラウザ次第なので、1つでも欠けるとその端末でOCRが動かない。
+
+`-lstm` の付いた版だけを置いてある。アプリが `Tesseract.OEM.LSTM_ONLY` を渡しており、
+worker が `-lstm` 側を選ぶため。**エンジンモードを変える場合は、`-lstm` 無しの3種も
+併せて置く必要がある**（リリースゲートがこの対応を検査している）。
+
+## 更新手順
+
+1. npm から該当版の tarball を取り、公開 integrity と照合する
+2. tarball 内のファイルをこのディレクトリへ置く
+3. 上の表を作り直す
+4. `scripts/check-release.mjs` の期待ハッシュを更新する
+5. **実ブラウザで写真からのOCRを実際に通す**（ゲートはファイルの存在と一致しか見ない）
