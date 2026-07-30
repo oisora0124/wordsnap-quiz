@@ -1,0 +1,56 @@
+# mainへのpushがそのままCloudflare Pagesへ出る運用なので、
+# 「push前に必ず npm test」を手順書の注意ではなく機械的な検査にする。
+#
+# このワークフロー単体ではデプロイを止められない。GitHubの
+# Settings → Branches → main の必須チェックに `release-checks / test` を指定して
+# 初めて未検証のpushが止まる。設定していない場合でも、失敗は記録として残る。
+name: release-checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ローカルの開発環境と同じ系列に固定する。node:test の挙動が版で変わるため。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # 依存はゼロ（package.json に dependencies が無い）ので install は不要。
+      # 増えたときに黙って落ちないよう、lockfile があるときだけ install する。
+      - name: Install dependencies if a lockfile exists
+        working-directory: github-upload
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "no lockfile; skipping install (this project has no runtime dependencies)"
+          fi
+
+      # publish/index.html とリポジトリ直下の index.html が一致し、
+      # _headers のCSPハッシュも追従していることを確かめる。
+      # sync:html はファイルを書き換えるので、CIでは「差分が出ないこと」を検査に使う。
+      - name: Verify published HTML is in sync
+        working-directory: github-upload
+        run: |
+          npm run sync:html
+          if ! git diff --quiet; then
+            echo "::error::npm run sync:html を実行していない差分があります。ローカルで実行してからpushしてください。"
+            git --no-pager diff --stat
+            exit 1
+          fi
+
+      - name: Run release checks
+        working-directory: github-upload
+        run: npm test
