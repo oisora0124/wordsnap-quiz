@@ -20,7 +20,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # バージョン進行の検査で HEAD と親を比べるため、2コミット分は取る。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       # ローカルの開発環境と同じ系列に固定する。node:test の挙動が版で変わるため。
       - uses: actions/setup-node@v4
@@ -54,3 +57,9 @@ jobs:
       - name: Run release checks
         working-directory: github-upload
         run: npm test
+
+      # 配信物を変えたのにバージョンを進め忘れていないか。git履歴を見る検査なので
+      # npm test には入れていない（手元の未コミット状態で結果が変わってしまうため）。
+      - name: Verify the version was bumped
+        working-directory: github-upload
+        run: node scripts/check-version-bump.mjs

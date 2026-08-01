@@ -29,6 +29,21 @@ npm run sync:html
 
 コマンドはコピー後に内容一致も確認する。公開前の `npm test` でも不一致を拒否する。
 
+## バージョンを進める
+
+`publish/` か `functions/`（＝利用者に届く配信物）を変えたら、**同じコミットで
+バージョンを1つ進める**。進め方と現在地は [docs/VERSIONS.md](docs/VERSIONS.md) にある。
+設計書やテストだけの変更では進めない。
+
+更新する3か所（値はすべて同じ）:
+
+1. `package.json` の `version`
+2. `publish/index.html` のフッター表示 `app-footer-version`
+3. `publish/index.html` の `APP_REV`（テレメトリの `app_rev` として送られる）
+
+そのうえで `docs/VERSIONS.md` の表の先頭に1行足す。ズレは `npm test` が、
+進め忘れは CI の `scripts/check-version-bump.mjs` が落とす。
+
 ## 公開前チェック
 
 Node.js 18以降で、外部パッケージを追加せずに公開物の整合性を確認できます。

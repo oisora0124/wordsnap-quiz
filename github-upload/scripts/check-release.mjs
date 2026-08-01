@@ -21,12 +21,14 @@ const headersPath = join(publishDir, "_headers");
 const apiPath = join(projectDir, "functions", "api", "wordsnap-state.js");
 const schemaPath = join(projectDir, "schema.sql");
 const distributionPath = join(repoDir, "DISTRIBUTION.md");
+const packageJsonPath = join(projectDir, "package.json");
+const versionsDocPath = join(projectDir, "docs", "VERSIONS.md");
 const reviewEventSchemaPath = join(projectDir, "schemas", "review-event.schema.json");
 const lexicalShadowSchemaPath = join(projectDir, "schemas", "lexical-shadow.schema.json");
 
 for (const path of [
   publicHtmlPath, rootHtmlPath, manifestPath, workerPath, headersPath, apiPath, schemaPath, distributionPath,
-  reviewEventSchemaPath, lexicalShadowSchemaPath,
+  reviewEventSchemaPath, lexicalShadowSchemaPath, packageJsonPath, versionsDocPath,
 ]) {
   assert.ok(existsSync(path), `required file is missing: ${path}`);
 }
@@ -41,6 +43,37 @@ const distribution = read(distributionPath);
 const reviewEventSchema = JSON.parse(read(reviewEventSchemaPath));
 const lexicalShadowSchema = JSON.parse(read(lexicalShadowSchemaPath));
 const manifest = JSON.parse(read(manifestPath));
+
+// ===== バージョン表記の一致 =====
+// フッター表示・package.json・テレメトリのapp_rev・履歴表の先頭は必ず同じ値。
+// どこか1つだけ直して他を忘れると、利用者の申告とtelemetryの絞り込みが噛み合わなくなる。
+const packageVersion = JSON.parse(read(packageJsonPath)).version;
+assert.match(packageVersion, /^\d+\.\d+\.\d+$/,
+  "package.json version must be a three-part version");
+const footerVersion = publicHtml.match(
+  /<span class="app-footer-version">バージョン ([^<]+)<\/span>/,
+)?.[1];
+assert.equal(footerVersion, packageVersion,
+  "the footer version must match package.json");
+const appRevVersion = publicHtml.match(/const APP_REV = "([^"]+)";/)?.[1];
+assert.equal(appRevVersion, packageVersion,
+  "telemetry APP_REV must match the displayed version so reports can be filtered by it");
+
+const versionsDoc = read(versionsDocPath);
+const versionRows = [...versionsDoc.matchAll(/^\| (\d+\.\d+\.\d+) \|/gm)].map((m) => m[1]);
+assert.ok(versionRows.length > 0, "docs/VERSIONS.md must list at least one version");
+assert.equal(versionRows[0], packageVersion,
+  "the newest row in docs/VERSIONS.md must be the current version");
+const versionOrder = (value) => value.split(".").map(Number);
+for (let i = 1; i < versionRows.length; i += 1) {
+  const [aMajor, aMinor, aPatch] = versionOrder(versionRows[i - 1]);
+  const [bMajor, bMinor, bPatch] = versionOrder(versionRows[i]);
+  const newer = aMajor > bMajor
+    || (aMajor === bMajor && aMinor > bMinor)
+    || (aMajor === bMajor && aMinor === bMinor && aPatch > bPatch);
+  assert.ok(newer,
+    `docs/VERSIONS.md must be newest-first with no duplicates (${versionRows[i - 1]} then ${versionRows[i]})`);
+}
 
 assert.equal(reviewEventSchema.additionalProperties, false,
   "review-event shadow schema must reject unspecified data collection fields");
