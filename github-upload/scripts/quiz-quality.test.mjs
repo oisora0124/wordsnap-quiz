@@ -442,12 +442,15 @@ function buildLearningSandbox() {
 function buildLearningPersistenceSandbox() {
   const pieces = [
     "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];",
+    "const SRS_DAY_MS = 24 * 60 * 60 * 1000;",
+    "const SRS_MAX_FUTURE_DAYS = 400;",
     extractFunction("nonNegativeNumber"),
     extractFunction("nonNegativeInteger"),
+    extractFunction("repairFarFutureReviewAt"),
     extractFunction("normalizeLearning"),
     extractFunction("minPositiveNumber"),
     extractFunction("mergeLearningState"),
-    "globalThis.__p = { normalizeLearning, mergeLearningState };",
+    "globalThis.__p = { normalizeLearning, mergeLearningState, repairFarFutureReviewAt };",
   ];
   const sandbox = {};
   new Script(pieces.join("\n\n"), { filename: "learning-persistence-check.js" }).runInNewContext(sandbox);

@@ -75,6 +75,58 @@ for (let i = 1; i < versionRows.length; i += 1) {
     `docs/VERSIONS.md must be newest-first with no duplicates (${versionRows[i - 1]} then ${versionRows[i]})`);
 }
 
+// ===== 2026-08-02 機能レビュー（Codex指摘）で入れた修正の凍結ゲート =====
+
+// 位置情報を使う機能があるのに Permissions-Policy で塞ぐ、という食い違いを二度と作らない。
+// 2026-07-25に geolocation=() を入れた結果、テーマの「自動（日の出・日の入り）」が
+// 本番では常に固定時刻の代替動作へ落ちていた（コード側は現在地を取りにいっていた）。
+const geolocationPolicy = headers.match(
+  /Permissions-Policy:[^\n]*?\bgeolocation=\(([^)]*)\)/,
+)?.[1];
+assert.notEqual(geolocationPolicy, undefined,
+  "Permissions-Policy must state an explicit geolocation policy");
+const callsGeolocation = /navigator\.geolocation\./.test(publicHtml);
+assert.equal(geolocationPolicy.trim(), callsGeolocation ? "self" : "",
+  callsGeolocation
+    ? "the app calls navigator.geolocation, so Permissions-Policy must allow the origin itself"
+    : "the app no longer calls navigator.geolocation, so the policy must block it again");
+
+// クイズタブへ戻ったときに制限時間と自動送りを組み直す。離脱時に止めたきり
+// 再開されず、カウントダウンが動かないまま解答できてしまう状態に戻さない。
+const setActiveStepStart = publicHtml.indexOf("function setActiveStep(");
+const setActiveStepEnd = publicHtml.indexOf("\nfunction initStepTabs(", setActiveStepStart);
+assert.ok(setActiveStepStart >= 0 && setActiveStepEnd > setActiveStepStart,
+  "setActiveStep source is missing");
+const setActiveStepSource = publicHtml.slice(setActiveStepStart, setActiveStepEnd);
+const markQuizDirtyAt = setActiveStepSource.indexOf('dirtyPanels.add("quiz")');
+const renderDirtyAt = setActiveStepSource.indexOf("renderDirtyActivePanel()");
+const rescheduleAt = setActiveStepSource.indexOf("scheduleAutoNextIfNeeded()");
+assert.ok(markQuizDirtyAt >= 0 && renderDirtyAt > markQuizDirtyAt,
+  "re-entering the quiz tab must force a re-render so the countdown restarts");
+assert.ok(rescheduleAt > renderDirtyAt,
+  "re-entering the quiz tab must re-arm the auto-advance timer after rendering");
+
+// 保存できなかった取り込み候補を黙って捨てない。理由を付けて確認タブに残す。
+const saveHandlerStart = publicHtml.indexOf('elements.saveParsedButton.addEventListener("click"');
+assert.ok(saveHandlerStart >= 0, "the save-candidates handler is missing");
+const saveHandlerSource = publicHtml.slice(saveHandlerStart, saveHandlerStart + 4000);
+assert.doesNotMatch(saveHandlerSource, /^\s*candidates = \[\];\s*$/m,
+  "saving must not clear every candidate; rejected rows have to stay for the user to fix");
+assert.match(saveHandlerSource, /candidates = rejected;/,
+  "saving must keep the candidates it could not save");
+assert.match(saveHandlerSource, /problem:/,
+  "rejected candidates must carry the reason they were not saved");
+
+// 取り込み中に選んだ保存先を、同期の再描画で既定へ戻さない。
+const saveDeckStart = publicHtml.indexOf("function renderSaveDeckSelect(");
+const saveDeckEnd = publicHtml.indexOf("\nfunction ", saveDeckStart + 1);
+assert.ok(saveDeckStart >= 0 && saveDeckEnd > saveDeckStart,
+  "renderSaveDeckSelect source is missing");
+assert.match(publicHtml.slice(saveDeckStart, saveDeckEnd), /saveDeckChosenByUser/,
+  "re-rendering the save-deck picker must respect an explicit user choice");
+assert.match(publicHtml, /elements\.saveDeckSelect\?\.addEventListener\("change"/,
+  "choosing a save deck must be recorded so later re-renders keep it");
+
 assert.equal(reviewEventSchema.additionalProperties, false,
   "review-event shadow schema must reject unspecified data collection fields");
 assert.ok(reviewEventSchema.required.includes("result") && reviewEventSchema.required.includes("occurredAt"),
