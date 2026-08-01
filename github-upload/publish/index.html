@@ -1821,6 +1821,12 @@ button.ghost.danger:hover {
   }
 }
 
+/* 精度についての案内。プライバシー注意（警告色）と役割が違うので枠の色を分ける。 */
+.ocr-recommend {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .ocr-notice strong {
   font-weight: 750;
 }
@@ -5339,8 +5345,11 @@ body.tutorial-open {
       </section>
 
       <!-- 共有の注意は「常時1行＋詳細リンク」。独立した最小化ボタンは共有ボタンと
-           同格のアクションに見えて紛らわしかったため廃止した。 -->
-      <aside id="safeShareStrip" class="safe-share-strip" aria-label="安全な共有">
+           同格のアクションに見えて紛らわしかったため廃止した。
+           表示は「設定」タブのときだけ（setActiveStep が切り替える）。取り込みやクイズ中は
+           使わない導線なので、常時出さずに設定を開いたときだけ画面上部に出す。
+           初期値は hidden。JSが復元したタブを反映する前に一瞬だけ出るのを防ぐ。 -->
+      <aside id="safeShareStrip" class="safe-share-strip" aria-label="安全な共有" hidden>
         <button id="shareToolHeaderButton" type="button"><span data-sync-identity-ui="legacy">🤝 キーなしで安全に共有</span><span data-sync-identity-ui="v2-native" hidden>🤝 このツールを他の人に共有</span></button>
         <p class="safe-share-warning-mini" data-sync-identity-ui="legacy">
           <span>⚠️ URLに個人キーが含まれます。共有はこのボタンから。</span>
@@ -5573,6 +5582,11 @@ accurate 正確な"
               <strong>端末内OCRは無料で、写真を外部サービスへ送信しません。</strong>
               初回だけ文字認識データをダウンロードします。読み取り後は必ず候補を確認してください
               （1行に「英単語<span aria-hidden="true"> </span>意味」、例: <em>apple りんご</em>）。
+            </p>
+            <!-- 日本語は改行がそのまま半角空白として描画されるため、文中で折り返さない。 -->
+            <p class="ocr-notice ocr-recommend">
+              <strong>読み取りの精度を優先するなら「外部AIで抽出」をおすすめします。</strong>
+              <span>端末内OCRは無料で安全ですが、手書き・小さい文字・2段組・影や反射のある写真では読み違いが増えます。外部AIは行の対応や訳の切り出しも含めて安定しやすく、取り込み後の手直しがぐっと減ります。利用には各サービスのAPIキー（下の「外部AI設定」で登録・無料枠あり）が必要で、</span><strong>画像は選んだサービスへ送信されます</strong><span>。個人情報が写った写真には使わないでください。</span>
             </p>
             <div class="import-grid">
               <label class="drop-zone" for="imageInput">
@@ -5961,7 +5975,7 @@ accurate 正確な"
             <summary>📖 ツールの使い方</summary>
             <div class="settings-section-body">
               <ol class="usage-steps">
-                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。写真からの読み取り（OCR）は写真の鮮明さやレイアウトで結果が変わるため、取り込み後に「確認」で直してください。</li>
+                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。写真からの読み取り（OCR）は写真の鮮明さやレイアウトで結果が変わるため、取り込み後に「確認」で直してください。精度を優先するなら「外部AIで抽出」をおすすめします（APIキーが必要で、画像は選んだサービスへ送信されます）。</li>
                 <li><strong>確認</strong>：取り込んだ候補をチェックして「保存」。保存先の単語帳も選べます。</li>
                 <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
                 <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲選択し、選んだ単語をまとめて出題・削除できます。</li>
@@ -9464,6 +9478,7 @@ const elements = {
   resumeQuizButton: document.querySelector("#resumeQuizButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
   shareToolHeaderButton: document.querySelector("#shareToolHeaderButton"),
+  safeShareStrip: document.querySelector("#safeShareStrip"),
   safeShareWarning: document.querySelector("#safeShareWarning"),
   safeShareToggleButton: document.querySelector("#safeShareToggleButton"),
   showTutorialButton: document.querySelector("#showTutorialButton"),
@@ -10587,6 +10602,13 @@ elements.tutorialDialog?.addEventListener("keydown", (event) => {
   }
 });
 
+// 画面上部の「キーなしで安全に共有」の帯は、設定タブを開いているときだけ出す。
+// 共有は設定から行う操作なので、取り込み・クイズ中は常時出さない。
+function syncSafeShareStripVisibility() {
+  if (!elements.safeShareStrip) return;
+  elements.safeShareStrip.hidden = activeStepId !== "settings";
+}
+
 function setActiveStep(id, options = {}) {
   const nextId = STEP_IDS.includes(id) ? id : "import";
   const previousId = elements.stepTabs.find((tab) => tab.classList.contains("active"))?.dataset.stepTab;
@@ -10615,6 +10637,7 @@ function setActiveStep(id, options = {}) {
   // 案1: 表示中パネルを記録し、非表示の間に「要再描画」になっていたらこの瞬間に描画する。
   // これにより「単語追加→他タブで反映」など、どのタブへ移っても最新の内容が保証される。
   activeStepId = nextId;
+  syncSafeShareStripVisibility();
   renderDirtyActivePanel();
   if (nextId === "library") scheduleLibraryMetadataBackfill();
   if (options.persist !== false) localStorage.setItem(ACTIVE_STEP_KEY, nextId);

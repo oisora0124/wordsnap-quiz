@@ -205,6 +205,52 @@ assert.match(safeShareToggle, /\baria-expanded=["']false["']/i,
   "the safe-share warning toggle must expose its initial (collapsed) state");
 assert.match(safeShareToggle, /\baria-controls=["']safeShareWarning["']/i,
   "the safe-share warning toggle must identify its controlled warning");
+
+// 画面上部の共有帯は設定タブ専用。初期値が hidden でないと、保存されたタブを
+// 復元するまでの一瞬だけ取り込み画面に出てしまう。
+const safeShareStripMarkup = staticMarkup.match(
+  /<aside\b[^>]*\bid=["']safeShareStrip["'][^>]*>/i,
+)?.[0] || "";
+assert.match(safeShareStripMarkup, /\shidden(\s|>|=)/i,
+  "the safe-share strip must start hidden so it cannot flash before the active tab is restored");
+const stripVisibilityStart = publicHtml.indexOf("function syncSafeShareStripVisibility(");
+const stripVisibilityEnd = publicHtml.indexOf("\nfunction setActiveStep(", stripVisibilityStart);
+assert.ok(stripVisibilityStart >= 0 && stripVisibilityEnd > stripVisibilityStart,
+  "safe-share strip visibility source is missing");
+const stripSandbox = {
+  elements: { safeShareStrip: { hidden: false } },
+  activeStepId: "import",
+};
+new Script(
+  `${publicHtml.slice(stripVisibilityStart, stripVisibilityEnd)}\n` +
+    "globalThis.__syncSafeShareStrip = syncSafeShareStripVisibility;",
+  { filename: "safe-share-strip-check.js" },
+).runInNewContext(stripSandbox);
+for (const [step, expectedHidden] of [
+  ["import", true],
+  ["candidates", true],
+  ["quiz", true],
+  ["library", true],
+  ["settings", false],
+]) {
+  stripSandbox.activeStepId = step;
+  stripSandbox.__syncSafeShareStrip();
+  assert.equal(stripSandbox.elements.safeShareStrip.hidden, expectedHidden,
+    `the safe-share strip must be ${expectedHidden ? "hidden" : "visible"} on the ${step} tab`);
+}
+assert.match(publicHtml, /activeStepId = nextId;\s*\n\s*syncSafeShareStripVisibility\(\);/,
+  "setActiveStep must refresh the safe-share strip after the active step changes");
+
+// OCRの精度案内。外部AIを勧める文と「画像が送信される」注意は必ず同じ段落に置く
+// （勧める文だけが残ると、送信を伴う操作を注意なしで推奨することになる）。
+const ocrRecommendNotice = staticMarkup.match(
+  /<p\b[^>]*\bclass=["'][^"']*\bocr-recommend\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i,
+)?.[1] || "";
+assert.ok(ocrRecommendNotice, "the OCR section must carry an accuracy recommendation notice");
+assert.match(ocrRecommendNotice, /外部AIで抽出/,
+  "the OCR recommendation must name the external-AI button it points at");
+assert.match(ocrRecommendNotice, /画像は選んだサービスへ送信されます/,
+  "the OCR recommendation must keep the image-upload caveat in the same paragraph");
 for (const match of staticMarkup.matchAll(/<button\b[^>]*>/gi)) {
   assert.match(match[0], /\btype=["']button["']/i,
     "a static button is missing type=button and may submit a future form unexpectedly");
