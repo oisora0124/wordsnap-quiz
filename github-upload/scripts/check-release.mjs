@@ -126,6 +126,10 @@ assert.match(publicHtml.slice(saveDeckStart, saveDeckEnd), /saveDeckChosenByUser
   "re-rendering the save-deck picker must respect an explicit user choice");
 assert.match(publicHtml, /elements\.saveDeckSelect\?\.addEventListener\("change"/,
   "choosing a save deck must be recorded so later re-renders keep it");
+// 一部だけ保存できた（候補が残っている）間は保存先の選択を解除しない。
+// 解除すると次の再描画で既定へ戻り、直した残りが別の単語帳へ入る。
+assert.match(saveHandlerSource, /if \(rejected\.length === 0\) saveDeckChosenByUser = false;/,
+  "the chosen save deck must survive until every candidate has been saved");
 
 assert.equal(reviewEventSchema.additionalProperties, false,
   "review-event shadow schema must reject unspecified data collection fields");

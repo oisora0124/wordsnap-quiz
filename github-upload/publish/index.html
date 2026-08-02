@@ -6451,7 +6451,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.61</span>
+        <span class="app-footer-version">バージョン 1.0.62</span>
       </footer>
     </main>
 
@@ -6585,8 +6585,8 @@ const WordBankTelemetry = (() => {
   const ERROR_STATE_KEY = "wordsnap-telemetry-errors:v1";
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
-  // 利用者が「バージョン 1.0.61」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.61";
+  // 利用者が「バージョン 1.0.62」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
+  const APP_REV = "1.0.62";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23664,8 +23664,10 @@ elements.saveParsedButton.addEventListener("click", () => {
   candidates = rejected;
   currentQuiz = null;
   if (appState.activeDeckId !== "all") appState.activeDeckId = targetDeckId;
-  // 保存が済んだら保存先の明示選択は解除し、次の取り込みは既定（表示中の単語帳）に戻す。
-  if (cleaned.length > 0) saveDeckChosenByUser = false;
+  // 保存先の明示選択を解除するのは、候補を出し切ったときだけにする。
+  // 一部だけ保存できて候補が残っている間に解除すると、そのあとの再描画で保存先が
+  // 既定へ戻り、直した残りが別の単語帳へ入ってしまう（元の不具合の再現になる）。
+  if (rejected.length === 0) saveDeckChosenByUser = false;
   try {
     saveState();
   } catch (error) {
