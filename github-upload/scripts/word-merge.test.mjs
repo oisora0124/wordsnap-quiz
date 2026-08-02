@@ -640,3 +640,118 @@ test("実コードのマージでも、後から動かした単語帳が採用�
   assert.equal(runtime.mergeWord(legacy1, legacy2, "remote").deckId, "deckone",
     "旧データ同士は既存の合流結果を変えない");
 });
+
+// ---- 2端末の往復（実機同期の代わりに、実コードのマージで往復させる） ----
+
+function twoDeviceWord(overrides) {
+  return {
+    id: "wordone",
+    term: "apple",
+    meaning: "りんご",
+    addedAt: "2026-01-01T00:00:00.000Z",
+    stats: { correct: 3, wrong: 1 },
+    history: [{ at: "2026-07-01T00:00:00.000Z", correct: true }],
+    learning: { status: "review", srsStage: 2, correctStreak: 1, firstAttempted: true, nextReviewAt: 0 },
+    ...overrides,
+  };
+}
+
+function twoDeviceState(runtime, word, extra) {
+  return runtime.normalizeState({
+    words: [word],
+    decks: [{ id: "deckone", name: "A帳" }, { id: "decktwo", name: "B帳" }],
+    activeDeckId: "all",
+    ...(extra || {}),
+  });
+}
+
+test("2端末の往復: 単語帳の移動が反映され、往復しても元へ戻らない", () => {
+  const runtime = makeWordRuntime();
+  const knowsNothing = twoDeviceState(runtime, twoDeviceWord({ deckId: "deckone", deckUpdatedAt: 0 }));
+  const moved = twoDeviceState(runtime, twoDeviceWord({ deckId: "decktwo", deckUpdatedAt: 2000 }));
+
+  // 端末Aが端末Bの状態を取り込む
+  const a1 = runtime.mergeAppStates(knowsNothing, moved, { normalized: true });
+  assert.equal(a1.words[0].deckId, "decktwo", "別端末での移動が反映される");
+
+  // Aが押し戻し、Bが取り込む（ここで元へ戻っていたのが今回の不具合）
+  const b1 = runtime.mergeAppStates(moved, a1, { normalized: true });
+  assert.equal(b1.words[0].deckId, "decktwo", "往復しても移動が消えない");
+
+  // もう1往復して両端末が一致する（収束する）
+  const a2 = runtime.mergeAppStates(a1, b1, { normalized: true });
+  assert.equal(
+    runtime.stateSignature(a2),
+    runtime.stateSignature(b1),
+    "2往復で両端末の状態が一致する",
+  );
+
+  // 移動を運ぶために学習データを失っていないこと
+  assert.equal(a2.words[0].stats.correct, 3, "成績を失わない");
+  assert.equal(a2.words[0].stats.wrong, 1, "成績を失わない");
+  assert.equal(a2.words[0].history.length, 1, "回答履歴を失わない");
+  assert.equal(a2.words[0].learning.srsStage, 2, "SRSの段階を失わない");
+  assert.equal(a2.words[0].learning.status, "review", "学習状態を失わない");
+});
+
+test("2端末の往復: 時計の狂った端末の値が、正常な端末の学習を壊さない", () => {
+  const runtime = makeWordRuntime();
+  const day = 24 * 60 * 60 * 1000;
+  const healthy = twoDeviceState(
+    runtime,
+    twoDeviceWord({ deckId: "deckone", learning: { status: "mastered", srsStage: 5, correctStreak: 2, firstAttempted: true, nextReviewAt: Date.now() + 3 * day } }),
+    { streak: { count: 4, last: runtime.localDateString(new Date()), best: 9 } },
+  );
+  // 時計を2030年に設定した端末が作った状態
+  const skewed = twoDeviceState(
+    runtime,
+    twoDeviceWord({ deckId: "deckone", learning: { status: "mastered", srsStage: 5, correctStreak: 2, firstAttempted: true, nextReviewAt: Date.now() + 4 * 365 * day } }),
+    { streak: { count: 1, last: "2030-01-01", best: 1 } },
+  );
+
+  // 危ないのは「壊れた値しか存在しない」語。両端末に同じ語があると
+  // mergeLearningState が小さい方（正常値）を採るため、修復が無くても通ってしまう。
+  // 実際の事故は、狂った端末にしか無い語や、自分の端末の保存値が狂っていた場合に起きる。
+  const onlyOnSkewed = runtime.normalizeState({
+    ...skewed,
+    words: [
+      ...skewed.words,
+      twoDeviceWord({
+        id: "wordtwo",
+        term: "banana",
+        meaning: "バナナ",
+        deckId: "deckone",
+        learning: { status: "mastered", srsStage: 5, correctStreak: 2, firstAttempted: true, nextReviewAt: Date.now() + 4 * 365 * day },
+      }),
+    ],
+  });
+
+  // 読み込みの時点（自分の保存値が狂っていた場合）で直っていること
+  const lone = onlyOnSkewed.words.find((word) => word.id === "wordtwo");
+  assert.equal(lone.learning.nextReviewAt, 0, "壊れた復習予定は読み込み時に0へ戻す");
+  assert.equal(lone.learning.srsStage, 5, "段階は保つ");
+
+  const merged = runtime.mergeAppStates(healthy, onlyOnSkewed, { normalized: true });
+  const carried = merged.words.find((word) => word.id === "wordtwo");
+  assert.ok(carried, "狂った端末にしかない語も失わない");
+  assert.ok(
+    carried.learning.nextReviewAt <= Date.now() + 400 * day,
+    "未来へ飛んだ復習予定を同期で持ち込ませない（習得語が出題から消えない）",
+  );
+  assert.equal(carried.learning.srsStage, 5, "同期後も段階は保つ");
+  assert.ok(
+    merged.words[0].learning.nextReviewAt <= Date.now() + 400 * day,
+    "両端末にある語も未来へ飛ばさない",
+  );
+  assert.notEqual(merged.streak.last, "2030-01-01", "未来日付のストリークを残さない");
+  assert.ok(merged.streak.count > 0, "連続日数を0にはしない");
+
+  // 逆順でも同じ結論になる（どちらが先に同期しても壊れない）
+  const reversed = runtime.mergeAppStates(onlyOnSkewed, healthy, { normalized: true });
+  const reversedCarried = reversed.words.find((word) => word.id === "wordtwo");
+  assert.ok(
+    reversedCarried.learning.nextReviewAt <= Date.now() + 400 * day,
+    "取り込む向きが逆でも未来の復習予定を残さない",
+  );
+  assert.notEqual(reversed.streak.last, "2030-01-01", "向きが逆でも未来日付を残さない");
+});
