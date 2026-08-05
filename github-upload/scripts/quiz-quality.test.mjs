@@ -57,6 +57,8 @@ function buildSandbox() {
     "Math.random = () => 0.5;", // shuffle を決定論化
     extractConst("BUILTIN_POS_GROUPS"),
     extractConst("BUILTIN_POS"),
+    extractConst("BUILTIN_POS_MULTI_GROUPS"),
+    extractConst("BUILTIN_POS_MULTI"),
     extractConst("BUILTIN_POS_NOUN_AND_VERB"),
     extractConst("DERIVATIONAL_SUFFIXES"),
     extractFunction("builtinPosTag"),
@@ -105,7 +107,7 @@ function buildSandbox() {
     extractFunction("validPair"),
     extractFunction("parseVocabulary"),
     "globalThis.__q = { appStateRef: () => appState, setWords: (w) => { appState.words = w; }," +
-      " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
+      " builtinPosTag, builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
       " normalizeQuizTimeLimit, cefrRankOfLevel, normalizeDailyGoal," +
       " normalizeSpeechRate, normalizeSpeechVoiceUri, buildFlashcardOrder," +
       " sliceWordsByQuizRange, isMasteryVerificationDue, flashcardEligibleIds," +
@@ -131,8 +133,13 @@ test("built-in noun/verb words expose both parts of speech", () => {
 test("posTagsFor unions the built-in table with saved tags", () => {
   q.setWords([]);
   // 表に無い語でも、保存済みの複数タグがあれば両方返す（Datamuseが返す全品詞を捨てない）。
-  const word = { term: "custom", pos: { tag: "v", tags: ["v", "n"] } };
-  assert.deepEqual([...q.posTagsFor("custom", word)].sort(), ["n", "v"]);
+  // 内蔵表に載っていないことが要点なので、実在しない綴りを使う（実在語だと
+  // 品詞表が育ったときに前提が崩れる）。
+  const term = "zzzcustomword";
+  // deepEqual はサンドボックス側の配列とプロトタイプが違って落ちるので、要素数で見る。
+  assert.equal([...q.builtinPosTags(term)].length, 0, "前提: この語は内蔵表に無い");
+  const word = { term, pos: { tag: "v", tags: ["v", "n"] } };
+  assert.deepEqual([...q.posTagsFor(term, word)].sort(), ["n", "v"]);
 });
 
 test("a distractor has basis only when parts of speech do not overlap", () => {
@@ -899,4 +906,105 @@ test("CEFRはAPIが応答したうえでの『判定不能』はキャッシュ�
   assert.ok(cefr.peek("zzznosuchword"), "確定した未判定はキャッシュされる");
   await cefr.resolve("zzznosuchword");
   assert.equal(sandbox.calls.length, 1, "キャッシュ済みなら再問い合わせしない");
+});
+
+// --- 内蔵の品詞表 -------------------------------------------------------
+// 誤った品詞は空所補充の「品詞が違うから空所に入らない」という根拠を壊し、
+// 正解が2つある問題を作ってしまう。表の不変条件をここで固定する。
+test("多品詞語は取り得る品詞をすべて返す（単一品詞に丸めない）", () => {
+  // access は名詞でも動詞でも使う。片方だけ返すと、もう片方の空所で
+  // 「品詞が違うから入らない」と誤った根拠を作ってしまう。
+  const tags = [...q.builtinPosTags("access")].sort();
+  assert.deepEqual(tags, ["n", "v"]);
+  // 代表の品詞は先頭（訳から導出したもの）。
+  assert.ok(["n", "v"].includes(q.builtinPosTag("access")));
+});
+
+test("多品詞語は空所補充の根拠にならない（品詞が重なるため）", () => {
+  q.setWords([]);
+  // 答えが名詞のとき、名詞にもなる語は空所に入り得るので根拠にできない。
+  assert.equal(q.contextDistractorHasBasis(W("poverty", "貧困", "n"), "access"), false);
+  // 品詞が重ならない語は根拠になる。
+  assert.equal(q.contextDistractorHasBasis(W("poverty", "貧困", "n"), "abolish"), true);
+});
+
+test("品詞表は単一品詞と多品詞で語が重複しない", () => {
+  // 両方に載ると、どちらが効くかが読み手にも実装にも曖昧になる。
+  const single = new Set();
+  for (const m of html.matchAll(/^\s+(n|v|adj): "([^"]+)",$/gm)) {
+    for (const w of m[2].split(" ")) single.add(w);
+  }
+  const multiSrc = /const BUILTIN_POS_MULTI_GROUPS = \{([\s\S]*?)\n\};/.exec(html)[1];
+  const overlap = [];
+  for (const m of multiSrc.matchAll(/^\s+"[^"]+": "([^"]+)",$/gm)) {
+    for (const w of m[1].split(" ")) if (single.has(w)) overlap.push(w);
+  }
+  assert.deepEqual(overlap, [], `単一品詞と多品詞に重複: ${overlap.slice(0, 10).join(" ")}`);
+});
+
+test("品詞表の語はすべて英小文字のみ、品詞名も既定の4種のみ", () => {
+  const bad = [];
+  for (const m of html.matchAll(/^\s+(n|v|adj): "([^"]+)",$/gm)) {
+    for (const w of m[2].split(" ")) if (!/^[a-z]+$/.test(w)) bad.push(w);
+  }
+  const multiSrc = /const BUILTIN_POS_MULTI_GROUPS = \{([\s\S]*?)\n\};/.exec(html)[1];
+  const badTag = [];
+  for (const m of multiSrc.matchAll(/^\s+"([^"]+)": "([^"]+)",$/gm)) {
+    for (const t of m[1].split(" ")) if (!["n", "v", "adj", "adv"].includes(t)) badTag.push(t);
+    for (const w of m[2].split(" ")) if (!/^[a-z]+$/.test(w)) bad.push(w);
+  }
+  assert.deepEqual(bad, [], `品詞表に不正な語: ${bad.slice(0, 10).join(" ")}`);
+  assert.deepEqual(badTag, [], `品詞表に不正な品詞名: ${badTag.slice(0, 10).join(" ")}`);
+});
+
+test("サンプル単語の過半に品詞が付いている（付かないと空所補充が通常出題に落ちる）", () => {
+  const extract = (name) => {
+    const start = html.indexOf(`const ${name} = \``);
+    const open = html.indexOf("`", start);
+    return html.slice(open + 1, html.indexOf("`;", open + 1));
+  };
+  const terms = new Set();
+  for (const n of ["SAMPLE_TEXT", "SAMPLE_TEXT_JHS", "SAMPLE_TEXT_EIKEN",
+    "SAMPLE_TEXT_SOUKEI", "SAMPLE_TEXT_TOEIC", "SAMPLE_TEXT_IELTS"]) {
+    for (const line of extract(n).split("\n").filter(Boolean)) {
+      terms.add(line.slice(0, line.indexOf(" ")).toLowerCase());
+    }
+  }
+  let covered = 0;
+  for (const t of terms) if ([...q.builtinPosTags(t)].length > 0) covered += 1;
+  const ratio = covered / terms.size;
+  assert.ok(
+    ratio >= 0.8,
+    `サンプル${terms.size}語のうち品詞が付いているのは${covered}語 (${(ratio * 100).toFixed(1)}%)`,
+  );
+});
+
+// resolvePos は内蔵表で早期に返る。ここで tags を落とすと、保存後の単語が
+// 「この品詞だけ」の語として扱われ、空所補充の根拠を誤って作ってしまう。
+test("resolvePos は内蔵表の多品詞語について tags も返す", async () => {
+  const pieces = [
+    extractConst("BUILTIN_POS_GROUPS"),
+    extractConst("BUILTIN_POS"),
+    extractConst("BUILTIN_POS_MULTI_GROUPS"),
+    extractConst("BUILTIN_POS_MULTI"),
+    extractConst("BUILTIN_POS_NOUN_AND_VERB"),
+    extractFunction("builtinPosTag"),
+    extractFunction("builtinPosTags"),
+    // 内蔵表で早期に返るので fetch には到達しない。到達したら通信した証拠として落とす。
+    "const fetch = () => { throw new Error('内蔵表にある語で通信した'); };",
+    "const AbortController = function () { this.signal = null; this.abort = () => {}; };",
+    "const setTimeout = () => 0; const clearTimeout = () => {};",
+    `async ${extractFunction("resolvePos")}`,
+    "globalThis.__r = { resolvePos };",
+  ];
+  const sb = {};
+  new Script(pieces.join("\n\n"), { filename: "resolve-pos-check.js" }).runInNewContext(sb);
+
+  const multi = await sb.__r.resolvePos("access"); // n と v の両方を取る語
+  assert.ok(multi.tag, "代表の品詞を返す");
+  assert.deepEqual([...(multi.tags || [])].sort(), ["n", "v"], "取り得る品詞をすべて返す");
+
+  const single = await sb.__r.resolvePos("poverty"); // 名詞だけの語
+  assert.equal(single.tag, "n");
+  assert.deepEqual([...(single.tags || [])], ["n"]);
 });
