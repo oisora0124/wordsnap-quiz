@@ -364,27 +364,123 @@ for (const removed of ["downloadStandalone", "downloadToolButton", "STANDALONE_D
     `removed standalone-download leftover: ${removed}`,
   );
 }
-const sampleMatch = publicHtml.match(/const\s+SAMPLE_TEXT\s*=\s*`([\s\S]*?)`;/);
-assert.ok(sampleMatch, "built-in vocabulary sample is missing");
-const sampleRows = sampleMatch[1]
-  .split(/\r?\n/)
-  .map((line) => line.trim())
-  .filter(Boolean)
-  .map((line) => {
-    const separator = line.indexOf(" ");
-    return {
-      valid: separator > 0,
-      term: separator > 0 ? line.slice(0, separator).trim().toLowerCase() : "",
-      meaning: separator > 0 ? line.slice(separator + 1).trim() : "",
-    };
-  });
-assert.equal(sampleRows.length, 300, "built-in sample must contain exactly 300 valid rows");
-assert.ok(sampleRows.every((row) => row.valid && row.term && row.meaning),
-  "built-in sample contains a malformed row or an empty term/meaning");
-assert.equal(new Set(sampleRows.map((row) => row.term)).size, sampleRows.length,
-  "built-in sample contains duplicate terms");
-assert.equal(new Set(sampleRows.map((row) => row.meaning)).size, sampleRows.length,
-  "built-in sample contains duplicate meanings that weaken multiple-choice questions");
+// サンプル単語集は6集すべてを同じ基準で検査する。1集だけ見ていると、
+// 増補や差し替えのときに他の集が壊れたまま素通りする。
+const SAMPLE_ROW_COUNT = 1500;
+const SAMPLE_CONSTANTS = [
+  ["SAMPLE_TEXT", "exam300"],
+  ["SAMPLE_TEXT_JHS", "jhs100"],
+  ["SAMPLE_TEXT_EIKEN", "eiken100"],
+  ["SAMPLE_TEXT_SOUKEI", "soukei100"],
+  ["SAMPLE_TEXT_TOEIC", "toeic100"],
+  ["SAMPLE_TEXT_IELTS", "ielts100"],
+];
+// firstMeaning() がここで意味を切ってしまうので、意味に混ぜると後半が黙って消える。
+const SAMPLE_MEANING_SPLIT = /[、,，;；。．・/]/;
+for (const [constName, sampleKey] of SAMPLE_CONSTANTS) {
+  const match = publicHtml.match(
+    new RegExp(`const\\s+${constName}\\s*=\\s*\`([\\s\\S]*?)\`;`),
+  );
+  assert.ok(match, `built-in vocabulary sample is missing: ${constName}`);
+  // 物理行で数える。trim+filter(Boolean) のあとに数えると、空行や行末空白が混ざった
+  // ファイルでも件数が合ってしまい、崩れを見逃す。
+  const physicalLines = match[1].replace(/^\n/, "").replace(/\n$/, "").split(/\r?\n/);
+  assert.equal(
+    physicalLines.length,
+    SAMPLE_ROW_COUNT,
+    `${constName} must have exactly ${SAMPLE_ROW_COUNT} physical lines`,
+  );
+  assert.ok(
+    physicalLines.every((line) => line === line.trim() && line !== ""),
+    `${constName} contains a blank line or stray surrounding whitespace`,
+  );
+  const rows = physicalLines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const separator = line.indexOf(" ");
+      return {
+        line,
+        valid: separator > 0,
+        term: separator > 0 ? line.slice(0, separator).trim().toLowerCase() : "",
+        meaning: separator > 0 ? line.slice(separator + 1).trim() : "",
+      };
+    });
+  assert.equal(
+    rows.length,
+    SAMPLE_ROW_COUNT,
+    `${constName} must contain exactly ${SAMPLE_ROW_COUNT} valid rows`,
+  );
+  assert.ok(
+    rows.every((row) => row.valid && row.term && row.meaning),
+    `${constName} contains a malformed row or an empty term/meaning`,
+  );
+  // 見出し語は英小文字のみ。parseVocabulary は最初の日本語文字で切るので、
+  // 見出し語側に日本語が混ざると1行まるごと読み取れない行になる。
+  // 空白・ハイフン・アポストロフィも許さない（CEFR/品詞の照会が単語1語前提のため）。
+  assert.ok(
+    rows.every((row) => /^[a-z]+$/.test(row.term)),
+    `${constName} contains a term with unexpected characters`,
+  );
+  assert.ok(
+    rows.every((row) => !SAMPLE_MEANING_SPLIT.test(row.meaning) && !/\s/.test(row.meaning)),
+    `${constName} contains a meaning that firstMeaning() would truncate`,
+  );
+  assert.equal(
+    new Set(rows.map((row) => row.term)).size,
+    rows.length,
+    `${constName} contains duplicate terms`,
+  );
+  assert.equal(
+    new Set(rows.map((row) => row.meaning)).size,
+    rows.length,
+    `${constName} contains duplicate meanings that weaken multiple-choice questions`,
+  );
+  // チップとSAMPLE_SETSのラベルが件数を偽らないこと（1500語なのに「300」と出さない）。
+  const chip = publicHtml.match(
+    new RegExp(`data-sample="${sampleKey}"[^>]*>([^<]*)</button>`),
+  );
+  assert.ok(chip, `sample chip is missing: ${sampleKey}`);
+  assert.ok(
+    chip[1].includes(String(SAMPLE_ROW_COUNT)),
+    `sample chip label must state ${SAMPLE_ROW_COUNT}: ${sampleKey} -> ${chip[1]}`,
+  );
+  const setLabel = publicHtml.match(
+    new RegExp(`${sampleKey}:\\s*\\{\\s*label:\\s*"([^"]*)"`),
+  );
+  assert.ok(setLabel, `SAMPLE_SETS entry is missing: ${sampleKey}`);
+  assert.ok(
+    setLabel[1].includes(String(SAMPLE_ROW_COUNT)),
+    `SAMPLE_SETS label must state ${SAMPLE_ROW_COUNT}: ${sampleKey} -> ${setLabel[1]}`,
+  );
+}
+// 候補一覧のCEFRバッジ取得は上限つき。上限を外すと「サンプルを追加」の1タップで
+// 1500語ぶんのDatamuse問い合わせが直列に走る（1.0.63でサンプルを1500語へ増補した）。
+{
+  const limit = publicHtml.match(/const CEFR_BADGE_LOOKUP_LIMIT = (\d+);/);
+  assert.ok(limit, "CEFR_BADGE_LOOKUP_LIMIT is missing");
+  assert.ok(
+    Number(limit[1]) > 0 && Number(limit[1]) <= 200,
+    `CEFR_BADGE_LOOKUP_LIMIT must stay small: ${limit[1]}`,
+  );
+  const head = "async function resolveCefrBadges(container) {";
+  const start = publicHtml.indexOf(head);
+  assert.ok(start >= 0, "resolveCefrBadges is missing");
+  const end = publicHtml.indexOf("\n}", start);
+  assert.ok(end > start, "resolveCefrBadges body could not be delimited");
+  const body = publicHtml.slice(start, end);
+  assert.ok(
+    body.includes("lookups >= CEFR_BADGE_LOOKUP_LIMIT") && body.includes("break"),
+    "resolveCefrBadges must stop looking up after CEFR_BADGE_LOOKUP_LIMIT misses",
+  );
+  // キャッシュ済み(peek)は通信しないので上限に数えない。数えると、2回目以降の表示で
+  // 未取得の語が上限に阻まれて永久に埋まらなくなる。
+  assert.ok(
+    body.indexOf("window.Cefr.peek(term)) continue") <
+      body.indexOf("lookups >= CEFR_BADGE_LOOKUP_LIMIT"),
+    "cached terms must be skipped before the lookup budget is consumed",
+  );
+}
 const inlineScripts = [...publicHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
 assert.ok(inlineScripts.length >= 1, "no inline JavaScript found");
 for (const [index, match] of inlineScripts.entries()) {

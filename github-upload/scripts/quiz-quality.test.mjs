@@ -92,12 +92,25 @@ function buildSandbox() {
     extractFunction("personalAccuracyFactor"),
     extractFunction("adaptiveSrsMultiplier"),
     extractFunction("srsIntervalMs"),
+    // 取り込み経路。サンプル単語集が実際に1行=1候補として読めることを確かめるために使う。
+    extractFunction("normalizeTerm"),
+    `const JP_CHAR = ${html.match(/const JP_CHAR = (\/.+\/);/)[1]};`,
+    `const POS_HEAD = ${html.match(/const POS_HEAD = (\/.+\/);/)[1]};`,
+    `const IPA_CHARS = ${html.match(/const IPA_CHARS = (\/.+\/);/)[1]};`,
+    `const SENTENCE_END_CHARS = ${html.match(/const SENTENCE_END_CHARS = (\/.+\/);/)[1]};`,
+    extractFunction("stripNoise"),
+    extractFunction("cleanTermText"),
+    extractFunction("firstMeaning"),
+    extractFunction("looksLikeHeadword"),
+    extractFunction("validPair"),
+    extractFunction("parseVocabulary"),
     "globalThis.__q = { appStateRef: () => appState, setWords: (w) => { appState.words = w; }," +
       " builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
       " normalizeQuizTimeLimit, cefrRankOfLevel, normalizeDailyGoal," +
       " normalizeSpeechRate, normalizeSpeechVoiceUri, buildFlashcardOrder," +
       " sliceWordsByQuizRange, isMasteryVerificationDue, flashcardEligibleIds," +
-      " wordAccuracyFactor, personalAccuracyFactor, adaptiveSrsMultiplier, srsIntervalMs, SRS_INTERVAL_DAYS, SRS_DAY_MS };",
+      " wordAccuracyFactor, personalAccuracyFactor, adaptiveSrsMultiplier, srsIntervalMs, SRS_INTERVAL_DAYS, SRS_DAY_MS," +
+      " parseVocabulary, validPair, firstMeaning };",
   ];
   const sandbox = {};
   new Script(pieces.join("\n\n"), { filename: "quiz-quality-check.js" }).runInNewContext(sandbox);
@@ -675,23 +688,59 @@ test("built-in sample word sets are well-formed (format, no dups, expected size)
     return html.slice(open + 1, close);
   };
   const sets = {
-    SAMPLE_TEXT: 300,
-    SAMPLE_TEXT_JHS: 300,
-    SAMPLE_TEXT_EIKEN: 300,
-    SAMPLE_TEXT_SOUKEI: 300,
-    SAMPLE_TEXT_TOEIC: 300,
-    SAMPLE_TEXT_IELTS: 300,
+    SAMPLE_TEXT: 1500,
+    SAMPLE_TEXT_JHS: 1500,
+    SAMPLE_TEXT_EIKEN: 1500,
+    SAMPLE_TEXT_SOUKEI: 1500,
+    SAMPLE_TEXT_TOEIC: 1500,
+    SAMPLE_TEXT_IELTS: 1500,
   };
   for (const [name, expected] of Object.entries(sets)) {
     const lines = extractTemplate(name).split("\n").filter(Boolean);
     assert.equal(lines.length, expected, `${name} should have ${expected} lines, got ${lines.length}`);
     const seen = new Set();
+    const seenMeaning = new Set();
     for (const line of lines) {
       const m = line.match(/^([a-z]+) (\S.*)$/);
       assert.ok(m, `${name}: malformed line "${line}"`);
       assert.ok(!seen.has(m[1]), `${name}: duplicate word "${m[1]}"`);
       seen.add(m[1]);
+      // 同じ集に同じ訳が2つあると四択で正解が2つになり、問題として成立しない。
+      assert.ok(!seenMeaning.has(m[2]), `${name}: duplicate meaning "${m[2]}"`);
+      seenMeaning.add(m[2]);
     }
+  }
+});
+
+test("built-in sample rows survive the real parseVocabulary path", () => {
+  // 語数だけ数えても「読み取れない行」は見つからない。実際の取り込み経路に通して、
+  // 1500行がそのまま1500件の候補になることを確かめる。
+  const extractTemplate = (name) => {
+    const start = html.indexOf(`const ${name} = \``);
+    const open = html.indexOf("`", start);
+    const close = html.indexOf("`;", open + 1);
+    return html.slice(open + 1, close);
+  };
+  for (const name of [
+    "SAMPLE_TEXT",
+    "SAMPLE_TEXT_JHS",
+    "SAMPLE_TEXT_EIKEN",
+    "SAMPLE_TEXT_SOUKEI",
+    "SAMPLE_TEXT_TOEIC",
+    "SAMPLE_TEXT_IELTS",
+  ]) {
+    const text = extractTemplate(name);
+    const result = q.parseVocabulary(text, null);
+    assert.equal(
+      result.candidates.length,
+      1500,
+      `${name}: parseVocabulary should yield 1500 candidates, got ${result.candidates.length}`,
+    );
+    assert.equal(
+      result.unreadableLines.length,
+      0,
+      `${name}: unreadable lines ${JSON.stringify(result.unreadableLines.slice(0, 5))}`,
+    );
   }
 });
 
@@ -719,4 +768,135 @@ test("CEFR easy-first order ranks A1<A2<...<C2, unknown/invalid last", () => {
   const levels = ["C1", null, "A1", "B1", "A2", "C2", "B2"];
   const sorted = levels.slice().sort((a, b) => q.cefrRankOfLevel(a) - q.cefrRankOfLevel(b));
   assert.deepEqual(sorted, ["A1", "A2", "B1", "B2", "C1", "C2", null]);
+});
+
+// --- 候補一覧のCEFRバッジ取得予算 ---------------------------------------
+// 文字列一致だけのゲートでは「上限があるように見えて実は効かない」書き換えを
+// 見逃す。実コードをサンドボックスで動かし、問い合わせ回数そのものを数える。
+function buildCefrSandbox() {
+  const pieces = [
+    extractConst("cefrInFlight"),
+    `const CEFR_BADGE_LOOKUP_LIMIT = ${
+      html.match(/const CEFR_BADGE_LOOKUP_LIMIT = (\d+);/)[1]
+    };`,
+    // resolveCefrOnce が使う window.Cefr と、バッジ描画はテスト側で差し替える。
+    "let lookups = 0;",
+    "const cache = new Map();",
+    "const window = { Cefr: {" +
+      " key: (t) => String(t || '').trim().toLowerCase()," +
+      " peek: (t) => cache.get(String(t || '').trim().toLowerCase()) || null," +
+      " resolve: async (t) => { lookups += 1; return { level: 'B1', estimated: true }; } } };",
+    "function updateCefrBadge(badge, result) { badge.result = result; }",
+    extractFunction("resolveCefrOnce"),
+    // extractFunction は "function 名(" から切り出すので async が落ちる。ここで補う。
+    `async ${extractFunction("resolveCefrBadges")}`,
+    "globalThis.__c = { resolveCefrBadges, resolveCefrOnce, CEFR_BADGE_LOOKUP_LIMIT," +
+      " lookups: () => lookups, reset: () => { lookups = 0; cache.clear(); cefrInFlight.clear(); }," +
+      " prime: (t, r) => cache.set(t, r) };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "cefr-budget-check.js" }).runInNewContext(sandbox);
+  return sandbox.__c;
+}
+
+const makeBadges = (terms) => {
+  const badges = terms.map((term) => ({ dataset: { cefrTerm: term }, isConnected: true }));
+  return { badges, container: { querySelectorAll: () => badges } };
+};
+
+test("候補一覧のCEFR取得は上限で止まる（1500語で外部APIを叩き切らない）", async () => {
+  const c = buildCefrSandbox();
+  c.reset();
+  const terms = Array.from({ length: 1500 }, (_, i) => `w${i}`);
+  await c.resolveCefrBadges(makeBadges(terms).container);
+  assert.equal(
+    c.lookups(),
+    c.CEFR_BADGE_LOOKUP_LIMIT,
+    `1500件でも問い合わせは上限(${c.CEFR_BADGE_LOOKUP_LIMIT})で止まるべき`,
+  );
+});
+
+test("キャッシュ済みの語は取得予算を消費しない", async () => {
+  const c = buildCefrSandbox();
+  c.reset();
+  // 先頭1000語はキャッシュ済み。予算は残り500語に対して使われる。
+  const terms = Array.from({ length: 1500 }, (_, i) => `w${i}`);
+  for (let i = 0; i < 1000; i += 1) c.prime(`w${i}`, { level: "A1", estimated: false });
+  const { badges, container } = makeBadges(terms);
+  await c.resolveCefrBadges(container);
+  assert.equal(c.lookups(), c.CEFR_BADGE_LOOKUP_LIMIT, "未取得の語に予算を使い切るべき");
+  // 予算を使った先頭60件（＝w1000..w1059）に結果が入る。キャッシュ済みは対象外。
+  assert.ok(badges[1000].result, "予算内の未取得語にはバッジが入る");
+  assert.ok(!badges[999].result, "キャッシュ済みの語は問い合わせないので更新もしない");
+});
+
+test("上限に達した語も、次の描画で取得し直せる（永久に未判定のまま残らない）", async () => {
+  const c = buildCefrSandbox();
+  c.reset();
+  const terms = Array.from({ length: 100 }, (_, i) => `x${i}`);
+  await c.resolveCefrBadges(makeBadges(terms).container);
+  assert.equal(c.lookups(), c.CEFR_BADGE_LOOKUP_LIMIT);
+  // 予算切れで取れなかった残り40語だけを次に描画すると、今度は取得できる。
+  const rest = terms.slice(c.CEFR_BADGE_LOOKUP_LIMIT);
+  const { badges, container } = makeBadges(rest);
+  await c.resolveCefrBadges(container);
+  assert.ok(badges[0].result, "前回あぶれた語も、次の描画では取得される");
+});
+
+// --- CEFRの取得失敗をキャッシュに焼き付けない ---------------------------
+// HTTPエラー(429/5xx)を「判定済みの未知」として保存すると、peek() が既知として返し、
+// その語は二度と再取得されない。サンプルが1集1500語になり429を踏む機会が増えたため、
+// ここが焼き付くと大量の語が恒久的に未判定のまま残る。
+function buildCefrModuleSandbox() {
+  const store = new Map();
+  const sandbox = {
+    localStorage: {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    },
+    setTimeout,
+    clearTimeout,
+    AbortController,
+    calls: [],
+    responses: [],
+    window: {},
+  };
+  sandbox.fetch = async (url) => {
+    sandbox.calls.push(url);
+    const next = sandbox.responses.shift();
+    if (next === "throw") throw new Error("offline");
+    return next;
+  };
+  const pieces = [extractConst("Cefr"), "window.Cefr = Cefr;", "globalThis.__m = Cefr;"];
+  new Script(pieces.join("\n\n"), { filename: "cefr-module-check.js" }).runInNewContext(sandbox);
+  return { cefr: sandbox.__m, sandbox };
+}
+
+const okBody = (word, freq) => ({
+  ok: true,
+  json: async () => [{ word, tags: [`f:${freq}`] }],
+});
+
+test("CEFRはHTTPエラーをキャッシュせず、次回に取得し直せる", async () => {
+  const { cefr, sandbox } = buildCefrModuleSandbox();
+  sandbox.responses = [{ ok: false, status: 429, json: async () => null }];
+  assert.equal(await cefr.resolve("zzzratelimited"), null, "429では結果を確定させない");
+  assert.equal(cefr.peek("zzzratelimited"), null, "429をキャッシュに焼き付けてはいけない");
+
+  sandbox.responses = [okBody("zzzratelimited", 12)];
+  const second = await cefr.resolve("zzzratelimited");
+  assert.ok(second && second.level, "復旧後は取得できる");
+  assert.equal(sandbox.calls.length, 2, "再取得のために2回問い合わせている");
+});
+
+test("CEFRはAPIが応答したうえでの『判定不能』はキャッシュする（無駄な再問い合わせを避ける）", async () => {
+  const { cefr, sandbox } = buildCefrModuleSandbox();
+  // 200だが該当語なし＝判定済みの「不明」。これは保存してよい。
+  sandbox.responses = [{ ok: true, json: async () => [] }];
+  const first = await cefr.resolve("zzznosuchword");
+  assert.ok(first && first.level === null, "応答があれば未判定として確定する");
+  assert.ok(cefr.peek("zzznosuchword"), "確定した未判定はキャッシュされる");
+  await cefr.resolve("zzznosuchword");
+  assert.equal(sandbox.calls.length, 1, "キャッシュ済みなら再問い合わせしない");
 });
