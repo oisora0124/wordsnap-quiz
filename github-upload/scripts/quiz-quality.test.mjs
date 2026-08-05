@@ -1408,17 +1408,29 @@ function buildRecoveryFlowSandbox(words) {
     "const quizSelectedDeckWords = () => appState.words;",
     "const escapeHtml = (v) => String(v);",
     "const statsCardHeader = (a, b) => `<h3>${a}</h3><span>${b}</span>`;",
-    "const buildDailyActivity = () => new Map([['d1', 25], ['d2', 25]]);",
-    "const startReview = (ids, opts) => { globalThis.__started.push({ ids, opts }); };",
+    // 実際の buildDailyActivity と同じ形（{answers, correct, terms}）。
+    // 数値Mapに差し替えていたせいで、値の読み違いを検出できていなかった。
+    "const localDateString = (d = new Date()) => new Date(d).toISOString().slice(0, 10);",
+    "const buildDailyActivity = () => { const m = new Map();" +
+      " for (let i = 0; i < 7; i += 1) { const k = localDateString(new Date(Date.now() - i * 86400000));" +
+      " m.set(k, { answers: 25, correct: 20, terms: new Set() }); } return m; };",
+    "const startReview = (...a) => startReviewStub(...a);",
     "const setStatus = (m) => { globalThis.__status.push(m); };",
-    "const renderStats = () => {};",
+    "const renderStatsCharts = () => {};",
+    "let reviewSession = null;",
+    "const startReviewStub = (ids, opts) => { globalThis.__started.push({ ids, opts });" +
+      " reviewSession = { recoverySessionId: String(opts?.recoverySessionId || '') }; };",
     extractFunction("recentDailyAnswerCount"),
+    `const RECOVERY_MIN_PROBE_ANSWERS = ${html.match(/const RECOVERY_MIN_PROBE_ANSWERS = (\d+);/)[1]};`,
     extractFunction("startRecoveryProbe"),
+    extractFunction("recordRecoveryProbeAnswer"),
     extractFunction("finishRecoveryProbe"),
     extractFunction("startRecoveryToday"),
     extractFunction("statsRecoveryCard"),
-    "globalThis.__f = { statsRecoveryCard, startRecoveryProbe, finishRecoveryProbe," +
-      " startRecoveryToday, loadRecoveryState, saveRecoveryState };",
+    "globalThis.__f = { statsRecoveryCard, startRecoveryProbe, recordRecoveryProbeAnswer," +
+      " finishRecoveryProbe, startRecoveryToday, loadRecoveryState, saveRecoveryState," +
+      " recentDailyAnswerCount," +
+      " setReviewSession: (v) => { reviewSession = v; } };",
   ];
   sandbox.__store = store;
   new Script(pieces.join("\n\n"), { filename: "recovery-flow-check.js" }).runInNewContext(sandbox);
@@ -1475,12 +1487,9 @@ test("復帰: 抜き取りの結果から保持率を出し、今日ぶんだけ
   const { f } = buildRecoveryFlowSandbox(words);
   f.startRecoveryProbe();
   const state = f.loadRecoveryState();
-  // 抜き取り対象を「解いた」ことにする（半分正解）。
-  const answeredAt = new Date(Date.now() + 1000).toISOString();
-  state.probeIds.forEach((id, i) => {
-    const w = words.find((x) => x.id === id);
-    w.history.push({ at: answeredAt, correct: i % 2 === 0 });
-  });
+  // 抜き取り対象を「解いた」ことにする（半分正解）。実際の回答経路と同じく、
+  // 回答のたびに recordRecoveryProbeAnswer を呼ぶ。
+  state.probeIds.forEach((id, i) => f.recordRecoveryProbeAnswer(id, i % 2 === 0));
   f.finishRecoveryProbe();
   const after = f.loadRecoveryState();
   assert.equal(after.probeDone, true, "抜き取り完了として記録する");
@@ -1503,10 +1512,7 @@ test("復帰: 今日ぶんは1日の上限を超えず、未回答語の状態�
   const { f, started } = buildRecoveryFlowSandbox(words);
   f.startRecoveryProbe();
   const state = f.loadRecoveryState();
-  const answeredAt = new Date(Date.now() + 1000).toISOString();
-  state.probeIds.forEach((id, i) => {
-    words.find((x) => x.id === id).history.push({ at: answeredAt, correct: i % 3 !== 0 });
-  });
+  state.probeIds.forEach((id, i) => f.recordRecoveryProbeAnswer(id, i % 3 !== 0));
   f.finishRecoveryProbe();
   const snapshot = JSON.parse(JSON.stringify(words.map((w) => w.learning)));
   f.startRecoveryToday();
@@ -1551,10 +1557,15 @@ function buildKnownSynSandbox(words) {
   new Script(pieces.join("\n\n"), { filename: "known-syn-check.js" }).runInNewContext(sandbox);
   return sandbox.__k;
 }
-const wordAt = (term, stage, recent) => ({
+// 習得済みで期限内の語。status と nextReviewAt も持たせる（実データと同じ形）。
+const wordAt = (term, stage, recent, extra = {}) => ({
   id: term,
   term,
-  learning: { srsStage: stage },
+  learning: {
+    srsStage: stage,
+    status: extra.status ?? "mastered",
+    nextReviewAt: extra.nextReviewAt ?? Date.now() + 7 * 86400000,
+  },
   history: recent.map((c) => ({ at: "2026-08-01T00:00:00.000Z", correct: c })),
 });
 
@@ -1567,6 +1578,20 @@ test("説明に使うのは、段階が進んでいて直近も正解してい�
   assert.equal(k.isKnownEnoughToExplain(wordAt("tough", 5, [true, false, true])), false);
   // 履歴が無い語は判断材料が無い。
   assert.equal(k.isKnownEnoughToExplain(wordAt("tough", 5, [])), false);
+  // 復習中(review)の語はまだ揺れているので説明の土台にしない。
+  assert.equal(
+    k.isKnownEnoughToExplain(wordAt("tough", 5, [true, true, true], { status: "review" })),
+    false,
+    "習得(mastered)まで来ていない語は使わない",
+  );
+  // 復習期限を過ぎている語は、いま思い出せるか分からない。
+  assert.equal(
+    k.isKnownEnoughToExplain(
+      wordAt("tough", 5, [true, true, true], { nextReviewAt: Date.now() - 86400000 }),
+    ),
+    false,
+    "期限超過の語は使わない",
+  );
 });
 
 test("類義語のうち習得済みのものだけを取り出す", () => {
@@ -1606,4 +1631,105 @@ test("「知っている英語で言うと」を出しても日本語を消さ�
     body.trimEnd().endsWith("list\n    );") || body.includes("` +\n      list"),
     "通常の類義語リストも消さずに残す",
   );
+});
+
+// --- 復帰トリアージ: レビュー指摘の回帰固定 ----------------------------
+// いずれも実装時に実在したバグ。テストのスタブが実データと形が違ったせいで
+// 最初は素通りしていたので、実際の値の形と実際の呼び出し経路で固定する。
+
+test("復帰: 誤答の再挑戦で保持率が100%に化けない（最初の回答だけを数える）", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  const state = f.loadRecoveryState();
+  // 実際の復習では誤答は再出題される。最初は全問落として、その後に全問正解した想定。
+  for (const id of state.probeIds) f.recordRecoveryProbeAnswer(id, false);
+  for (const id of state.probeIds) f.recordRecoveryProbeAnswer(id, true);
+  f.finishRecoveryProbe();
+  const after = f.loadRecoveryState();
+  assert.equal(after.probeDone, true);
+  for (const [key, rate] of after.retention) {
+    assert.ok(rate < 0.5, `最初に落とした層の保持率が高く出てはいけない: ${key}=${rate}`);
+  }
+});
+
+test("復帰: 通常の復習で同じ語に答えても、抜き取りの結果に混ざらない", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  const ids = f.loadRecoveryState().probeIds;
+
+  // 通常の復習セッション（復帰の印を持たない）に切り替えて、同じ語に答える。
+  f.setReviewSession({ recoverySessionId: "" });
+  for (const id of ids) f.recordRecoveryProbeAnswer(id, true);
+  assert.equal(
+    Object.keys(f.loadRecoveryState().probeAnswers).length,
+    0,
+    "抜き取り以外のセッションの回答を数えてはいけない",
+  );
+
+  // 別の復帰セッション（IDが違う）の回答も数えない。
+  f.setReviewSession({ recoverySessionId: "rp-other" });
+  for (const id of ids) f.recordRecoveryProbeAnswer(id, true);
+  assert.equal(Object.keys(f.loadRecoveryState().probeAnswers).length, 0, "別セッションも数えない");
+
+  // 正しいセッションなら数える。
+  f.setReviewSession({ recoverySessionId: f.loadRecoveryState().sessionId });
+  f.recordRecoveryProbeAnswer(ids[0], true);
+  assert.equal(Object.keys(f.loadRecoveryState().probeAnswers).length, 1, "自セッションは数える");
+});
+
+test("復帰: 1語だけ答えて中断しても確定せず、続きから再開できる", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  const state = f.loadRecoveryState();
+  f.recordRecoveryProbeAnswer(state.probeIds[0], true);
+  f.finishRecoveryProbe({ force: true }); // 中断に相当
+  const after = f.loadRecoveryState();
+  assert.equal(after.probeDone, false, "1語で確定してはいけない");
+  const card = f.statsRecoveryCard();
+  assert.ok(card.includes("recoveryResumeProbeButton"), "続きを解く導線が残る");
+  assert.ok(card.includes("あと19語"), `残り語数を出す: ${card.match(/あと\d+語/)?.[0]}`);
+});
+
+test("復帰: 十分な数を答えてから中断すれば、その結果で計画を作る", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  const state = f.loadRecoveryState();
+  state.probeIds.slice(0, 12).forEach((id, i) => f.recordRecoveryProbeAnswer(id, i % 2 === 0));
+  f.finishRecoveryProbe({ force: true });
+  assert.equal(f.loadRecoveryState().probeDone, true, "十分な数がそろえば確定してよい");
+});
+
+test("復帰: 1日の上限が実際の学習量に追従する（値の読み違いを防ぐ）", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  // スタブの buildDailyActivity は 1日25問。既定値40ではなく25が採られるべき。
+  assert.equal(f.recentDailyAnswerCount(), 25, "answers を読めている");
+  f.startRecoveryProbe();
+  assert.equal(f.loadRecoveryState().dailyCap, 25, "上限が実際の学習量になる");
+});
+
+test("復帰: 抜き取り対象が全部消えたら、復帰の記録ごと捨てる", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  words.length = 0; // 同期で全削除された想定
+  assert.equal(f.statsRecoveryCard(), "", "古い『確認中』カードが残らない");
+  assert.equal(f.loadRecoveryState(), null, "状態も捨てる");
+});
+
+test("復帰: 期限切れが0件になっても例外にならない", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  const state = f.loadRecoveryState();
+  state.probeIds.forEach((id) => f.recordRecoveryProbeAnswer(id, true));
+  f.finishRecoveryProbe();
+  // 別タブや同期で期限切れが解消された想定。
+  for (const w of words) w.learning.nextReviewAt = Date.now() + 86400000;
+  assert.doesNotThrow(() => f.startRecoveryToday(), "実行時例外を出さない");
+  assert.doesNotThrow(() => f.statsRecoveryCard(), "カード描画も落ちない");
 });

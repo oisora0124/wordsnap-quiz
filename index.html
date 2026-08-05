@@ -25646,6 +25646,9 @@ function startReview(ids, options = {}) {
     formatSeed: Math.random().toString(36).slice(2, 10),
     missedIds: [], // このセッション中に一度でも間違えた単語ID（完走時のサマリ用）
     easyOrder: Boolean(options.easyOrder), // やさしい順モード（進捗欄に現在レベルを表示）
+    // 復帰の抜き取りセッションだけに付く印。通常の復習で同じ語に答えた結果を
+    // 抜き取りの結果として数えないために使う。
+    recoverySessionId: String(options.recoverySessionId || ""),
   };
   reviewResult = null; // 新しいセッションを始めたら前回の結果表示は消す
   quizEmptyReason = "";
@@ -25831,8 +25834,12 @@ function loadRecoveryState() {
     const retention = new Map(Array.isArray(raw.retention) ? raw.retention : []);
     return {
       startedAt: Number(raw.startedAt) || 0,
+      sessionId: String(raw.sessionId || ""),
       probeIds: Array.isArray(raw.probeIds) ? raw.probeIds.map(String) : [],
       probeStrata: raw.probeStrata && typeof raw.probeStrata === "object" ? raw.probeStrata : {},
+      // 抜き取りの「最初の回答」だけを記録する。誤答は再出題されるので、あとから
+      // 履歴の最後を見ると再挑戦の結果を拾ってしまい、保持率がほぼ100%になる。
+      probeAnswers: raw.probeAnswers && typeof raw.probeAnswers === "object" ? raw.probeAnswers : {},
       probeDone: Boolean(raw.probeDone),
       retention,
       dailyCap: Math.max(1, Math.floor(Number(raw.dailyCap) || RECOVERY_DEFAULT_DAILY_CAP)),
@@ -26357,9 +26364,9 @@ function restoreLastQuizSettings() {
 
 function endReview(message) {
   clearSavedReviewProgress(); // 完走/中断したら再開データは消す（閉じた/リロード時だけ残る）
-  // 抜き取りテストの途中で終わっても、解いた分だけで保持率を出す。全問解かないと
-  // 何も出ないと、復帰の入口でもう一度つまずくことになる。
-  finishRecoveryProbe();
+  // 抜き取りが全問終わっていれば確定する。途中終了でも十分な数がそろっていれば
+  // その結果で計画を作る（足りなければ状態を残し「続きを解く」で再開できる）。
+  finishRecoveryProbe({ force: true });
   reviewSession = null;
   currentQuiz = null;
   renderQuiz();
@@ -29179,48 +29186,81 @@ function startRecoveryProbe() {
   }
   // 1日の上限は直近の学習量に合わせる。普段20語の人に100語を出しても続かない。
   const recentPerDay = recentDailyAnswerCount();
+  const sessionId = `rp${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   saveRecoveryState({
     startedAt: now,
+    sessionId,
     probeIds,
     probeStrata,
+    probeAnswers: {},
     probeDone: false,
     retention: new Map(),
     dailyCap: Math.max(10, Math.min(80, recentPerDay || RECOVERY_DEFAULT_DAILY_CAP)),
     totalAtStart: overdue.length,
   });
-  startReview(probeIds, { label: "どれくらい覚えているか確認", shuffle: false });
+  startReview(probeIds, { label: "どれくらい覚えているか確認", shuffle: false, recoverySessionId: sessionId });
 }
 
 function resumeRecoveryProbe() {
   const state = loadRecoveryState();
   if (!state) return;
-  const alive = state.probeIds.filter((id) => appState.words.some((w) => w.id === id));
-  if (alive.length === 0) {
-    finishRecoveryProbe();
+  // まだ答えていない語だけを出す。答え直させると最初の回答を上書きこそしないが、
+  // 同じ語を二度出されるのは無駄なうえ、終わりが見えない。
+  const remaining = state.probeIds.filter(
+    (id) =>
+      !Object.prototype.hasOwnProperty.call(state.probeAnswers, id) &&
+      appState.words.some((w) => w.id === id),
+  );
+  if (remaining.length === 0) {
+    finishRecoveryProbe({ force: true });
+    renderStatsCharts(buildDailyActivity());
     return;
   }
-  startReview(alive, { label: "どれくらい覚えているか確認", shuffle: false });
+  startReview(remaining, {
+    label: "どれくらい覚えているか確認",
+    shuffle: false,
+    recoverySessionId: state.sessionId,
+  });
 }
 
-// 抜き取りの結果から層ごとの保持率を出す。判定材料は「抜き取り対象の語の、
-// 抜き取り開始以降の回答」だけを使う（それ以前の履歴は今の記憶状態を表さない）。
-function finishRecoveryProbe() {
+// 抜き取り中の回答を、その場で1語1回だけ記録する。
+// 履歴を後から読む方式では、誤答が再出題される（endReview まで queue に戻る）ため
+// 最後の試行＝正解を拾ってしまい、保持率がほぼ100%に化ける。測りたいのは
+// 「最初に思い出せたか」なので、最初の回答だけを取る。
+function recordRecoveryProbeAnswer(wordId, isCorrect) {
   const state = loadRecoveryState();
   if (!state || state.probeDone) return;
-  const now = Date.now();
+  // いま動いているセッションが、この抜き取りのものかを確認する。
+  // 確認しないと、通常の復習で同じ語に答えた結果まで混ざる。
+  if (!reviewSession || reviewSession.recoverySessionId !== state.sessionId) return;
+  const id = String(wordId || "");
+  if (!id || !state.probeIds.includes(id)) return;
+  if (Object.prototype.hasOwnProperty.call(state.probeAnswers, id)) return; // 最初の1回だけ
+  state.probeAnswers[id] = isCorrect === true;
+  saveRecoveryState(state);
+}
+
+// 記録した回答から層ごとの保持率を出す。全問答えていれば完了。
+// 途中でやめた場合も、一定数そろっていればその結果で計画を作る（残りは再開できる）。
+const RECOVERY_MIN_PROBE_ANSWERS = 10;
+
+function finishRecoveryProbe({ force = false } = {}) {
+  const state = loadRecoveryState();
+  if (!state || state.probeDone) return;
+  const answered = Object.keys(state.probeAnswers || {});
+  // 抜き取り対象が同期などで全部消えていたら、この復帰の記録ごと捨てる。
+  const alive = state.probeIds.filter((id) => appState.words.some((w) => w.id === id));
+  if (alive.length === 0) {
+    saveRecoveryState(null);
+    return;
+  }
+  const complete = answered.length >= alive.length;
+  if (!complete && !(force && answered.length >= RECOVERY_MIN_PROBE_ANSWERS)) return;
   const results = [];
-  for (const id of state.probeIds) {
-    const word = appState.words.find((w) => w.id === id);
-    if (!word) continue;
-    // 履歴の at はISO文字列。抜き取り開始以降の回答だけを見る
-    // （それ以前の履歴は今の記憶状態を表さない）。
-    const entry = (word.history || [])
-      .filter((h) => Date.parse(String(h?.at || "")) >= state.startedAt)
-      .pop();
-    if (!entry) continue;
+  for (const id of answered) {
     const stratum = state.probeStrata?.[id];
     if (!stratum) continue; // 層が分からない語は推定に混ぜない
-    results.push({ stratum: String(stratum), correct: entry.correct === true });
+    results.push({ stratum: String(stratum), correct: state.probeAnswers[id] === true });
   }
   if (results.length === 0) return;
   saveRecoveryState({
@@ -29239,7 +29279,7 @@ function startRecoveryToday() {
   const overdue = eligibleSrsWords(quizSelectedDeckWords(), now);
   if (overdue.length === 0) {
     setStatus("たまっていた復習は片づきました。");
-    renderStats();
+    renderStatsCharts(buildDailyActivity());
     return;
   }
   const plan = buildRecoveryPlan(groupRecoveryStrata(overdue, now), state.retention, state.dailyCap);
@@ -29248,24 +29288,43 @@ function startRecoveryToday() {
   startReview(todayIds, { label: "復帰プラン", shuffle: false });
 }
 
-// 直近7日で1日あたり何語answeredしたか（0なら判定不能として0を返す）。
-function recentDailyAnswerCount() {
+// 直近7日で1日あたり何語answeredしたかの中央値（0なら判定不能）。
+// buildDailyActivity() の値は { answers, correct, terms } なので answers を読む。
+// ここを取り違えると常に0となり、1日の上限が既定値に貼りついたまま利用者の
+// 実際の学習量に追従しなくなる。
+function recentDailyAnswerCount(now = Date.now()) {
   const byDay = buildDailyActivity();
   if (!(byDay instanceof Map) || byDay.size === 0) return 0;
-  const counts = [...byDay.values()].map((v) => Number(v?.total ?? v) || 0).filter((n) => n > 0);
+  const since = new Set();
+  for (let i = 0; i < 7; i += 1) since.add(localDateString(new Date(now - i * SRS_DAY_MS)));
+  const counts = [];
+  for (const [key, value] of byDay) {
+    if (!since.has(key)) continue;
+    const n = Math.floor(Number(value?.answers) || 0);
+    if (n > 0) counts.push(n);
+  }
   if (counts.length === 0) return 0;
   counts.sort((a, b) => a - b);
-  return Math.round(counts[Math.floor(counts.length / 2)]); // 中央値
+  return Math.round(counts[Math.floor(counts.length / 2)]);
 }
 
 // 復帰カード。期限切れが積み上がった状態で戻ってきたときだけ出す。
 // 全件の数字を前面に出さず、まず少数の抜き取りで「どれくらい残っているか」を測らせる。
 function statsRecoveryCard() {
+  const now = Date.now();
+  const state = loadRecoveryState();
+  // 抜き取り対象が同期などで消えていたら、この復帰の記録は意味を失うので先に捨てる。
+  // 単語が0件になったときの早期returnより前に置かないと、古い記録が残り続ける。
+  if (state && !state.probeDone) {
+    const anyAlive = state.probeIds.some((id) => appState.words.some((w) => w.id === id));
+    if (!anyAlive && Object.keys(state.probeAnswers || {}).length === 0) {
+      saveRecoveryState(null);
+      return "";
+    }
+  }
   const scoped = quizSelectedDeckWords();
   if (scoped.length === 0) return "";
-  const now = Date.now();
   const overdue = eligibleSrsWords(scoped, now);
-  const state = loadRecoveryState();
 
   if (!state) {
     const away = daysSinceLastStudy(now);
@@ -29286,10 +29345,20 @@ function statsRecoveryCard() {
   }
 
   if (!state.probeDone) {
+    const remaining = state.probeIds.filter(
+      (id) =>
+        !Object.prototype.hasOwnProperty.call(state.probeAnswers, id) &&
+        appState.words.some((w) => w.id === id),
+    );
+    // 抜き取り対象が同期などで全部消えたら、この復帰の記録は意味を失うので捨てる。
+    if (remaining.length === 0 && Object.keys(state.probeAnswers).length === 0) {
+      saveRecoveryState(null);
+      return "";
+    }
     return (
       `<div class="stats-card is-recovery">` +
       statsCardHeader("おかえりなさい", "確認中") +
-      `<p class="stats-recovery-lead">抜き取りの${escapeHtml(state.probeIds.length)}語を解き終えると、戻り方の目安が出ます。</p>` +
+      `<p class="stats-recovery-lead">あと${escapeHtml(remaining.length)}語で、戻り方の目安が出ます。</p>` +
       `<div class="actions"><button type="button" id="recoveryResumeProbeButton">続きを解く</button>` +
       `<button type="button" class="ghost" id="recoveryDismissButton">やめて普通に復習する</button></div>` +
       `</div>`
@@ -29962,6 +30031,8 @@ function gradeQuiz(choiceId, dontKnow = false) {
   // 再集計されると今回の解答が二重に数えられるため。
   bumpTodayAnswerCount();
   word.history.push({ at: new Date().toISOString(), correct: isCorrect });
+  // 復帰の抜き取り中なら、この語の「最初の回答」だけを控える（誤答の再挑戦を拾わない）。
+  recordRecoveryProbeAnswer(word.id, isCorrect);
   if (word.history.length > 50) word.history = word.history.slice(-50);
   // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
   // 場合の保険で、実際には◯問後の条件が先に成立することが多い（OR判定はavailableQuizWords側）
@@ -30700,10 +30771,16 @@ function jaLine(ja) {
 // ここを緩くすると、うろ覚えの語で説明することになって逆に分からなくなる。
 const KNOWN_SYNONYM_MIN_STAGE = 3;
 
-function isKnownEnoughToExplain(word) {
+function isKnownEnoughToExplain(word, now = Date.now()) {
   if (!word) return false;
+  // 段階が進んでいるだけでは足りない。復習中(review)の語は「まだ揺れている」ので
+  // 説明の土台にしない。習得(mastered)まで来た語だけを使う。
+  if (word.learning?.status !== "mastered") return false;
   const stage = Math.floor(Number(word.learning?.srsStage) || 0);
   if (stage < KNOWN_SYNONYM_MIN_STAGE) return false;
+  // 復習期限を過ぎている語は、いま思い出せるか分からない。期限内のものだけ使う。
+  const due = Number(word.learning?.nextReviewAt || 0);
+  if (due > 0 && due <= now) return false;
   const history = Array.isArray(word.history) ? word.history.slice(-3) : [];
   if (history.length === 0) return false;
   // 直近3回のうち1回でも間違えているなら、説明に使うにはまだ危うい。
@@ -32053,7 +32130,7 @@ elements.statsGrid?.addEventListener("click", (event) => {
     // 記録を消すだけ。単語の学習状態には触れない。
     saveRecoveryState(null);
     setStatus("通常の復習に戻しました。");
-    renderStats();
+    renderStatsCharts(buildDailyActivity());
     return;
   }
   setActiveStep("quiz", { sound: false });
