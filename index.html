@@ -6383,6 +6383,28 @@ accurate 正確な"
           </details>
 
           <details class="settings-section" data-settings-section="learning-log">
+            <summary>⏬ 単語情報の先読み（任意）</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">
+                取り込んだ単語のCEFRレベルと品詞は、<strong>保存した直後にその分だけ</strong>自動で取りに行きます。
+                内蔵のサンプル単語帳は通信せずに判定できるので、この設定は
+                貼り付け・写真から入れた単語にだけ関係します。
+              </p>
+              <label class="settings-check">
+                <input id="prefetchAllToggle" type="checkbox" />
+                <span>過去に取り込んだ単語も、起動中に先読みする</span>
+              </label>
+              <p class="settings-desc">
+                オンにすると「保存した単語」画面を開かなくても、保存済みの単語すべてを
+                少しずつ埋めます。判定には英単語だけを
+                <strong>api.datamuse.com</strong> へ送ります（意味・学習の記録は送りません）。
+                既定はオフで、そのときは今までどおり「保存した単語」画面を開いている間だけ埋まります。
+              </p>
+              <p id="prefetchAllStatus" class="settings-desc" role="status">未判定の単語: 0件</p>
+            </div>
+          </details>
+
+          <details class="settings-section">
             <summary>📈 学習の記録（任意）</summary>
             <div class="settings-section-body">
               <p class="settings-desc">
@@ -6451,7 +6473,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.65</span>
+        <span class="app-footer-version">バージョン 1.0.66</span>
       </footer>
     </main>
 
@@ -6585,8 +6607,8 @@ const WordBankTelemetry = (() => {
   const ERROR_STATE_KEY = "wordsnap-telemetry-errors:v1";
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
-  // 利用者が「バージョン 1.0.65」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.65";
+  // 利用者が「バージョン 1.0.66」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
+  const APP_REV = "1.0.66";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -16640,6 +16662,8 @@ const elements = {
   clearAllButton: document.querySelector("#clearAllButton"),
   clearAllStatus: document.querySelector("#clearAllStatus"),
   reviewLogToggle: document.querySelector("#reviewLogToggle"),
+  prefetchAllToggle: document.querySelector("#prefetchAllToggle"),
+  prefetchAllStatus: document.querySelector("#prefetchAllStatus"),
   reviewLogCount: document.querySelector("#reviewLogCount"),
   reviewLogClearButton: document.querySelector("#reviewLogClearButton"),
   reviewLogExportButton: document.querySelector("#reviewLogExportButton"),
@@ -17474,6 +17498,24 @@ function recordReviewEvent(details) {
 }
 
 function initReviewLogSettings() {
+  if (elements.prefetchAllToggle) {
+    elements.prefetchAllToggle.checked = prefetchAllEnabled();
+    updatePrefetchAllStatus();
+    // 起動時に一度だけ。オフなら何もしない。
+    startPrefetchAllIfEnabled();
+    elements.prefetchAllToggle.addEventListener("change", () => {
+      try {
+        if (elements.prefetchAllToggle.checked) localStorage.setItem(PREFETCH_ALL_KEY, "1");
+        else localStorage.removeItem(PREFETCH_ALL_KEY);
+      } catch {
+        // 保存できなくても、この起動中の指定は活かす。
+      }
+      // オンにした時点ですぐ動き出す（次の起動を待たせない）。
+      startPrefetchAllIfEnabled();
+      updatePrefetchAllStatus();
+    });
+  }
+
   if (elements.reviewLogToggle) {
     elements.reviewLogToggle.checked = reviewLogEnabled();
     elements.reviewLogToggle.addEventListener("change", () => {
@@ -29897,6 +29939,104 @@ function backfillSavedCefr() {
   scheduleIdleTask(runBatch);
 }
 
+// 指定した単語のCEFR・品詞を、画面に関係なく背景で埋める。
+//
+// 「保存した単語」画面のバックフィル（backfillSavedCefr/Pos）は、その画面を
+// 開いている間しか動かない。取り込んだ直後の単語まで画面を開くまで放置すると、
+// 次に見たときに未判定が並ぶ。取り込みは利用者自身の操作なので、その分だけは
+// その場で埋めておく。
+//
+// 対象を渡された単語に限るのが要点。保存済み全体を勝手に埋めに行くと、
+// 「保存した単語」画面を一度も開かない利用者の語彙まで外部へ送ることになる。
+// 全体を埋めたい場合は設定の「起動中に先読み」を明示的に有効にしてもらう。
+const PREFETCH_BATCH_SIZE = 4;
+let prefetchRunning = false;
+const prefetchQueue = [];
+
+function queueMetadataPrefetch(words) {
+  if (!Array.isArray(words) || words.length === 0) return;
+  for (const word of words) {
+    if (!word || !word.id) continue;
+    prefetchQueue.push({ id: word.id, term: word.term });
+  }
+  if (prefetchRunning) return;
+  prefetchRunning = true;
+  scheduleIdleTask(runMetadataPrefetchBatch);
+}
+
+async function runMetadataPrefetchBatch() {
+  const batch = prefetchQueue.splice(0, PREFETCH_BATCH_SIZE);
+  if (batch.length === 0) {
+    prefetchRunning = false;
+    return;
+  }
+  let changed = false;
+  const resolved = await Promise.all(
+    batch.map(async (item) => {
+      // 応答を待つ間に単語が消えている・別の語に置き換わっていることがある。
+      const live = appState.words.find((w) => w.id === item.id);
+      if (!live || normalizeTerm(live.term) !== normalizeTerm(item.term)) return null;
+      const needCefr = !(live.cefr && (live.cefr.level || live.cefr.estimated));
+      const needPos = !live.pos;
+      const [cefr, pos] = await Promise.all([
+        needCefr ? resolveCefrOnce(item.term).catch(() => null) : null,
+        needPos ? resolvePosOnce(item.term).catch(() => null) : null,
+      ]);
+      return { item, cefr, pos };
+    }),
+  );
+  for (const entry of resolved) {
+    if (!entry) continue;
+    // 書き戻す直前にもう一度引き直す（待っている間の削除・同期に追随する）。
+    const live = appState.words.find((w) => w.id === entry.item.id);
+    if (!live || normalizeTerm(live.term) !== normalizeTerm(entry.item.term)) continue;
+    if (entry.cefr) {
+      live.cefr = { level: entry.cefr.level, estimated: entry.cefr.estimated };
+      changed = true;
+    }
+    if (entry.pos) {
+      live.pos = { tag: entry.pos.tag || null, tags: entry.pos.tags || [] };
+      changed = true;
+    }
+  }
+  if (changed) {
+    persistAppState({ sync: false });
+    updatePrefetchAllStatus();
+  }
+  scheduleIdleTask(runMetadataPrefetchBatch);
+}
+
+// 設定「起動中に先読み」。既定はオフ。オンにした利用者だけ、画面に関係なく
+// 保存済みの全語を埋めにいく（過去に取り込んだ分も対象になる）。
+const PREFETCH_ALL_KEY = "wordsnap-prefetch-all:v1";
+
+function prefetchAllEnabled() {
+  try {
+    return localStorage.getItem(PREFETCH_ALL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function updatePrefetchAllStatus() {
+  if (!elements.prefetchAllStatus) return;
+  const pending = appState.words.filter(
+    (word) => !word.pos || !(word.cefr && (word.cefr.level || word.cefr.estimated)),
+  ).length;
+  elements.prefetchAllStatus.textContent =
+    pending === 0
+      ? "未判定の単語: 0件（すべて判定済み）"
+      : `未判定の単語: ${pending.toLocaleString("ja-JP")}件`;
+}
+
+function startPrefetchAllIfEnabled() {
+  if (!prefetchAllEnabled()) return;
+  const pending = appState.words.filter(
+    (word) => !word.pos || !(word.cefr && (word.cefr.level || word.cefr.estimated)),
+  );
+  queueMetadataPrefetch(pending);
+}
+
 function posBadgeMarkup(word) {
   const label = word.pos ? posLabel(word.pos.tag) : "";
   return `<span class="pos-badge" data-pos-word="${word.id}">${label}</span>`;
@@ -31007,6 +31147,8 @@ elements.saveParsedButton.addEventListener("click", () => {
     notifyInlineSaveFailure();
     throw error;
   }
+  // 取り込んだ分は、画面を開くのを待たずにその場で埋めておく。
+  queueMetadataPrefetch(cleaned);
   const keptBack = rejected.length ? `${rejected.length}件は保存できず残しました。` : "";
   setStatus(
     `単語帳「${deckName(targetDeckId)}」に${cleaned.length}件を保存しました。${keptBack}`,

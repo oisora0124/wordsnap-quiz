@@ -481,6 +481,30 @@ for (const [constName, sampleKey] of SAMPLE_CONSTANTS) {
     "cached terms must be skipped before the lookup budget is consumed",
   );
 }
+// 取り込み直後の先読みは、いま保存した分だけを対象にする。
+// appState.words を丸ごと渡すと、以前から持っている単語まで外部へ送ることになり、
+// 「起動中に先読み」を明示的にオンにした人だけ、という線引きが崩れる。
+{
+  const calls = [...publicHtml.matchAll(/queueMetadataPrefetch\(([^)]*)\)/g)].map((m) => m[1].trim());
+  assert.ok(calls.length >= 2, "queueMetadataPrefetch の呼び出しが見つからない");
+  assert.ok(
+    calls.includes("cleaned"),
+    `保存直後の先読みは保存した分(cleaned)を渡すべき: ${calls.join(" / ")}`,
+  );
+  assert.ok(
+    !calls.includes("appState.words"),
+    "先読みに保存済み全語を直接渡してはいけない（startPrefetchAllIfEnabled 経由にする）",
+  );
+  // 全語を対象にできるのは、設定を確かめる関数の中だけ。
+  const head = "function startPrefetchAllIfEnabled() {";
+  const start = publicHtml.indexOf(head);
+  assert.ok(start >= 0, "startPrefetchAllIfEnabled が無い");
+  const body = publicHtml.slice(start, publicHtml.indexOf("\n}", start));
+  assert.ok(
+    body.includes("if (!prefetchAllEnabled()) return;"),
+    "全語の先読みは設定がオンのときだけ動くべき",
+  );
+}
 const inlineScripts = [...publicHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
 assert.ok(inlineScripts.length >= 1, "no inline JavaScript found");
 for (const [index, match] of inlineScripts.entries()) {

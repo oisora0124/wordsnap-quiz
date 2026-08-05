@@ -1156,3 +1156,91 @@ test("バックフィルは単語帳の全語を埋め切る（表示中の100�
   }
   assert.ok(sandbox.__b.persisted() > 0, "埋めた結果を保存する");
 });
+
+// --- 取り込み直後の先読み ---------------------------------------------
+// 保存した分だけをその場で埋める。保存済み全体を勝手に埋めに行くと、
+// 「保存した単語」画面を開かない利用者の語彙まで外部へ送ることになる。
+function buildPrefetchSandbox(words) {
+  const pieces = [
+    `const PREFETCH_BATCH_SIZE = ${html.match(/const PREFETCH_BATCH_SIZE = (\d+);/)[1]};`,
+    "let prefetchRunning = false;",
+    "const prefetchQueue = [];",
+    "const appState = { words: globalThis.__words };",
+    "const elements = { prefetchAllStatus: null };",
+    "let persisted = 0; const persistAppState = () => { persisted += 1; };",
+    "const cefrLookups = []; const posLookups = [];",
+    "const resolveCefrOnce = async (t) => { cefrLookups.push(t); return { level: 'B1', estimated: true }; };",
+    "const resolvePosOnce = async (t) => { posLookups.push(t); return { tag: 'n', tags: ['n'] }; };",
+    "const scheduleIdleTask = (cb) => { setTimeout(cb, 0); };",
+    "const normalizeTerm = (t) => String(t).trim().toLowerCase();",
+    "const localStorageStub = new Map();",
+    "const localStorage = { getItem: (k) => localStorageStub.get(k) ?? null," +
+      " setItem: (k, v) => localStorageStub.set(k, v), removeItem: (k) => localStorageStub.delete(k) };",
+    extractFunction("queueMetadataPrefetch"),
+    `async ${extractFunction("runMetadataPrefetchBatch")}`,
+    `const PREFETCH_ALL_KEY = ${JSON.stringify(html.match(/const PREFETCH_ALL_KEY = "([^"]+)"/)[1])};`,
+    extractFunction("prefetchAllEnabled"),
+    extractFunction("updatePrefetchAllStatus"),
+    extractFunction("startPrefetchAllIfEnabled"),
+    "globalThis.__p = { queueMetadataPrefetch, startPrefetchAllIfEnabled, localStorageStub," +
+      " cefr: () => cefrLookups, pos: () => posLookups, persisted: () => persisted };",
+  ];
+  const sandbox = { setTimeout, __words: words };
+  new Script(pieces.join("\n\n"), { filename: "prefetch-check.js" }).runInNewContext(sandbox);
+  return sandbox.__p;
+}
+
+const mkWords = (n, prefix = "zzp") =>
+  Array.from({ length: n }, (_, i) => ({ id: `${prefix}${i}`, term: `${prefix}word${i}`, cefr: null, pos: null }));
+
+const settle = async (p, want) => {
+  for (let i = 0; i < 600 && p.cefr().length < want; i += 1) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+};
+
+test("保存直後の先読みは、渡された単語だけを埋める", async () => {
+  const saved = mkWords(20, "new");
+  const old = mkWords(50, "old");
+  const p = buildPrefetchSandbox([...old, ...saved]);
+  p.queueMetadataPrefetch(saved);
+  await settle(p, 20);
+  assert.equal(p.cefr().length, 20, "保存した20語だけを引く");
+  assert.equal(p.pos().length, 20);
+  assert.equal(saved.filter((w) => w.cefr?.level).length, 20, "保存分は埋まる");
+  assert.equal(old.filter((w) => w.cefr).length, 0, "以前からある単語には触れない");
+});
+
+test("先読みは判定済みの項目を引き直さない", async () => {
+  const words = mkWords(8, "mix");
+  for (const w of words) w.cefr = { level: "A1", estimated: false }; // CEFRだけ済み
+  const p = buildPrefetchSandbox(words);
+  p.queueMetadataPrefetch(words);
+  for (let i = 0; i < 200 && p.pos().length < 8; i += 1) await new Promise((r) => setTimeout(r, 0));
+  assert.equal(p.pos().length, 8, "品詞は引く");
+  assert.equal(p.cefr().length, 0, "判定済みのCEFRは引き直さない");
+});
+
+test("消えた単語には書き戻さない（応答待ちの間の削除・同期に追随する）", async () => {
+  const words = mkWords(8, "gone");
+  const p = buildPrefetchSandbox(words);
+  const removed = words.splice(0, 4); // 待っている間に消えた想定
+  p.queueMetadataPrefetch([...removed, ...words]);
+  await settle(p, 4);
+  for (let i = 0; i < 200; i += 1) await new Promise((r) => setTimeout(r, 0));
+  assert.equal(removed.filter((w) => w.cefr).length, 0, "消えた単語には書かない");
+  assert.equal(words.filter((w) => w.cefr?.level).length, 4, "残った単語は埋まる");
+});
+
+test("「起動中に先読み」は既定オフで、オンのときだけ全語を対象にする", async () => {
+  const words = mkWords(12, "all");
+  const p = buildPrefetchSandbox(words);
+  p.startPrefetchAllIfEnabled();
+  for (let i = 0; i < 100; i += 1) await new Promise((r) => setTimeout(r, 0));
+  assert.equal(p.cefr().length, 0, "既定オフでは1語も送らない");
+
+  p.localStorageStub.set("wordsnap-prefetch-all:v1", "1");
+  p.startPrefetchAllIfEnabled();
+  await settle(p, 12);
+  assert.equal(p.cefr().length, 12, "オンにすると保存済みの全語を対象にする");
+});
