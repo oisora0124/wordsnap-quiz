@@ -1008,3 +1008,151 @@ test("resolvePos は内蔵表の多品詞語について tags も返す", async 
   assert.equal(single.tag, "n");
   assert.deepEqual([...(single.tags || [])], ["n"]);
 });
+
+// --- 内蔵のCEFR表 -------------------------------------------------------
+// 実行時にDatamuseへ引かせると、1集1500語では「保存した単語」画面を何度も
+// めくらない限りほとんど未判定のまま残る。ビルド時に焼きこんだ表が効いて
+// いることを、実コードの peek() を動かして確かめる。
+function buildCefrModuleSandboxNoNet() {
+  const store = new Map();
+  const sandbox = {
+    localStorage: {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    },
+    setTimeout,
+    clearTimeout,
+    AbortController,
+    // 内蔵表で返るはずなので、通信したら失敗させる。
+    fetch: () => {
+      throw new Error("内蔵表にある語で通信した");
+    },
+    window: {},
+  };
+  new Script([extractConst("Cefr"), "globalThis.__m = Cefr;"].join("\n\n"), {
+    filename: "cefr-builtin-check.js",
+  }).runInNewContext(sandbox);
+  return sandbox.__m;
+}
+
+test("サンプル単語のCEFRは通信せずに判定できる", () => {
+  const cefr = buildCefrModuleSandboxNoNet();
+  const extract = (name) => {
+    const start = html.indexOf(`const ${name} = \``);
+    const open = html.indexOf("`", start);
+    return html.slice(open + 1, html.indexOf("`;", open + 1));
+  };
+  const terms = new Set();
+  for (const n of ["SAMPLE_TEXT", "SAMPLE_TEXT_JHS", "SAMPLE_TEXT_EIKEN",
+    "SAMPLE_TEXT_SOUKEI", "SAMPLE_TEXT_TOEIC", "SAMPLE_TEXT_IELTS"]) {
+    for (const line of extract(n).split("\n").filter(Boolean)) {
+      terms.add(line.slice(0, line.indexOf(" ")).toLowerCase());
+    }
+  }
+  let covered = 0;
+  for (const t of terms) if (cefr.peek(t)?.level) covered += 1;
+  const ratio = covered / terms.size;
+  assert.ok(
+    ratio >= 0.95,
+    `サンプル${terms.size}語のうち通信なしでCEFRが付くのは${covered}語 (${(ratio * 100).toFixed(1)}%)`,
+  );
+});
+
+test("CEFR表のレベルは A1〜C2 のみ、語は英小文字のみ", () => {
+  const src = /const BUILTIN_LEVEL_GROUPS = \{([\s\S]*?)\n  \};/.exec(html)[1];
+  const levels = [];
+  const bad = [];
+  for (const m of src.matchAll(/^\s+(\w+): "([^"]+)",$/gm)) {
+    levels.push(m[1]);
+    for (const w of m[2].split(" ")) if (!/^[a-z]+$/.test(w)) bad.push(w);
+  }
+  assert.deepEqual(levels, ["A1", "A2", "B1", "B2", "C1", "C2"]);
+  assert.deepEqual(bad, [], `CEFR表に不正な語: ${bad.slice(0, 10).join(" ")}`);
+});
+
+test("手書きのCEFR上書きは内蔵表より優先される", () => {
+  const cefr = buildCefrModuleSandboxNoNet();
+  // OVERRIDES は人が確かめた値なので estimated=false のまま返る。
+  const r = cefr.peek("ubiquitous");
+  assert.equal(r.level, "C2");
+  assert.equal(r.estimated, false, "手書きの値は推定扱いにしない");
+  // 内蔵表だけの語は推定扱い。
+  const b = cefr.peek("aberrant");
+  assert.ok(b && b.level, "内蔵表の語はレベルが付く");
+  assert.equal(b.estimated, true);
+});
+
+test("「保存した単語」のバックフィルは表示中の行ではなく単語帳の全語を対象にする", () => {
+  // 表示中の100行だけを対象にしていた頃は、1500語の単語帳で「さらに表示」を
+  // 14回押さないと埋まらなかった。DOMを見に行く実装へ戻っていないことを固定する。
+  const src = html.slice(html.indexOf("function savedWordsInScope()"));
+  const body = src.slice(0, src.indexOf("\n}"));
+  assert.ok(body.includes("scopedWords()"), "単語帳の全語を返すべき");
+  assert.ok(
+    !body.includes("querySelectorAll"),
+    "DOMの行数に対象を絞ってはいけない",
+  );
+  assert.ok(!html.includes("savedWordsInDom"), "旧実装が残っている");
+  // 画面を開いているときだけ動く、という条件は維持する（送信のきっかけは変えない）。
+  for (const fn of ["backfillSavedCefr", "backfillSavedPos"]) {
+    const f = html.slice(html.indexOf(`function ${fn}()`));
+    assert.ok(
+      f.slice(0, 200).includes('activeStepId !== "library"'),
+      `${fn} はライブラリ画面でだけ動くべき`,
+    );
+  }
+});
+
+// 「保存した単語」のバックフィルを実際に動かし、表示中の行数ではなく
+// 単語帳の全語が埋まることを確かめる。文字列一致だけでは、対象の絞り方を
+// 変えられても気づけない。
+test("バックフィルは単語帳の全語を埋め切る（表示中の100行で止まらない）", async () => {
+  const words = Array.from({ length: 300 }, (_, i) => ({
+    id: `w${i}`,
+    term: `zzext${i}`,
+    meaning: `外部語${i}`,
+    cefr: null,
+  }));
+  const pieces = [
+    "let activeStepId = 'library';",
+    "let cefrBackfillRunning = false;",
+    "let libraryMetadataGeneration = 0;",
+    `const METADATA_IDLE_BATCH_SIZE = ${html.match(/const METADATA_IDLE_BATCH_SIZE = (\d+);/)[1]};`,
+    "const appState = { words: globalThis.__words, activeDeckId: 'all' };",
+    "let persisted = 0;",
+    "const persistAppState = () => { persisted += 1; };",
+    "const lookups = [];",
+    "const resolveCefrOnce = async (t) => { lookups.push(t); return { level: 'B2', estimated: true }; };",
+    // アイドル待ちは即時実行に置き換える（待ち方は検査対象ではない）。
+    "const scheduleIdleTask = (cb) => { setTimeout(cb, 0); };",
+    "const elements = { savedList: { querySelector: () => null, querySelectorAll: () => [] } };",
+    "const window = { Cefr: { key: (t) => String(t).toLowerCase() } };",
+    "const updateCefrBadge = () => {};",
+    "const normalizeTerm = (t) => String(t).trim().toLowerCase();",
+    extractFunction("scopedWords"),
+    extractFunction("libraryMetadataWorkIsCurrent"),
+    extractFunction("savedWordsInScope"),
+    extractFunction("backfillSavedCefr"),
+    "globalThis.__b = { backfillSavedCefr, lookups: () => lookups, persisted: () => persisted };",
+  ];
+  const sandbox = { setTimeout, __words: words };
+  new Script(pieces.join("\n\n"), { filename: "backfill-check.js" }).runInNewContext(sandbox);
+
+  sandbox.__b.backfillSavedCefr();
+  // 全語が処理されるまで待つ（4語ずつなので300語で75回）。
+  for (let i = 0; i < 400 && sandbox.__b.lookups().length < 300; i += 1) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  assert.equal(
+    sandbox.__b.lookups().length,
+    300,
+    `単語帳の300語すべてを対象にすべき（実際は${sandbox.__b.lookups().length}語で止まった）`,
+  );
+  assert.equal(words.filter((w) => w.cefr?.level).length, 300, "全語にレベルが入る");
+  // 最後のバッチのあと、空振り1回を経て finish() が保存する。
+  for (let i = 0; i < 20 && sandbox.__b.persisted() === 0; i += 1) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  assert.ok(sandbox.__b.persisted() > 0, "埋めた結果を保存する");
+});
