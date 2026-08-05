@@ -1244,3 +1244,366 @@ test("「起動中に先読み」は既定オフで、オンのときだけ全�
   await settle(p, 12);
   assert.equal(p.cefr().length, 12, "オンにすると保存済みの全語を対象にする");
 });
+
+// --- ブランク復帰トリアージ -------------------------------------------
+// 数百語の期限切れを全部見せる代わりに、少数の抜き取りで保持率を測って戻り方を決める。
+// この機能は提示と順序づけだけを行い、回答していない語の学習状態は書き換えない。
+function buildRecoverySandbox() {
+  const pieces = [
+    `const SRS_DAY_MS = ${html.match(/const SRS_DAY_MS = ([^;]+);/)[1]};`,
+    extractConst("SRS_INTERVAL_DAYS"),
+    `const RECOVERY_PROBE_SIZE = ${html.match(/const RECOVERY_PROBE_SIZE = (\d+);/)[1]};`,
+    `const RECOVERY_DEFAULT_DAILY_CAP = ${html.match(/const RECOVERY_DEFAULT_DAILY_CAP = (\d+);/)[1]};`,
+    `const RECOVERY_MIN_OVERDUE = ${html.match(/const RECOVERY_MIN_OVERDUE = (\d+);/)[1]};`,
+    `const RECOVERY_MIN_DAYS_AWAY = ${html.match(/const RECOVERY_MIN_DAYS_AWAY = (\d+);/)[1]};`,
+    extractFunction("recoveryOverdueDays"),
+    extractFunction("recoveryStratumKey"),
+    extractFunction("groupRecoveryStrata"),
+    extractFunction("pickRecoveryProbe"),
+    extractFunction("estimateStratumRetention"),
+    extractFunction("buildRecoveryPlan"),
+    extractFunction("shouldOfferRecovery"),
+    "globalThis.__rec = { recoveryStratumKey, groupRecoveryStrata, pickRecoveryProbe," +
+      " estimateStratumRetention, buildRecoveryPlan, shouldOfferRecovery," +
+      " RECOVERY_PROBE_SIZE, RECOVERY_MIN_OVERDUE, RECOVERY_MIN_DAYS_AWAY };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "recovery-check.js" }).runInNewContext(sandbox);
+  return sandbox.__rec;
+}
+const rec = buildRecoverySandbox();
+const DAY = 86400000;
+// stage と「期限を過ぎた日数」を指定して期限切れ語を作る。
+const overdueWord = (id, stage, overdueDays, now) => ({
+  id,
+  term: `w${id}`,
+  learning: { srsStage: stage, nextReviewAt: now - overdueDays * DAY },
+});
+
+test("復帰モードは、たまっていて かつ 空いているときだけ出す", () => {
+  const big = rec.RECOVERY_MIN_OVERDUE;
+  const away = rec.RECOVERY_MIN_DAYS_AWAY;
+  assert.equal(rec.shouldOfferRecovery({ overdueCount: big, daysAway: away }), true);
+  // 数が少なければ普通に復習すればよい。
+  assert.equal(rec.shouldOfferRecovery({ overdueCount: big - 1, daysAway: away }), false);
+  // 毎日やっている人の期限切れは「離脱からの復帰」ではない。
+  assert.equal(rec.shouldOfferRecovery({ overdueCount: big, daysAway: away - 1 }), false);
+});
+
+test("層は SRS段階 × 期限超過日数 で切られる", () => {
+  const now = 1_700_000_000_000;
+  assert.equal(rec.recoveryStratumKey(overdueWord("a", 0, 3, now), now), "s01:d7");
+  assert.equal(rec.recoveryStratumKey(overdueWord("b", 3, 20, now), now), "s23:d30");
+  assert.equal(rec.recoveryStratumKey(overdueWord("c", 6, 90, now), now), "s4+:d31+");
+});
+
+test("抜き取りは全層から取り、指定数を超えない", () => {
+  const now = 1_700_000_000_000;
+  const words = [];
+  // 大きい層と、1語しかない層を混ぜる。
+  for (let i = 0; i < 300; i += 1) words.push(overdueWord(`big${i}`, 0, 3, now));
+  for (let i = 0; i < 40; i += 1) words.push(overdueWord(`mid${i}`, 3, 20, now));
+  words.push(overdueWord("tiny", 6, 90, now));
+  const strata = rec.groupRecoveryStrata(words, now);
+  const probe = rec.pickRecoveryProbe(strata, rec.RECOVERY_PROBE_SIZE);
+  assert.equal(probe.length, rec.RECOVERY_PROBE_SIZE, "指定数ちょうど抜き取る");
+  assert.equal(new Set(probe).size, probe.length, "同じ語を二度取らない");
+  // 1語しかない層も落とさない。落とすとその層の保持率が推定できない。
+  assert.ok(probe.includes("tiny"), "小さい層からも取る");
+  const kinds = new Set(probe.map((id) => id.replace(/[0-9]+$/, "")));
+  assert.deepEqual([...kinds].sort(), ["big", "mid", "tiny"], "全層から取る");
+});
+
+test("抜き取り数が総数を超えない（期限切れが少ないとき）", () => {
+  const now = 1_700_000_000_000;
+  const words = [overdueWord("a", 0, 3, now), overdueWord("b", 3, 20, now)];
+  const probe = rec.pickRecoveryProbe(rec.groupRecoveryStrata(words, now), 20);
+  assert.equal(probe.length, 2);
+});
+
+test("保持率は事前分布つきで、1語の結果で0%や100%にしない", () => {
+  const r = rec.estimateStratumRetention([
+    { stratum: "s01:d7", correct: true },
+    { stratum: "s4+:d7", correct: false },
+  ]);
+  assert.ok(r.get("s01:d7") > 0.5 && r.get("s01:d7") < 1, `1問正解で100%にしない: ${r.get("s01:d7")}`);
+  assert.ok(r.get("s4+:d7") > 0 && r.get("s4+:d7") < 0.5, `1問不正解で0%にしない: ${r.get("s4+:d7")}`);
+});
+
+test("計画は保持率の高い層から並べ、1日の上限で区切る", () => {
+  const now = 1_700_000_000_000;
+  const words = [];
+  for (let i = 0; i < 30; i += 1) words.push(overdueWord(`low${i}`, 0, 90, now));   // s01:d31+
+  for (let i = 0; i < 30; i += 1) words.push(overdueWord(`high${i}`, 6, 3, now));   // s4+:d7
+  const strata = rec.groupRecoveryStrata(words, now);
+  const retention = new Map([["s01:d31+", 0.2], ["s4+:d7", 0.9]]);
+  const plan = rec.buildRecoveryPlan(strata, retention, 10);
+  assert.equal(plan.orderedIds.length, 60);
+  assert.ok(plan.orderedIds[0].startsWith("high"), "保持率の高い層が先");
+  assert.ok(plan.orderedIds[59].startsWith("low"), "低い層が後");
+  assert.equal(plan.days.length, 6, "60語を1日10語で6日に分ける");
+  assert.equal(plan.days[0].length, 10);
+  assert.deepEqual(
+    plan.days.flat().length,
+    plan.orderedIds.length,
+    "分割で語が増減しない",
+  );
+});
+
+test("復帰の計画は学習状態を書き換えない（純粋関数であること）", () => {
+  const now = 1_700_000_000_000;
+  const words = [overdueWord("a", 2, 40, now), overdueWord("b", 5, 10, now)];
+  const before = JSON.parse(JSON.stringify(words));
+  const strata = rec.groupRecoveryStrata(words, now);
+  const probe = rec.pickRecoveryProbe(strata, 20);
+  const retention = rec.estimateStratumRetention(
+    probe.map((id) => ({ stratum: rec.recoveryStratumKey(words.find((w) => w.id === id), now), correct: true })),
+  );
+  rec.buildRecoveryPlan(strata, retention, 10);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(words)),
+    before,
+    "復帰の計算で単語の学習状態が変わってはいけない",
+  );
+});
+
+// --- 復帰トリアージの通し動作 ------------------------------------------
+// カード表示 → 抜き取り開始 → 回答 → 保持率推定 → 今日ぶんの提示 までを
+// 実コードで通す。とくに「回答していない語の学習状態が変わらない」ことを固定する。
+function buildRecoveryFlowSandbox(words) {
+  const store = new Map();
+  const sandbox = {
+    __words: words,
+    __started: [],
+    __status: [],
+    Date,
+    console,
+  };
+  const pieces = [
+    "const appState = { words: globalThis.__words, streak: { count: 3, last: '', best: 5 }, activeDeckId: 'all' };",
+    "const localStorage = { getItem: (k) => globalThis.__store.get(k) ?? null," +
+      " setItem: (k, v) => globalThis.__store.set(k, String(v))," +
+      " removeItem: (k) => globalThis.__store.delete(k) };",
+    `const SRS_DAY_MS = ${html.match(/const SRS_DAY_MS = ([^;]+);/)[1]};`,
+    extractConst("SRS_INTERVAL_DAYS"),
+    `const RECOVERY_KEY = ${JSON.stringify(html.match(/const RECOVERY_KEY = "([^"]+)"/)[1])};`,
+    `const RECOVERY_MIN_OVERDUE = ${html.match(/const RECOVERY_MIN_OVERDUE = (\d+);/)[1]};`,
+    `const RECOVERY_MIN_DAYS_AWAY = ${html.match(/const RECOVERY_MIN_DAYS_AWAY = (\d+);/)[1]};`,
+    `const RECOVERY_PROBE_SIZE = ${html.match(/const RECOVERY_PROBE_SIZE = (\d+);/)[1]};`,
+    `const RECOVERY_DEFAULT_DAILY_CAP = ${html.match(/const RECOVERY_DEFAULT_DAILY_CAP = (\d+);/)[1]};`,
+    extractFunction("recoveryOverdueDays"),
+    extractFunction("recoveryStratumKey"),
+    extractFunction("groupRecoveryStrata"),
+    extractFunction("pickRecoveryProbe"),
+    extractFunction("estimateStratumRetention"),
+    extractFunction("buildRecoveryPlan"),
+    extractFunction("shouldOfferRecovery"),
+    extractFunction("loadRecoveryState"),
+    extractFunction("saveRecoveryState"),
+    extractFunction("daysSinceLastStudy"),
+    // 並び順の細部は検査対象でないので、期限順だけの単純版に置き換える。
+    "const reviewPriority = () => 0;",
+    extractFunction("eligibleSrsWords"),
+    // 画面まわりは検査対象でないので最小限のスタブに置き換える。
+    "const quizSelectedDeckWords = () => appState.words;",
+    "const escapeHtml = (v) => String(v);",
+    "const statsCardHeader = (a, b) => `<h3>${a}</h3><span>${b}</span>`;",
+    "const buildDailyActivity = () => new Map([['d1', 25], ['d2', 25]]);",
+    "const startReview = (ids, opts) => { globalThis.__started.push({ ids, opts }); };",
+    "const setStatus = (m) => { globalThis.__status.push(m); };",
+    "const renderStats = () => {};",
+    extractFunction("recentDailyAnswerCount"),
+    extractFunction("startRecoveryProbe"),
+    extractFunction("finishRecoveryProbe"),
+    extractFunction("startRecoveryToday"),
+    extractFunction("statsRecoveryCard"),
+    "globalThis.__f = { statsRecoveryCard, startRecoveryProbe, finishRecoveryProbe," +
+      " startRecoveryToday, loadRecoveryState, saveRecoveryState };",
+  ];
+  sandbox.__store = store;
+  new Script(pieces.join("\n\n"), { filename: "recovery-flow-check.js" }).runInNewContext(sandbox);
+  return { f: sandbox.__f, started: () => sandbox.__started, status: () => sandbox.__status };
+}
+
+// 25日前に学習し、200語が期限切れという状態を作る。
+function makeLapsedWords(n = 200) {
+  const now = Date.now();
+  const past = new Date(now - 25 * DAY).toISOString();
+  return Array.from({ length: n }, (_, i) => ({
+    id: `lapse${i}`,
+    term: `term${i}`,
+    meaning: `意味${i}`,
+    history: [{ at: past, correct: true }],
+    learning: {
+      status: "review",
+      srsStage: i % 7,
+      nextReviewAt: now - (5 + (i % 60)) * DAY,
+    },
+  }));
+}
+
+test("復帰: 離脱して戻ると、全件の数字より先に「まず20語」を出す", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  const html1 = f.statsRecoveryCard();
+  assert.ok(html1.includes("おかえりなさい"), "復帰カードが出る");
+  assert.ok(html1.includes("recoveryStartButton"), "抜き取り開始ボタンがある");
+  assert.ok(html1.includes("20語だけ"), "まず20語だけ、と伝える");
+  assert.ok(!html1.includes("200語"), "たまった全件数を前面に出さない");
+});
+
+test("復帰: 抜き取りを始めても、単語の学習状態は変わらない", () => {
+  const words = makeLapsedWords();
+  const before = JSON.parse(JSON.stringify(words));
+  const { f, started } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  assert.equal(started().length, 1, "復習セッションを1つ始める");
+  assert.equal(started()[0].ids.length, 20, "20語を出題する");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(words)),
+    before,
+    "抜き取りを始めた時点では、どの単語の学習状態も変わっていない",
+  );
+  const state = f.loadRecoveryState();
+  assert.equal(state.probeIds.length, 20);
+  assert.equal(state.probeDone, false);
+  assert.ok(state.dailyCap >= 10 && state.dailyCap <= 80, `1日の上限が妥当: ${state.dailyCap}`);
+});
+
+test("復帰: 抜き取りの結果から保持率を出し、今日ぶんだけを提示する", () => {
+  const words = makeLapsedWords();
+  const { f } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  const state = f.loadRecoveryState();
+  // 抜き取り対象を「解いた」ことにする（半分正解）。
+  const answeredAt = new Date(Date.now() + 1000).toISOString();
+  state.probeIds.forEach((id, i) => {
+    const w = words.find((x) => x.id === id);
+    w.history.push({ at: answeredAt, correct: i % 2 === 0 });
+  });
+  f.finishRecoveryProbe();
+  const after = f.loadRecoveryState();
+  assert.equal(after.probeDone, true, "抜き取り完了として記録する");
+  assert.ok(after.retention.size > 0, "層ごとの保持率が出る");
+  for (const rate of after.retention.values()) {
+    assert.ok(rate > 0 && rate < 1, `保持率が0%や100%に振り切れない: ${rate}`);
+  }
+  const card = f.statsRecoveryCard();
+  assert.ok(card.includes("復帰プラン"), "計画カードに切り替わる");
+  assert.ok(card.includes("recoveryTodayButton"), "今日のぶんを始めるボタンが出る");
+  assert.ok(card.includes("あと"), "残り日数を見せる");
+  assert.ok(
+    card.includes("まだ解いていない単語の学習記録は変わりません"),
+    "書き換えないことを画面で明示する",
+  );
+});
+
+test("復帰: 今日ぶんは1日の上限を超えず、未回答語の状態も変えない", () => {
+  const words = makeLapsedWords();
+  const { f, started } = buildRecoveryFlowSandbox(words);
+  f.startRecoveryProbe();
+  const state = f.loadRecoveryState();
+  const answeredAt = new Date(Date.now() + 1000).toISOString();
+  state.probeIds.forEach((id, i) => {
+    words.find((x) => x.id === id).history.push({ at: answeredAt, correct: i % 3 !== 0 });
+  });
+  f.finishRecoveryProbe();
+  const snapshot = JSON.parse(JSON.stringify(words.map((w) => w.learning)));
+  f.startRecoveryToday();
+  const last = started()[started().length - 1];
+  assert.ok(last.ids.length <= f.loadRecoveryState().dailyCap, "1日の上限を超えない");
+  assert.ok(last.ids.length > 0, "今日ぶんが空にならない");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(words.map((w) => w.learning))),
+    snapshot,
+    "計画を出しただけでは、どの単語の学習状態も変わらない",
+  );
+});
+
+test("復帰: たまっていない・空けていないときは出さない", () => {
+  const now = Date.now();
+  // 期限切れは多いが、今日も学習している人。
+  const active = makeLapsedWords(200).map((w) => ({
+    ...w,
+    history: [{ at: new Date(now - 3600000).toISOString(), correct: true }],
+  }));
+  assert.equal(buildRecoveryFlowSandbox(active).f.statsRecoveryCard(), "", "離脱していなければ出さない");
+  // 長く空けたが期限切れは少ない人。
+  const few = makeLapsedWords(10);
+  assert.equal(buildRecoveryFlowSandbox(few).f.statsRecoveryCard(), "", "少なければ普通に復習すればよい");
+});
+
+// --- 「知っている英語で言うと」 -----------------------------------------
+// 類義語のうち習得済みのものだけを説明に使う。日本語は必ず残す
+// （英語だけにすると、その類義語がうろ覚えだったとき確かめる手段が無くなる）。
+function buildKnownSynSandbox(words) {
+  const pieces = [
+    "const appState = { words: globalThis.__words };",
+    `const KNOWN_SYNONYM_MIN_STAGE = ${html.match(/const KNOWN_SYNONYM_MIN_STAGE = (\d+);/)[1]};`,
+    extractFunction("normalizeTerm"),
+    extractFunction("isKnownEnoughToExplain"),
+    extractFunction("knownTermSet"),
+    extractFunction("knownSynonyms"),
+    "globalThis.__k = { isKnownEnoughToExplain, knownTermSet, knownSynonyms," +
+      " MIN_STAGE: KNOWN_SYNONYM_MIN_STAGE };",
+  ];
+  const sandbox = { __words: words };
+  new Script(pieces.join("\n\n"), { filename: "known-syn-check.js" }).runInNewContext(sandbox);
+  return sandbox.__k;
+}
+const wordAt = (term, stage, recent) => ({
+  id: term,
+  term,
+  learning: { srsStage: stage },
+  history: recent.map((c) => ({ at: "2026-08-01T00:00:00.000Z", correct: c })),
+});
+
+test("説明に使うのは、段階が進んでいて直近も正解している語だけ", () => {
+  const k = buildKnownSynSandbox([]);
+  assert.equal(k.isKnownEnoughToExplain(wordAt("tough", 5, [true, true, true])), true);
+  // 段階が浅い語は、覚えたばかりで説明には使えない。
+  assert.equal(k.isKnownEnoughToExplain(wordAt("tough", k.MIN_STAGE - 1, [true, true, true])), false);
+  // 直近に1回でも落としている語は危うい。
+  assert.equal(k.isKnownEnoughToExplain(wordAt("tough", 5, [true, false, true])), false);
+  // 履歴が無い語は判断材料が無い。
+  assert.equal(k.isKnownEnoughToExplain(wordAt("tough", 5, [])), false);
+});
+
+test("類義語のうち習得済みのものだけを取り出す", () => {
+  const words = [
+    wordAt("tough", 5, [true, true, true]),   // 習得済み
+    wordAt("hardy", 1, [true]),                // まだ
+  ];
+  const k = buildKnownSynSandbox(words);
+  const items = [
+    { word: "hardy", ja: "丈夫な" },
+    { word: "Tough", ja: "たくましい" }, // 大文字でも拾う
+    { word: "sturdy", ja: "頑丈な" },    // 手元に無い
+  ];
+  // サンドboxの配列はプロトタイプが違うので、値を取り出して比べる。
+  const got = [...k.knownSynonyms(items, k.knownTermSet(words))].map((i) => i.word);
+  assert.deepEqual(got, ["Tough"], "習得済みの語だけ");
+});
+
+test("習得済みの類義語が無ければ何も出さない（日本語表示のまま）", () => {
+  const words = [wordAt("hardy", 1, [true])];
+  const k = buildKnownSynSandbox(words);
+  assert.equal([...k.knownSynonyms([{ word: "hardy" }], k.knownTermSet(words))].length, 0);
+  assert.equal([...k.knownSynonyms([{ word: "sturdy" }], new Set())].length, 0);
+});
+
+test("「知っている英語で言うと」を出しても日本語を消さない", () => {
+  // 表示側の不変条件。英語チップに和訳を併記し、通常の類義語リストも残す。
+  const src = html.slice(html.indexOf('if (type === "synonyms") {'));
+  const body = src.slice(0, src.indexOf("\n  }\n"));
+  assert.ok(body.includes("known-syn-box"), "習得済みの類義語を先頭に出す");
+  assert.ok(
+    body.includes("item.ja ? `<small>") || body.includes("item.ja ?"),
+    "英語チップに和訳を併記する",
+  );
+  assert.ok(body.includes("return list;"), "習得済みが無ければ従来の表示に戻す");
+  assert.ok(
+    body.trimEnd().endsWith("list\n    );") || body.includes("` +\n      list"),
+    "通常の類義語リストも消さずに残す",
+  );
+});

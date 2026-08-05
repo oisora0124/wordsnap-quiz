@@ -4005,6 +4005,28 @@ textarea:focus-visible {
   padding: 0.45rem 0.68rem;
 }
 
+/* 復帰カード。全件の数字より先に「まず20語」を見せるので最上段で目立たせる */
+.stats-card.is-recovery {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+}
+.stats-recovery-lead {
+  margin: 0.4rem 0 0.6rem;
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+.stats-recovery-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.stats-card.is-recovery .actions {
+  margin-top: 0.5rem;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
 /* ---------- Saved detail / enrichment ---------- */
 
 .saved-detail {
@@ -4112,6 +4134,40 @@ textarea:focus-visible {
   margin-left: 0.35rem;
   padding: 0.15rem 0.35rem;
   vertical-align: middle;
+}
+
+/* 「知っている英語で言うと」: 習得済みの類義語だけを先頭に出す。
+   日本語は消さず、各語の下に小さく併記する。 */
+.known-syn-box {
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--accent) 9%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.known-syn-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.known-syn-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.known-syn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  line-height: 1.3;
+}
+.known-syn small {
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 
 /* 例文・定義・語源の和訳行 */
@@ -6473,7 +6529,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.66</span>
+        <span class="app-footer-version">バージョン 1.0.67</span>
       </footer>
     </main>
 
@@ -6607,8 +6663,8 @@ const WordBankTelemetry = (() => {
   const ERROR_STATE_KEY = "wordsnap-telemetry-errors:v1";
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
-  // 利用者が「バージョン 1.0.66」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.66";
+  // 利用者が「バージョン 1.0.67」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
+  const APP_REV = "1.0.67";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -25617,6 +25673,211 @@ function eligibleReviewWords(words = quizSelectedDeckWords()) {
   );
 }
 
+// ---------- ブランク復帰トリアージ ----------
+//
+// 数週間空けて戻ると期限切れが数百語たまる。その数字を見た時点で開かなくなるのが
+// 語彙アプリの実質的な離脱要因なので、山を全部見せる代わりに少数の抜き取りテストで
+// 「どれくらい残っているか」を測り、そこから戻り方を決める。
+//
+// 安全上の大前提: この機能は【提示と順序づけだけ】を行う。抜き取りテストで実際に
+// 回答した語は通常どおりSRSが更新されるが、**回答していない語の学習状態は一切
+// 書き換えない**。推定値で数百語の状態を一括補正すると、推定が外れたときに既存の
+// 学習データを壊すことになる（元に戻す手段も要る）。順序を変えるだけなら、
+// 途中でやめても失うものが無い。
+//
+// 復帰の進行状況は localStorage のみに置き、appState には入れない。同期にもマージにも
+// 関与しないので、古い版のクライアントにも既存データにも影響しない。
+
+const RECOVERY_KEY = "wordsnap-recovery:v1";
+// これ以上たまっていて、これ以上空いていたら「復帰」とみなす。
+const RECOVERY_MIN_OVERDUE = 60;
+const RECOVERY_MIN_DAYS_AWAY = 7;
+const RECOVERY_PROBE_SIZE = 20;
+const RECOVERY_DEFAULT_DAILY_CAP = 40;
+
+// 層は「SRSの段階」×「どれだけ期限を過ぎたか」で切る。段階が進んだ語ほど忘れにくく、
+// 過ぎた日数が長いほど忘れやすい、という二軸が保持率をいちばん説明するため。
+function recoveryOverdueDays(word, now) {
+  const at = Number(word?.learning?.nextReviewAt || 0);
+  if (at <= 0) return 0;
+  return Math.max(0, Math.floor((now - at) / SRS_DAY_MS));
+}
+
+function recoveryStratumKey(word, now = Date.now()) {
+  const stage = Math.max(0, Math.min(SRS_INTERVAL_DAYS.length - 1, Math.floor(Number(word?.learning?.srsStage) || 0)));
+  const stageBucket = stage <= 1 ? "s01" : stage <= 3 ? "s23" : "s4+";
+  const days = recoveryOverdueDays(word, now);
+  const dayBucket = days <= 7 ? "d7" : days <= 30 ? "d30" : "d31+";
+  return `${stageBucket}:${dayBucket}`;
+}
+
+// 期限切れ語を層ごとにまとめる。層の順序は「保持率が高そうな順」＝段階が進んでいて
+// 過ぎた日数が短い順にしておく（推定前の既定の並びとして使う）。
+function groupRecoveryStrata(words, now = Date.now()) {
+  const map = new Map();
+  for (const word of words) {
+    const key = recoveryStratumKey(word, now);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(word);
+  }
+  return map;
+}
+
+// 層の大きさに比例して抜き取る。ただし層が消えないよう各層から最低1語は取る。
+// 少数の層を落とすと、その層の保持率が推定できないまま計画に混ざってしまう。
+function pickRecoveryProbe(strata, size = RECOVERY_PROBE_SIZE) {
+  const keys = [...strata.keys()];
+  if (keys.length === 0) return [];
+  const total = keys.reduce((sum, k) => sum + strata.get(k).length, 0);
+  const target = Math.min(size, total);
+  const alloc = new Map();
+  let assigned = 0;
+  for (const key of keys) {
+    const n = Math.min(strata.get(key).length, Math.max(1, Math.floor((strata.get(key).length / total) * target)));
+    alloc.set(key, n);
+    assigned += n;
+  }
+  // 端数の調整。多すぎたら大きい層から削り、少なければ余裕のある層へ足す。
+  const bySize = keys.slice().sort((a, b) => strata.get(b).length - strata.get(a).length);
+  let guard = 0;
+  while (assigned > target && guard++ < 1000) {
+    for (const key of bySize) {
+      if (assigned <= target) break;
+      if (alloc.get(key) > 1) {
+        alloc.set(key, alloc.get(key) - 1);
+        assigned -= 1;
+      }
+    }
+    if (bySize.every((k) => alloc.get(k) <= 1)) break;
+  }
+  guard = 0;
+  while (assigned < target && guard++ < 1000) {
+    let moved = false;
+    for (const key of bySize) {
+      if (assigned >= target) break;
+      if (alloc.get(key) < strata.get(key).length) {
+        alloc.set(key, alloc.get(key) + 1);
+        assigned += 1;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  const ids = [];
+  for (const key of keys) {
+    // 期限を過ぎた順に並べたうえで等間隔に取る。先頭だけ取ると層の中で偏る。
+    const pool = strata.get(key).slice().sort(
+      (a, b) => Number(a.learning?.nextReviewAt || 0) - Number(b.learning?.nextReviewAt || 0),
+    );
+    const n = alloc.get(key);
+    if (n <= 0) continue;
+    const step = pool.length / n;
+    for (let i = 0; i < n; i += 1) ids.push(pool[Math.min(pool.length - 1, Math.floor(i * step))].id);
+  }
+  return [...new Set(ids)];
+}
+
+// 層ごとの保持率。標本が数語しかないので、Beta(1,1) を事前分布に置いて 0% / 100% の
+// 極端な推定を避ける（1語正解しただけで「この層は全部覚えている」とみなさない）。
+function estimateStratumRetention(probeResults) {
+  const acc = new Map();
+  for (const r of probeResults || []) {
+    if (!r || !r.stratum) continue;
+    if (!acc.has(r.stratum)) acc.set(r.stratum, { ok: 0, n: 0 });
+    const e = acc.get(r.stratum);
+    e.n += 1;
+    if (r.correct) e.ok += 1;
+  }
+  const out = new Map();
+  for (const [key, e] of acc) out.set(key, (e.ok + 1) / (e.n + 2));
+  return out;
+}
+
+// 推定保持率の高い層から順に、1日あたりの上限で区切って割り当てる。
+// 高い層を先にするのは、覚え直しが速く済む語から片づけたほうが山が早く減り、
+// 「戻ってきた甲斐がある」状態を最初に作れるため。低い層は結局どのみち複数日かかる。
+function buildRecoveryPlan(strata, retention, dailyCap = RECOVERY_DEFAULT_DAILY_CAP) {
+  const cap = Math.max(1, Math.floor(Number(dailyCap) || RECOVERY_DEFAULT_DAILY_CAP));
+  const keys = [...strata.keys()].sort((a, b) => {
+    const ra = retention.has(a) ? retention.get(a) : 0.5;
+    const rb = retention.has(b) ? retention.get(b) : 0.5;
+    return rb - ra || String(a).localeCompare(String(b));
+  });
+  const ordered = [];
+  for (const key of keys) {
+    const pool = strata.get(key).slice().sort(
+      (a, b) => Number(a.learning?.nextReviewAt || 0) - Number(b.learning?.nextReviewAt || 0),
+    );
+    for (const w of pool) ordered.push(w.id);
+  }
+  const days = [];
+  for (let i = 0; i < ordered.length; i += cap) days.push(ordered.slice(i, i + cap));
+  return { orderedIds: ordered, days, dailyCap: cap, totalDays: days.length };
+}
+
+// 復帰モードを出すかどうか。数が少ないうちは普通に復習すればよいので出さない。
+function shouldOfferRecovery({ overdueCount, daysAway }) {
+  return (
+    Number(overdueCount) >= RECOVERY_MIN_OVERDUE &&
+    Number(daysAway) >= RECOVERY_MIN_DAYS_AWAY
+  );
+}
+
+// 復帰の進行状況（端末内のみ）。同期しないので、機種変や別端末では改めて測り直す。
+function loadRecoveryState() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECOVERY_KEY));
+    if (!raw || typeof raw !== "object") return null;
+    const retention = new Map(Array.isArray(raw.retention) ? raw.retention : []);
+    return {
+      startedAt: Number(raw.startedAt) || 0,
+      probeIds: Array.isArray(raw.probeIds) ? raw.probeIds.map(String) : [],
+      probeStrata: raw.probeStrata && typeof raw.probeStrata === "object" ? raw.probeStrata : {},
+      probeDone: Boolean(raw.probeDone),
+      retention,
+      dailyCap: Math.max(1, Math.floor(Number(raw.dailyCap) || RECOVERY_DEFAULT_DAILY_CAP)),
+      totalAtStart: Math.max(0, Math.floor(Number(raw.totalAtStart) || 0)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveRecoveryState(state) {
+  try {
+    if (!state) {
+      localStorage.removeItem(RECOVERY_KEY);
+      return;
+    }
+    localStorage.setItem(
+      RECOVERY_KEY,
+      JSON.stringify({ ...state, retention: [...state.retention] }),
+    );
+  } catch {
+    // 保存できなくてもこの起動中は動く。復帰は端末内の一時的な段取りにすぎない。
+  }
+}
+
+// 最後に学習した日から何日空いたか。streak は同期でならされることがあるので、
+// 単語側の履歴（回答時刻）も見て、遅いほうを採用する。
+function daysSinceLastStudy(now = Date.now()) {
+  let last = 0;
+  for (const word of appState.words) {
+    const history = word.history;
+    if (!Array.isArray(history) || history.length === 0) continue;
+    // 履歴の at はISO文字列。Number() では NaN になり、離脱日数が常に0になる。
+    const at = Date.parse(String(history[history.length - 1]?.at || ""));
+    if (Number.isFinite(at) && at > last) last = at;
+  }
+  const streakLast = String(appState.streak?.last || "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(streakLast)) {
+    const t = new Date(`${streakLast}T00:00:00`).getTime();
+    if (Number.isFinite(t) && t > last) last = t;
+  }
+  if (last <= 0) return 0;
+  return Math.max(0, Math.floor((now - last) / SRS_DAY_MS));
+}
+
 function eligibleSrsWords(words = quizSelectedDeckWords(), now = Date.now()) {
   return words
     .filter((word) => {
@@ -26096,6 +26357,9 @@ function restoreLastQuizSettings() {
 
 function endReview(message) {
   clearSavedReviewProgress(); // 完走/中断したら再開データは消す（閉じた/リロード時だけ残る）
+  // 抜き取りテストの途中で終わっても、解いた分だけで保持率を出す。全問解かないと
+  // 何も出ないと、復帰の入口でもう一度つまずくことになる。
+  finishRecoveryProbe();
   reviewSession = null;
   currentQuiz = null;
   renderQuiz();
@@ -28897,6 +29161,177 @@ function statsCardHeader(title, meta) {
   );
 }
 
+// 抜き取りテストを始める。ここで出す語は通常の復習と同じ扱いなので、
+// 回答すればSRSも普通に更新される（推定で書き換えるのではなく、実際に解いた結果）。
+function startRecoveryProbe() {
+  const now = Date.now();
+  const overdue = eligibleSrsWords(quizSelectedDeckWords(), now);
+  if (overdue.length === 0) return;
+  const strata = groupRecoveryStrata(overdue, now);
+  const probeIds = pickRecoveryProbe(strata, RECOVERY_PROBE_SIZE);
+  if (probeIds.length === 0) return;
+  // 層は「抜き取り時点」の状態で固定する。解くと nextReviewAt が動くので、
+  // あとから引き直すと別の層に化けて保持率の推定がずれる。
+  const probeStrata = {};
+  for (const id of probeIds) {
+    const word = overdue.find((w) => w.id === id);
+    if (word) probeStrata[id] = recoveryStratumKey(word, now);
+  }
+  // 1日の上限は直近の学習量に合わせる。普段20語の人に100語を出しても続かない。
+  const recentPerDay = recentDailyAnswerCount();
+  saveRecoveryState({
+    startedAt: now,
+    probeIds,
+    probeStrata,
+    probeDone: false,
+    retention: new Map(),
+    dailyCap: Math.max(10, Math.min(80, recentPerDay || RECOVERY_DEFAULT_DAILY_CAP)),
+    totalAtStart: overdue.length,
+  });
+  startReview(probeIds, { label: "どれくらい覚えているか確認", shuffle: false });
+}
+
+function resumeRecoveryProbe() {
+  const state = loadRecoveryState();
+  if (!state) return;
+  const alive = state.probeIds.filter((id) => appState.words.some((w) => w.id === id));
+  if (alive.length === 0) {
+    finishRecoveryProbe();
+    return;
+  }
+  startReview(alive, { label: "どれくらい覚えているか確認", shuffle: false });
+}
+
+// 抜き取りの結果から層ごとの保持率を出す。判定材料は「抜き取り対象の語の、
+// 抜き取り開始以降の回答」だけを使う（それ以前の履歴は今の記憶状態を表さない）。
+function finishRecoveryProbe() {
+  const state = loadRecoveryState();
+  if (!state || state.probeDone) return;
+  const now = Date.now();
+  const results = [];
+  for (const id of state.probeIds) {
+    const word = appState.words.find((w) => w.id === id);
+    if (!word) continue;
+    // 履歴の at はISO文字列。抜き取り開始以降の回答だけを見る
+    // （それ以前の履歴は今の記憶状態を表さない）。
+    const entry = (word.history || [])
+      .filter((h) => Date.parse(String(h?.at || "")) >= state.startedAt)
+      .pop();
+    if (!entry) continue;
+    const stratum = state.probeStrata?.[id];
+    if (!stratum) continue; // 層が分からない語は推定に混ぜない
+    results.push({ stratum: String(stratum), correct: entry.correct === true });
+  }
+  if (results.length === 0) return;
+  saveRecoveryState({
+    ...state,
+    probeDone: true,
+    retention: estimateStratumRetention(results),
+  });
+}
+
+// 今日ぶんの復習を始める。計画は毎回その場で組み直すので、
+// 単語が消えたり同期で変わっていても古い計画を参照しない。
+function startRecoveryToday() {
+  const state = loadRecoveryState();
+  if (!state || !state.probeDone) return;
+  const now = Date.now();
+  const overdue = eligibleSrsWords(quizSelectedDeckWords(), now);
+  if (overdue.length === 0) {
+    setStatus("たまっていた復習は片づきました。");
+    renderStats();
+    return;
+  }
+  const plan = buildRecoveryPlan(groupRecoveryStrata(overdue, now), state.retention, state.dailyCap);
+  const todayIds = plan.days[0] || [];
+  if (todayIds.length === 0) return;
+  startReview(todayIds, { label: "復帰プラン", shuffle: false });
+}
+
+// 直近7日で1日あたり何語answeredしたか（0なら判定不能として0を返す）。
+function recentDailyAnswerCount() {
+  const byDay = buildDailyActivity();
+  if (!(byDay instanceof Map) || byDay.size === 0) return 0;
+  const counts = [...byDay.values()].map((v) => Number(v?.total ?? v) || 0).filter((n) => n > 0);
+  if (counts.length === 0) return 0;
+  counts.sort((a, b) => a - b);
+  return Math.round(counts[Math.floor(counts.length / 2)]); // 中央値
+}
+
+// 復帰カード。期限切れが積み上がった状態で戻ってきたときだけ出す。
+// 全件の数字を前面に出さず、まず少数の抜き取りで「どれくらい残っているか」を測らせる。
+function statsRecoveryCard() {
+  const scoped = quizSelectedDeckWords();
+  if (scoped.length === 0) return "";
+  const now = Date.now();
+  const overdue = eligibleSrsWords(scoped, now);
+  const state = loadRecoveryState();
+
+  if (!state) {
+    const away = daysSinceLastStudy(now);
+    if (!shouldOfferRecovery({ overdueCount: overdue.length, daysAway: away })) return "";
+    return (
+      `<div class="stats-card is-recovery">` +
+      statsCardHeader("おかえりなさい", `${escapeHtml(away)}日ぶり`) +
+      `<p class="stats-recovery-lead">` +
+      `復習の期限が過ぎた単語がたまっています。全部やる必要はありません。` +
+      `まず<strong>${escapeHtml(RECOVERY_PROBE_SIZE)}語だけ</strong>試して、` +
+      `どれくらい覚えているかを見てから戻り方を決めましょう。` +
+      `</p>` +
+      `<div class="actions"><button type="button" id="recoveryStartButton">` +
+      `${escapeHtml(RECOVERY_PROBE_SIZE)}語だけ試す</button>` +
+      `<button type="button" class="ghost" id="recoveryDismissButton">全部まとめて復習する</button></div>` +
+      `</div>`
+    );
+  }
+
+  if (!state.probeDone) {
+    return (
+      `<div class="stats-card is-recovery">` +
+      statsCardHeader("おかえりなさい", "確認中") +
+      `<p class="stats-recovery-lead">抜き取りの${escapeHtml(state.probeIds.length)}語を解き終えると、戻り方の目安が出ます。</p>` +
+      `<div class="actions"><button type="button" id="recoveryResumeProbeButton">続きを解く</button>` +
+      `<button type="button" class="ghost" id="recoveryDismissButton">やめて普通に復習する</button></div>` +
+      `</div>`
+    );
+  }
+
+  // 抜き取り済み。推定保持率と、今日ぶんの割り当てを見せる。
+  const strata = groupRecoveryStrata(overdue, now);
+  const plan = buildRecoveryPlan(strata, state.retention, state.dailyCap);
+  const rates = [...state.retention.values()];
+  const overall = rates.length
+    ? Math.round((rates.reduce((a, b) => a + b, 0) / rates.length) * 100)
+    : null;
+  if (plan.orderedIds.length === 0) {
+    return (
+      `<div class="stats-card is-recovery">` +
+      statsCardHeader("復帰完了", "") +
+      `<p class="stats-recovery-lead">たまっていた復習は片づきました。通常の復習に戻ります。</p>` +
+      `<div class="actions"><button type="button" id="recoveryDismissButton">閉じる</button></div>` +
+      `</div>`
+    );
+  }
+  const todayIds = plan.days[0] || [];
+  return (
+    `<div class="stats-card is-recovery">` +
+    statsCardHeader("復帰プラン", overall === null ? "" : `覚えていた割合 約${escapeHtml(overall)}%`) +
+    `<div class="stats-review-body">` +
+    `<div>` +
+    `<div class="stats-review-count"><span>${escapeHtml(todayIds.length)}</span><small>語（今日）</small></div>` +
+    `<div class="stats-review-breakdown">` +
+    `<span>残り <strong>${escapeHtml(plan.orderedIds.length)}語</strong></span>` +
+    `<span>このペースで <strong>あと${escapeHtml(plan.totalDays)}日</strong></span>` +
+    `</div>` +
+    `</div>` +
+    `<button type="button" id="recoveryTodayButton">今日のぶんを始める</button>` +
+    `</div>` +
+    `<p class="stats-recovery-note">覚えていそうな単語から順に出します。まだ解いていない単語の学習記録は変わりません。</p>` +
+    `<div class="actions"><button type="button" class="ghost" id="recoveryDismissButton">通常の復習に戻す</button></div>` +
+    `</div>`
+  );
+}
+
 // 今日の復習ボタンと同じ抽出結果を、期限超過と今日到来に分けて表示する。
 function statsTodayReviewCard() {
   const scopedWords = quizSelectedDeckWords();
@@ -29375,6 +29810,8 @@ function renderStatsCharts(byDay) {
   if (!block || !grid) return;
   const activity = byDay instanceof Map ? byDay : buildDailyActivity();
   const cards = [
+    // 復帰カードは最上段。全件の数字より先に「まず20語」を見せる。
+    statsRecoveryCard(),
     statsTodayReviewCard(),
     statsActivityCard(activity),
     statsMasteryCard(),
@@ -30248,6 +30685,54 @@ function jaLine(ja) {
   return `<p class="enrich-ja enrich-ja-loading">和訳を取得中…</p>`;
 }
 
+// ---------- 「知っている英語で言うと」 ----------
+//
+// 類義語を全部並べるのではなく、その中で【自分が習得済みの語】だけを取り出して
+// 「知っている英語で言うと tough」のように見せる。語彙が増えるほど、説明そのものが
+// 少しずつ英語へ置き換わっていく。
+//
+// 日本語は必ず残す。英語だけにすると、知っている類義語が実はうろ覚えだったとき、
+// 意味を確かめる手段が無くなる。英語を先に出し、日本語はその下に併記する。
+//
+// 判定に外部通信は使わない。習得済みかどうかは手元の学習状態だけで分かる。
+
+// 「習得済み」とみなす条件。SRSがある程度進み、直近で正解できている語。
+// ここを緩くすると、うろ覚えの語で説明することになって逆に分からなくなる。
+const KNOWN_SYNONYM_MIN_STAGE = 3;
+
+function isKnownEnoughToExplain(word) {
+  if (!word) return false;
+  const stage = Math.floor(Number(word.learning?.srsStage) || 0);
+  if (stage < KNOWN_SYNONYM_MIN_STAGE) return false;
+  const history = Array.isArray(word.history) ? word.history.slice(-3) : [];
+  if (history.length === 0) return false;
+  // 直近3回のうち1回でも間違えているなら、説明に使うにはまだ危うい。
+  return history.every((h) => h?.correct === true);
+}
+
+// 手元の単語から「習得済みの見出し語」の集合を作る。
+function knownTermSet(words = appState.words) {
+  const set = new Set();
+  for (const word of words || []) {
+    if (isKnownEnoughToExplain(word)) set.add(normalizeTerm(word.term));
+  }
+  return set;
+}
+
+// 類義語のうち、習得済みのものだけを返す。無ければ空配列＝日本語のみの表示に戻る。
+function knownSynonyms(items, known) {
+  if (!Array.isArray(items) || !known || known.size === 0) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const term = normalizeTerm(String(item?.word || ""));
+    if (!term || seen.has(term) || !known.has(term)) continue;
+    seen.add(term);
+    out.push(item);
+  }
+  return out;
+}
+
 // 類義語チップ用: 「word（和訳）」の（和訳）部分だけを返す。未取得時は何も出さない。
 function jaSuffix(ja) {
   if (typeof ja === "string" && ja) {
@@ -30388,7 +30873,7 @@ function enrichBody(type, data, term) {
 
   if (type === "synonyms") {
     const norm = normalizeSynonymsData(data);
-    return `<ul class="enrich-list syn-list">${norm.items
+    const list = `<ul class="enrich-list syn-list">${norm.items
       .map(
         (item) =>
           `<li><strong>${escapeHtml(item.word)}</strong>${jaSuffix(item.ja)}${
@@ -30396,6 +30881,25 @@ function enrichBody(type, data, term) {
           }</li>`,
       )
       .join("")}</ul>`;
+    // 習得済みの類義語があれば、それを先頭に「知っている英語で言うと」として出す。
+    // 日本語の意味は必ず併記する（英語だけにすると確かめる手段が無くなる）。
+    const known = knownSynonyms(norm.items, knownTermSet());
+    if (known.length === 0) return list;
+    const chips = known
+      .slice(0, 4)
+      .map(
+        (item) =>
+          `<span class="known-syn"><strong>${escapeHtml(item.word)}</strong>` +
+          `${item.ja ? `<small>${escapeHtml(item.ja)}</small>` : ""}</span>`,
+      )
+      .join("");
+    return (
+      `<div class="known-syn-box">` +
+      `<p class="known-syn-title">知っている英語で言うと</p>` +
+      `<div class="known-syn-chips">${chips}</div>` +
+      `</div>` +
+      list
+    );
   }
 
   return enrichEmpty("情報が見つかりませんでした。");
@@ -31523,11 +32027,33 @@ elements.streakBadge?.addEventListener("click", () => {
 elements.streakPanelClose?.addEventListener("click", closeStreakPanel);
 // 成績カードの復習導線（カードは再描画で作り直されるため委譲で受ける）。
 elements.statsGrid?.addEventListener("click", (event) => {
-  const button = event.target.closest?.("#statsWeakQuizButton, #statsTodayReviewButton");
+  const button = event.target.closest?.(
+    "#statsWeakQuizButton, #statsTodayReviewButton, #recoveryStartButton," +
+      " #recoveryResumeProbeButton, #recoveryTodayButton, #recoveryDismissButton",
+  );
   if (!button) return;
   closeStreakPanel();
   if (button.id === "statsTodayReviewButton") {
     startGeneralReview();
+    return;
+  }
+  if (button.id === "recoveryStartButton") {
+    startRecoveryProbe();
+    return;
+  }
+  if (button.id === "recoveryResumeProbeButton") {
+    resumeRecoveryProbe();
+    return;
+  }
+  if (button.id === "recoveryTodayButton") {
+    startRecoveryToday();
+    return;
+  }
+  if (button.id === "recoveryDismissButton") {
+    // 記録を消すだけ。単語の学習状態には触れない。
+    saveRecoveryState(null);
+    setStatus("通常の復習に戻しました。");
+    renderStats();
     return;
   }
   setActiveStep("quiz", { sound: false });
