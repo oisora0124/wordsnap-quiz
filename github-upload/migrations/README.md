@@ -2,10 +2,21 @@
 
 WordBank の Cloudflare D1 スキーマ。`wrangler.jsonc` の `migrations_dir` がここを指す。
 
-| ファイル | 内容 |
-|---|---|
-| 0001_initial.sql | 現行の `states` テーブル（既存本番にも安全に再適用可能） |
-| 0002_state_revisions.sql | 過去版復元用の履歴テーブル（追加型・影運用） |
+| ファイル | 内容 | 無いとどうなるか |
+|---|---|---|
+| 0001_initial.sql | `states`（既存本番にも安全に再適用可能） | 同期がまったく動かない |
+| 0002_state_revisions.sql | `state_revisions`（過去版復元用・追加型） | 過去状態からの復元ができない |
+| 0003_feedback.sql | `feedback`（要望フォームの保存先） | 要望が保存されない |
+| 0004_auth_v2.sql | `rooms`（同期V2。秘密をURLに載せない方式） | 新方式の同期が動かない |
+| 0005_rate_limits.sql | `rate_limits`（同期・フィードバック・テレメトリで共有） | 上限判定が例外になり、経路ごと落ちる |
+| 0006_telemetry.sql | `telemetry`（匿名の利用統計とエラー） | 障害の記録が残らない |
+
+**`schema.sql` を1枚適用するだけでは足りない。** あれは 0001 と同じ内容で、
+`states` しか作られない。新しいD1を作るときは、ここを番号順に全部適用する。
+
+`npm test` の `scripts/schema-drift.test.mjs` が、Functions の使うテーブル・列が
+この `migrations/` に揃っていることを検査する
+（[../docs/schema-drift.md](../docs/schema-drift.md)）。
 
 ## 適用手順
 

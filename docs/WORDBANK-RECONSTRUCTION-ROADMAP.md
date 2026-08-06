@@ -10,14 +10,14 @@
 | 領域 | 現状 | 再構成案との差分 |
 |---|---|---|
 | 配備 | Cloudflare Pages + Pages Functions + D1 | 維持する |
-| 保存 | localStorage + IndexedDB + JSON + D1 gzip同期 | 復元世代と認証V2は未実装 |
+| 保存 | localStorage + IndexedDB + JSON + D1 gzip同期 | **復元世代（`state_revisions`）と認証V2（`rooms`）は実装済み**（2026-08時点） |
 | 保持期限 | trash 30日・削除墓標90日をクライアント保存時に掃除 | 長期休眠D1行のサーバー側TTLは未実装 |
 | 競合 | `baseRev` / `stateRev` とD1 CAS | 維持する |
 | 学習 | 決定論的な段階式SRS、回答速度判定、復習期日 | FSRSそのものではなく、比較ログもない |
 | 語彙 | word / meaning / 品詞 / 推定CEFR / enrich | lemma / sense / provenance / JACET / WordNetはない |
 | 履歴 | 正誤と時刻を単語ごとに直近50件 | response time等は判断に使うが履歴へ保存しない |
 | 教材 | 辞書・Datamuse・任意AI、例文フォールバック | 出典・承認状態を統一スキーマで保持していない |
-| テスト | API契約、公開物、秘密情報、主要安全条件 | ブラウザE2Eと純粋関数の単体テストが不足 |
+| テスト | API契約、公開物、秘密情報、主要安全条件、純粋関数の実行テスト、アクセシビリティ、Service Worker、CSPハッシュ、D1スキーマ齟齬、計算量（568件） | **ブラウザE2Eと実D1結合が残る**（2026-08-07時点） |
 | 実装 | 約1.6万行の単一HTML | 段階抽出が必要 |
 
 ## 導入順序

@@ -262,16 +262,38 @@ test("一覧の絞り込み・並び替えは語数に対して線形（画面�
       word.cefr = { level: ["A1", "A2", "B1", "B2", "C1", "C2"][i % 6], estimated: false };
     });
   }
-  lib.context.wordSortMode = "accuracy"; // 並び替えが実際に走る設定
-  lib.context.wordSearchQuery = "term1";
-  assertLinearish(
-    "visibleSavedWords",
-    (n) => {
-      lib.context.appState.words = words.get(n);
-      lib.visibleSavedWords();
-    },
-    20, // 1回が0.1msほどなので、まとめて測る
-  );
+  // 絞り込みの分岐は**全部通す**。既定値（単語帳=all・お気に入りOFF・CEFR=all）の
+  // ままだと `scopedWords` の絞り込み、お気に入り、`cefrMatches` が
+  // 一度も走らず、「測ったつもりで通っていない」状態になる。
+  lib.context.appState.decks = Array.from({ length: DECK_COUNT }, (_, i) => ({
+    id: `deck${i}`,
+    name: `単語帳${i}`,
+    updatedAt: 0,
+  }));
+
+  // 絞り込みが強い条件ほど1回が速くなるので、まとめて測る回数を増やす。
+  for (const [label, repeat, setup] of [
+    ["全件・並び替えのみ", 20, { activeDeckId: "all", favoritesOnly: false, libraryCefrLevel: "all", wordSearchQuery: "", wordSortMode: "accuracy" }],
+    ["単語帳で絞る", 20, { activeDeckId: "deck2", favoritesOnly: false, libraryCefrLevel: "all", wordSearchQuery: "", wordSortMode: "accuracy" }],
+    ["お気に入り＋CEFR＋検索", 200, { activeDeckId: "all", favoritesOnly: true, libraryCefrLevel: "B1", wordSearchQuery: "term1", wordSortMode: "wrong" }],
+  ]) {
+    Object.assign(lib.context, setup);
+    lib.context.appState.activeDeckId = setup.activeDeckId;
+    assertLinearish(
+      `visibleSavedWords（${label}）`,
+      (n) => {
+        lib.context.appState.words = words.get(n);
+        lib.visibleSavedWords();
+      },
+      repeat,
+    );
+  }
+
+  // 後続のテストへ状態を持ち越さない。
+  Object.assign(lib.context, {
+    favoritesOnly: false, libraryCefrLevel: "all", wordSearchQuery: "", wordSortMode: "added",
+  });
+  lib.context.appState.activeDeckId = "all";
 });
 
 test("一覧の絞り込みは、条件どおりの結果を返す（速度だけを見ない）", () => {
