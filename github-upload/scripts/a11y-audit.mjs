@@ -52,6 +52,51 @@ const VALID_ROLES = new Set([
 // ラベルを必要としない input の type。
 const UNLABELED_INPUT_TYPES = new Set(["hidden", "submit", "reset", "button", "image"]);
 
+/**
+ * script / style の中身の範囲を返す。中身はHTMLではないので、
+ * コメント除去の対象から外す（JSの文字列に "<!--" が現れても壊さないため）。
+ */
+function rawTextRegions(html) {
+  const lower = html.toLowerCase();
+  const open = /<(script|style)\b[^>]*>/gi;
+  const regions = [];
+  let m;
+  while ((m = open.exec(html))) {
+    const bodyStart = m.index + m[0].length;
+    const close = lower.indexOf(`</${m[1].toLowerCase()}`, bodyStart);
+    const bodyEnd = close < 0 ? html.length : close;
+    regions.push([bodyStart, bodyEnd]);
+    open.lastIndex = bodyEnd;
+  }
+  return regions;
+}
+
+/**
+ * HTMLコメントの中身を空白へ潰す。改行は残すので行番号はずれない。
+ * これが無いと、コメントアウトしたマークアップを実要素として拾ってしまい、
+ * 「消したはずの要素で検査が落ちる」という誤検出になる。
+ */
+function maskComments(html) {
+  const regions = rawTextRegions(html);
+  const inRawText = (index) => regions.some(([s, e]) => index >= s && index < e);
+  // split("") はUTF-16単位で切る。[...html] だと絵文字が1要素に潰れて
+  // indexOf が返す位置とずれるので、ここでスプレッドを使ってはいけない。
+  const chars = html.split("");
+  let cursor = 0;
+  for (;;) {
+    const start = html.indexOf("<!--", cursor);
+    if (start < 0) break;
+    if (inRawText(start)) { cursor = start + 4; continue; }
+    const close = html.indexOf("-->", start + 4);
+    const end = close < 0 ? html.length : close + 3;
+    for (let i = start; i < end; i += 1) {
+      if (chars[i] !== "\n") chars[i] = " ";
+    }
+    cursor = end;
+  }
+  return chars.join("");
+}
+
 /** 属性文字列を { name: value } へ。値なし属性は空文字。 */
 function parseAttrs(raw) {
   const attrs = {};
@@ -136,7 +181,8 @@ function textOf(html, el) {
 }
 
 function run() {
-  const html = fs.readFileSync(TARGET, "utf8");
+  // コメントを潰した上で走査する。位置は元のまま（行番号もずれない）。
+  const html = maskComments(fs.readFileSync(TARGET, "utf8"));
   const elements = parse(html);
   const findings = [];
   const add = (rule, el, detail) =>
