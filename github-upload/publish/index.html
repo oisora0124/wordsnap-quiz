@@ -2586,9 +2586,15 @@ textarea:focus-visible {
   background: var(--surface);
 }
 
-.sync-v2-panel h4,
+.sync-v2-panel h3,
 .sync-v2-panel p {
   margin: 0;
+}
+
+/* 設定は h2 なので、この中の見出しは h3 が正しい（h4 だと段飛ばしになり、
+   読み上げの見出し一覧が崩れる）。文字の大きさは h4 のときのまま保つ。 */
+.sync-v2-panel h3 {
+  font-size: 1em;
 }
 
 .sync-v2-actions {
@@ -6142,7 +6148,7 @@ accurate 正確な"
               <details id="syncV2Section" class="sync-fix">
                 <summary>新方式（V2）の同期と引き継ぎ</summary>
                 <div class="sync-fix-body sync-v2-panel">
-                  <h4 data-sync-identity-ui="legacy">秘密をURLに載せない新しい同期方式</h4>
+                  <h3 data-sync-identity-ui="legacy">秘密をURLに載せない新しい同期方式</h3>
                   <p data-sync-identity-ui="legacy">
                     現在の個人キーのデータを新方式へ移行するか、新しい保存先を新方式で発行できます。
                     既定の同期方式はこれまでどおりです。
@@ -6156,7 +6162,7 @@ accurate 正確な"
                     <button id="syncV2CreateButton" class="ghost" type="button">新方式（V2）で発行</button>
                   </div>
                   <div data-sync-identity-ui="v2-native" hidden>
-                    <h4>引き継ぎコードで他の端末と合流</h4>
+                    <h3>引き継ぎコードで他の端末と合流</h3>
                     <p>この端末は、秘密をURLに載せないV2方式で同期しています。下のコードを安全に保管し、別の端末で同じデータへ合流するときに使ってください。</p>
                   </div>
                   <div id="syncV2CredentialPanel" class="sync-v2-code-panel" hidden>
@@ -6562,7 +6568,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.71</span>
+        <span class="app-footer-version">バージョン 1.0.72</span>
       </footer>
     </main>
 
@@ -6696,8 +6702,8 @@ const WordBankTelemetry = (() => {
   const ERROR_STATE_KEY = "wordsnap-telemetry-errors:v1";
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
-  // 利用者が「バージョン 1.0.71」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.71";
+  // 利用者が「バージョン 1.0.72」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
+  const APP_REV = "1.0.72";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -17984,6 +17990,38 @@ function renderTutorialStep() {
   }
 }
 
+// ---- モーダルのフォーカス閉じ込め ----
+// aria-modal="true" は「読み上げ上」背景を隠すが、Tabキーの移動までは止めない。
+// トラップが無いと、Tabで背景の要素へフォーカスが抜けたとき、
+// フォーカスはそこにあるのに読み上げは無音、という最悪の状態になる。
+// 対象をその都度DOMから引くので、ダイアログにボタンを足しても自動で追従する。
+const DIALOG_FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
+  ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function dialogFocusables(dialog) {
+  if (!dialog?.querySelectorAll) return [];
+  return Array.from(dialog.querySelectorAll(DIALOG_FOCUSABLE_SELECTOR)).filter(
+    // hidden な入れ子（例: 同期方式で出し分けているブロック）は順路から外す。
+    (el) => !el.hidden && !el.closest?.("[hidden]"),
+  );
+}
+
+function trapDialogTab(dialog, event) {
+  if (event.key !== "Tab") return;
+  const focusable = dialogFocusables(dialog);
+  if (focusable.length === 0) return;
+  const index = focusable.indexOf(document.activeElement);
+  // index === -1（ダイアログ外にフォーカスがある）は端とみなして引き戻す。
+  if (event.shiftKey && index <= 0) {
+    focusable[focusable.length - 1].focus();
+    event.preventDefault();
+  } else if (!event.shiftKey && index === focusable.length - 1) {
+    focusable[0].focus();
+    event.preventDefault();
+  }
+}
+
 function showTutorial() {
   if (!elements.tutorialBackdrop) return;
   tutorialReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -18079,7 +18117,11 @@ elements.v2AnnounceBackdrop?.addEventListener("click", (event) => {
   if (event.target === elements.v2AnnounceBackdrop) dismissV2Announce();
 });
 elements.v2AnnounceDialog?.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") dismissV2Announce();
+  if (event.key === "Escape") {
+    dismissV2Announce();
+    return;
+  }
+  trapDialogTab(elements.v2AnnounceDialog, event);
 });
 
 function maybeShowInitialTutorial() {
@@ -18118,16 +18160,7 @@ elements.tutorialDialog?.addEventListener("keydown", (event) => {
     completeTutorial();
     return;
   }
-  if (event.key !== "Tab") return;
-  const focusable = [elements.tutorialSkipButton, elements.tutorialNextButton].filter(Boolean);
-  const index = focusable.indexOf(document.activeElement);
-  if (event.shiftKey && index <= 0) {
-    focusable.at(-1)?.focus();
-    event.preventDefault();
-  } else if (!event.shiftKey && index === focusable.length - 1) {
-    focusable[0]?.focus();
-    event.preventDefault();
-  }
+  trapDialogTab(elements.tutorialDialog, event);
 });
 
 // 画面上部の「キーなしで安全に共有」の帯は、設定タブを開いているときだけ出す。
