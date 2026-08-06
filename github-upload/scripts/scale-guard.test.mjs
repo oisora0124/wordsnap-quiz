@@ -75,6 +75,36 @@ function makeRuntime() {
 
 const rt = makeRuntime();
 
+/**
+ * 「保存した単語」画面の絞り込み・並び替えを動かすための別ランタイム。
+ * こちらは画面の状態（単語帳・お気に入り・CEFR・検索語・並び順）を
+ * 外から書き換えたいので、コンテキストのプロパティとして持たせる。
+ * DOM は使わない部分だけを対象にしている（描画そのものは node では測れない）。
+ */
+function makeLibraryRuntime() {
+  const context = {
+    appState: { words: [], decks: [], activeDeckId: "all" },
+    wordSortMode: "accuracy",
+    favoritesOnly: false,
+    libraryCefrLevel: "all",
+    wordSearchQuery: "",
+    // cefrMatches は保存済みの値が無いとき window.Cefr を見る。
+    window: { Cefr: { peek: () => null } },
+  };
+  vm.runInNewContext(
+    [
+      "scopedWords", "wordMatchesQuery", "cefrMatches", "wordAccuracy",
+      "sortWordsForList", "visibleSavedWords",
+    ].map(extractFunction).join("\n\n") +
+      "\nglobalThis.__lib = { visibleSavedWords };",
+    context,
+    { filename: "library-runtime.js" },
+  );
+  return { context, visibleSavedWords: context.__lib.visibleSavedWords };
+}
+
+const lib = makeLibraryRuntime();
+
 const BASE_MS = 1700000000000;
 const DECK_COUNT = 6; // 内蔵の単語帳と同じ数
 
@@ -177,14 +207,16 @@ function fastest(runs, fn) {
  *   二次を注入: 57.8µs/語 → 158.6µs/語（2.74倍）
  * 閾値 1.5 なら、両方から十分に離れている。
  */
-function assertLinearish(label, run) {
-  const perWord = (n) => fastest(2, () => run(n)) / n;
+function assertLinearish(label, run, repeat = 1) {
+  // 1回が速すぎると測定の分解能に埋もれて比が意味を持たない。
+  // repeat 回まとめて測れば、両方の規模に同じ倍率がかかるので比は変わらない。
+  const perWord = (n) => fastest(2, () => { for (let i = 0; i < repeat; i += 1) run(n); }) / (n * repeat);
   const small = perWord(SMALL);
   const large = perWord(LARGE);
   const detail = `${SMALL}語=${(small * 1000).toFixed(1)}µs/語, ${LARGE}語=${(large * 1000).toFixed(1)}µs/語`;
 
   // 速すぎると分解能の問題で比が意味を持たない。
-  assert.ok(small * SMALL > 1, `${label}: 基準が速すぎて比較できない（${detail}）`);
+  assert.ok(small * SMALL * repeat > 1, `${label}: 基準が速すぎて比較できない（${detail}）`);
   assert.ok(
     large / small < 1.5,
     `${label}: 1語あたりの時間が ${(large / small).toFixed(2)}倍に増えている。` +
@@ -213,6 +245,70 @@ test("mergeAppStates は語数に対して線形（同期のたびに両側の�
 test("stateSignature は語数に対して線形（差分判定のたびに全語を通る）", () => {
   const states = new Map([SMALL, LARGE].map((n) => [n, rt.normalizeState(makeState(n, 0))]));
   assertLinearish("stateSignature", (n) => rt.stateSignature(states.get(n)));
+});
+
+test("一覧の絞り込み・並び替えは語数に対して線形（画面を開くたびに全語を通る）", () => {
+  // 「保存した単語」は表示するDOMの数を絞っているが、
+  // どれを表示するかを決める絞り込みと並び替え自体は毎回**全語**を走査する。
+  // 実測では16000語でも約2msと軽いが、ここに全語×全語の処理が紛れ込むと
+  // 画面を開くたびに固まるようになる。
+  const words = new Map(
+    [SMALL, LARGE].map((n) => [n, rt.normalizeState(makeState(n, 0)).words]),
+  );
+  // お気に入りとCEFRを散らして、絞り込みの分岐を実際に通す。
+  for (const list of words.values()) {
+    list.forEach((word, i) => {
+      word.favorite = i % 7 === 0;
+      word.cefr = { level: ["A1", "A2", "B1", "B2", "C1", "C2"][i % 6], estimated: false };
+    });
+  }
+  lib.context.wordSortMode = "accuracy"; // 並び替えが実際に走る設定
+  lib.context.wordSearchQuery = "term1";
+  assertLinearish(
+    "visibleSavedWords",
+    (n) => {
+      lib.context.appState.words = words.get(n);
+      lib.visibleSavedWords();
+    },
+    20, // 1回が0.1msほどなので、まとめて測る
+  );
+});
+
+test("一覧の絞り込みは、条件どおりの結果を返す（速度だけを見ない）", () => {
+  const list = rt.normalizeState(makeState(600, 0)).words;
+  list.forEach((word, i) => {
+    word.favorite = i % 7 === 0;
+    word.cefr = { level: ["A1", "A2", "B1", "B2", "C1", "C2"][i % 6], estimated: false };
+  });
+  lib.context.appState.words = list;
+  lib.context.wordSortMode = "added";
+
+  lib.context.favoritesOnly = false;
+  lib.context.libraryCefrLevel = "all";
+  lib.context.wordSearchQuery = "";
+  assert.equal(lib.visibleSavedWords().length, 600, "条件なしで全件返っていない");
+
+  lib.context.favoritesOnly = true;
+  const favorites = lib.visibleSavedWords();
+  assert.equal(favorites.length, Math.ceil(600 / 7), "お気に入りの絞り込みが効いていない");
+  assert.ok(favorites.every((w) => w.favorite), "お気に入り以外が混ざっている");
+
+  lib.context.favoritesOnly = false;
+  lib.context.libraryCefrLevel = "B1";
+  const b1 = lib.visibleSavedWords();
+  assert.equal(b1.length, 100, "CEFRの絞り込みが効いていない");
+  assert.ok(b1.every((w) => w.cefr.level === "B1"), "他のレベルが混ざっている");
+
+  lib.context.libraryCefrLevel = "all";
+  lib.context.wordSearchQuery = "term42";
+  const searched = lib.visibleSavedWords();
+  assert.ok(searched.length > 0 && searched.every((w) => w.term.includes("term42")),
+    "検索の絞り込みが効いていない");
+
+  // 後続のテストへ状態を持ち越さない。
+  lib.context.wordSearchQuery = "";
+  lib.context.libraryCefrLevel = "all";
+  lib.context.favoritesOnly = false;
 });
 
 test("マージ結果は語数によらず正しい（速度だけを見て中身を見落とさない）", () => {
