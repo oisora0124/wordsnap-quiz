@@ -6562,7 +6562,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.69</span>
+        <span class="app-footer-version">バージョン 1.0.70</span>
       </footer>
     </main>
 
@@ -6696,8 +6696,8 @@ const WordBankTelemetry = (() => {
   const ERROR_STATE_KEY = "wordsnap-telemetry-errors:v1";
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
-  // 利用者が「バージョン 1.0.69」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.69";
+  // 利用者が「バージョン 1.0.70」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
+  const APP_REV = "1.0.70";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7589,6 +7589,27 @@ function saveConfidenceStore(store) {
   } catch {
     // 保存できなくても学習そのものは止めない。確信度は補助データ。
   }
+}
+
+// 端末内サイドカーの掃除。失効した申告と、もう存在しない単語の記録を捨てる。
+// 呼ばないと、数字が減らないまま上限（300件）を古い申告で埋めてしまう。
+function pruneConfidenceStore() {
+  const store = loadConfidenceStore();
+  const now = Date.now();
+  const ids = new Set(appState.words.map((w) => w.id));
+  let changed = false;
+  for (const [id, at] of Object.entries(store.pending || {})) {
+    if (now - Number(at || 0) > CONFIDENCE_PENDING_TTL_MS || !ids.has(id)) {
+      delete store.pending[id];
+      changed = true;
+    }
+  }
+  const kept = (store.overconfident || []).filter((id) => ids.has(id));
+  if (kept.length !== (store.overconfident || []).length) {
+    store.overconfident = kept;
+    changed = true;
+  }
+  if (changed) saveConfidenceStore(store);
 }
 
 function recordConfidenceTally(level) {
@@ -17699,12 +17720,13 @@ function initReviewLogSettings() {
       } catch {
         // 保存できなくても、この起動中の指定は活かす。
       }
-      // 進行中のフラッシュカードにも即座に反映する（描画分岐が変わるため）。
-      if (flashcardSession) renderQuiz();
+      // 進行中のセッションには反映しない（途中で流れが変わると取りこぼす）。
+      const inSession = Boolean(flashcardSession);
       setStatus(
-        elements.flashcardConfidenceToggle.checked
+        (elements.flashcardConfidenceToggle.checked
           ? "フラッシュカードで自信を聞くようにしました。意味を見る前に選んでください。"
-          : "フラッシュカードを元の操作（裏返してから仕分け）に戻しました。",
+          : "フラッシュカードを元の操作（裏返してから仕分け）に戻しました。") +
+          (inSession ? "（今のフラッシュカードは、次に始めるときから変わります）" : ""),
       );
     });
   }
@@ -26280,6 +26302,10 @@ function startFlashcardsFromIds(ids, options = {}) {
     knownIds: [],
     midIds: [], // 「あやふや」。完了画面で「知ってる」に混ぜないよう別に数える
     unknownIds: [],
+    // このセッションを始めた時点のモードを固定する。途中で設定を切り替えると、
+    // 申告済みなのに「次へ」が消える／未採点なのに「次へ」が出る、といった
+    // 進行不能や取りこぼしが起きるため、進行中のセッションには反映しない。
+    confidenceMode: flashcardConfidenceEnabled(),
     shuffled: options.shuffle !== false,
   };
   flashcardRevealed = false;
@@ -26358,6 +26384,10 @@ function renderFlashcard() {
       `フラッシュカード ${flashcardSession.index + 1} / ${flashcardSession.order.length}`;
   }
   elements.choices.replaceChildren();
+  // 確信度モード: 意味を見る前に申告 → 申告すると意味が出る → 次へ
+  // 通常モード:   裏返す → 意味を見て仕分ける（従来どおり）
+  // 参照より前で宣言すること（const のTDZに触れるとフラッシュカードが起動時に落ちる）。
+  const confMode = flashcardSessionConfidenceMode();
   if (elements.flashcardTerm) elements.flashcardTerm.textContent = currentQuiz.answer.term;
   if (elements.flashcardMeaning) {
     elements.flashcardMeaning.textContent = currentQuiz.answer.meaning;
@@ -26372,9 +26402,6 @@ function renderFlashcard() {
         ? "← 知らない / 知ってる →（矢印キーまたはスワイプ）"
         : "タップまたはスペースキーで意味を表示";
   }
-  const confMode = flashcardConfidenceEnabled();
-  // 確信度モード: 意味を見る前に申告 → 申告すると意味が出る → 次へ
-  // 通常モード:   裏返す → 意味を見て仕分ける（従来どおり）
   if (elements.flashcardActions) {
     elements.flashcardActions.hidden = confMode || !flashcardRevealed;
   }
@@ -26412,7 +26439,7 @@ function renderFlashcard() {
 
 function flipFlashcard() {
   // 確信度モードでは、先に自信を申告してもらう（裏返すと申告が「答えを見た後」になる）。
-  if (flashcardConfidenceEnabled()) return;
+  if (flashcardSessionConfidenceMode()) return;
   if (!flashcardSession || !currentQuiz || currentQuiz.answered || flashcardRevealed) return;
   flashcardRevealed = true;
   renderFlashcard();
@@ -26421,6 +26448,12 @@ function flipFlashcard() {
 
 // この回の自己申告（low/mid/high）。確信度モードのときだけ入る。
 let flashcardConfidence = null;
+
+// 進行中のセッションのモード。セッション開始時に固定した値を使う。
+// 設定そのものを見ると、途中で切り替えたときに画面と採点が食い違う。
+function flashcardSessionConfidenceMode() {
+  return flashcardSession ? Boolean(flashcardSession.confidenceMode) : flashcardConfidenceEnabled();
+}
 
 function flashcardConfidenceLabel(level) {
   return level === "high" ? "確実" : level === "mid" ? "あやふや" : "知らない";
@@ -26443,7 +26476,7 @@ function gradeFlashcard(isKnown) {
 // 採点したあとカードを裏返して意味を見せ、「次へ」を待つ（学習の要は意味の確認なので省かない）。
 function gradeFlashcardConfidence(level) {
   if (!flashcardSession || !currentQuiz || currentQuiz.answered || flashcardRevealed) return;
-  if (!flashcardConfidenceEnabled()) return;
+  if (!flashcardSessionConfidenceMode()) return;
   if (level !== "low" && level !== "mid" && level !== "high") return;
   const wordId = currentQuiz.answer.id;
   const isCorrect = level !== "low";
@@ -26464,6 +26497,9 @@ function gradeFlashcardConfidence(level) {
 
 function advanceFlashcard() {
   if (!flashcardSession) return;
+  // 採点前のカードを飛ばさない。設定を途中で切り替えると、通常モードで裏返しただけの
+  // 未採点カードに「次へ」が出てしまい、無採点のまま進められてしまう。
+  if (currentQuiz && !currentQuiz.answered) return;
   flashcardSession.index += 1;
   currentQuiz = null;
   flashcardRevealed = false;
@@ -26498,6 +26534,7 @@ function finishFlashcardSession() {
     label: "フラッシュカード",
     total: session.order.length,
     missedCount: session.unknownIds.length,
+    midCount, // 「あやふや」。結果画面で「知ってる」に混ぜないため保持する
     missedWords: unknownWords,
     allIds: session.allIds.slice(),
     flashcard: true,
@@ -26651,7 +26688,8 @@ function renderReviewResult() {
   if (!result) return;
   const label = document.querySelector("#quizCard .quiz-label");
   if (label) label.textContent = "セッション結果";
-  const correct = Math.max(0, result.total - result.missedCount);
+  // 「あやふや」は正解として数えるが、「知ってる」として誇らない。
+  const correct = Math.max(0, result.total - result.missedCount - (Number(result.midCount) || 0));
   elements.quizWord.textContent = result.missedCount === 0 ? "全問クリア！" : "クイズ完了！";
   elements.quizFeedback.textContent = "";
 
@@ -29548,13 +29586,23 @@ const CONFIDENCE_MIN_SAMPLES = 10;
 
 function statsConfidenceCard() {
   if (!flashcardConfidenceEnabled()) return "";
+  // 描くたびに掃除する。専用の呼び出し口を各所に足すより取りこぼしが少ない。
+  pruneConfidenceStore();
   const store = loadConfidenceStore();
   const declared = Math.max(0, Math.floor(Number(store.tally?.high) || 0));
   if (declared === 0) return "";
   const ok = Math.max(0, Math.floor(Number(store.verified?.correct) || 0));
   const ng = Math.max(0, Math.floor(Number(store.verified?.wrong) || 0));
   const checked = ok + ng;
-  const pending = Object.keys(store.pending || {}).length;
+  // 未検証の件数は「今もこの端末に存在し、まだ失効していない」申告だけを数える。
+  // 削除した単語や、90日を過ぎて数えないことが決まっている申告を残すと、
+  // いつまでも減らない数字を見せることになる。
+  const now = Date.now();
+  const pending = Object.entries(store.pending || {}).filter(
+    ([id, at]) =>
+      now - Number(at || 0) <= CONFIDENCE_PENDING_TTL_MS &&
+      appState.words.some((w) => w.id === id),
+  ).length;
   const overconfident = (store.overconfident || []).filter((id) =>
     appState.words.some((w) => w.id === id),
   );
@@ -29575,7 +29623,7 @@ function statsConfidenceCard() {
     `<div>` +
     headline +
     `<div class="stats-review-breakdown">` +
-    `<span>確かめた <strong>${escapeHtml(checked)}語</strong></span>` +
+    `<span>確かめた <strong>${escapeHtml(checked)}回</strong></span>` +
     `<span>まだ確かめていない <strong>${escapeHtml(pending)}語</strong></span>` +
     `</div>` +
     `</div>` +
@@ -29583,7 +29631,7 @@ function statsConfidenceCard() {
     `</div>` +
     (checked < CONFIDENCE_MIN_SAMPLES
       ? `<p class="stats-recovery-note">意味4択で${escapeHtml(CONFIDENCE_MIN_SAMPLES)}語ぶん確かめると割合を出します。</p>`
-      : `<p class="stats-recovery-note">「確実」と答えた${escapeHtml(declared)}語のうち、意味4択に出た${escapeHtml(checked)}語での正答率です。まだ出ていない語は含みません。</p>`) +
+      : `<p class="stats-recovery-note">「確実」と答えた${escapeHtml(declared)}回のうち、意味4択で確かめられた${escapeHtml(checked)}回ぶんの正答率です。まだ出ていない単語は含みません。</p>`) +
     `</div>`
   );
 }
@@ -32250,6 +32298,21 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (flashcardSession && flashcardSessionConfidenceMode()) {
+    // 確信度モード: 申告前は 1/2/3、申告後はスペースか→で次へ。
+    // 画面の案内文と実際の操作を一致させる（案内だけ変えて手が動かないのは不具合）。
+    if (!flashcardRevealed && (event.key === "1" || event.key === "2" || event.key === "3")) {
+      event.preventDefault();
+      gradeFlashcardConfidence(event.key === "1" ? "low" : event.key === "2" ? "mid" : "high");
+      return;
+    }
+    if (flashcardRevealed && (event.key === " " || event.code === "Space" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      advanceFlashcard();
+      return;
+    }
+    return; // 確信度モードでは従来のキー操作を通さない
+  }
   if (flashcardSession) {
     if (event.key === " " || event.code === "Space") {
       event.preventDefault();

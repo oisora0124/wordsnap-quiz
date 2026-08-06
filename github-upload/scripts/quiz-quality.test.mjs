@@ -1855,7 +1855,8 @@ test("確信度: 設定は既定オフで、オンのときだけUIが切り替�
   );
   const grade = html.slice(html.indexOf("function gradeFlashcardConfidence("));
   const body = grade.slice(0, grade.indexOf("\n}"));
-  assert.ok(body.includes("if (!flashcardConfidenceEnabled()) return;"), "オフなら動かない");
+  // 進行中のセッションはセッション開始時のモードで判断する（途中の設定変更で流れが変わらない）。
+  assert.ok(body.includes("if (!flashcardSessionConfidenceMode()) return;"), "オフなら動かない");
   assert.ok(
     body.includes("flashcardRevealed) return;"),
     "意味を見た後には申告できない（見る前の申告であることを守る）",
@@ -1863,7 +1864,7 @@ test("確信度: 設定は既定オフで、オンのときだけUIが切り替�
   // 裏返す操作は確信度モードでは無効（裏返せると申告が「答えを見た後」になる）
   const flip = html.slice(html.indexOf("function flipFlashcard()"));
   assert.ok(
-    flip.slice(0, 260).includes("if (flashcardConfidenceEnabled()) return;"),
+    flip.slice(0, 300).includes("if (flashcardSessionConfidenceMode()) return;"),
     "確信度モードでは裏返し操作を無効にする",
   );
 });
@@ -1899,4 +1900,210 @@ test("確信度: 完了画面で「あやふや」を「知ってる」に数え
     body.includes("session.unknownIds.length - midCount"),
     "あやふやを知ってるから差し引く",
   );
+});
+
+// --- フラッシュカード描画の実動作 --------------------------------------
+// ソース文字列の検査だけでは、宣言順（TDZ）や実行時の分岐は捕まらない。
+// 実際に renderFlashcard() を動かして、投げないこと・表示の出し分けを固定する。
+function buildFlashcardRenderSandbox({ confidenceOn, revealed }) {
+  const el = (id) => ({ id, hidden: false, textContent: "", dataset: {}, _attrs: {},
+    setAttribute(k, v) { this._attrs[k] = v; }, focus() {} });
+  const elements = {
+    flashcardStage: el("stage"),
+    flashcardTerm: el("term"),
+    flashcardMeaning: el("meaning"),
+    flashcardHint: el("hint"),
+    flashcardActions: el("actions"),
+    flashcardConfidenceActions: el("confActions"),
+    flashcardNextRow: el("nextRow"),
+    flashcardFlipButton: el("flip"),
+    flashcardSpeakButton: el("speak"),
+    flashcardKnownButton: el("known"),
+    choices: { replaceChildren() {} },
+    quizFeedback: el("feedback"),
+    quizProgress: el("progress"),
+  };
+  const store = new Map();
+  if (confidenceOn) store.set("wordsnap-flashcard-confidence:v1", "1");
+  const sandbox = {
+    __elements: elements,
+    __store: store,
+    console,
+  };
+  const pieces = [
+    "const elements = globalThis.__elements;",
+    "const localStorage = { getItem: (k) => globalThis.__store.get(k) ?? null," +
+      " setItem: (k, v) => globalThis.__store.set(k, v), removeItem: (k) => globalThis.__store.delete(k) };",
+    `const FLASHCARD_CONFIDENCE_KEY = ${JSON.stringify(html.match(/const FLASHCARD_CONFIDENCE_KEY = "([^"]+)"/)[1])};`,
+    extractFunction("flashcardConfidenceEnabled"),
+    "let flashcardConfidence = null;",
+    extractFunction("flashcardConfidenceLabel"),
+    `let flashcardRevealed = ${revealed ? "true" : "false"};`,
+    `let flashcardSession = { index: 0, order: ['a'], allIds: ['a'], confidenceMode: ${confidenceOn} };`,
+    extractFunction("flashcardSessionConfidenceMode"),
+    "let currentQuiz = { flashcard: true, answered: false, answer: { id: 'a', term: 'resilient', meaning: '回復力のある' } };",
+    "const autoSpeakCurrentQuiz = () => {};",
+    "const appState = { words: [{ id: 'a', term: 'resilient', meaning: '回復力のある' }] };",
+    "const document = { querySelector: () => null, getElementById: () => null };",
+    "const escapeHtml = (v) => String(v);",
+    extractFunction("renderFlashcard"),
+    "globalThis.__r = { renderFlashcard, elements };",
+  ];
+  new Script(pieces.join("\n\n"), { filename: "flashcard-render-check.js" }).runInNewContext(sandbox);
+  return sandbox.__r;
+}
+
+test("描画: 確信度オフでもオンでも renderFlashcard が例外を出さない", () => {
+  for (const confidenceOn of [false, true]) {
+    for (const revealed of [false, true]) {
+      const r = buildFlashcardRenderSandbox({ confidenceOn, revealed });
+      assert.doesNotThrow(
+        () => r.renderFlashcard(),
+        `confidenceOn=${confidenceOn} revealed=${revealed} で描画が落ちる`,
+      );
+    }
+  }
+});
+
+test("描画: 確信度オフのときは従来のボタンだけが出る", () => {
+  const back = buildFlashcardRenderSandbox({ confidenceOn: false, revealed: true });
+  back.renderFlashcard();
+  assert.equal(back.elements.flashcardActions.hidden, false, "従来の仕分けボタンが出る");
+  assert.equal(back.elements.flashcardConfidenceActions.hidden, true, "確信度ボタンは出ない");
+  assert.equal(back.elements.flashcardNextRow.hidden, true, "次へも出ない");
+
+  const front = buildFlashcardRenderSandbox({ confidenceOn: false, revealed: false });
+  front.renderFlashcard();
+  assert.equal(front.elements.flashcardActions.hidden, true, "裏返す前はボタンを出さない");
+});
+
+test("描画: 確信度オンのときは、意味を見る前に3択・見た後に次へ", () => {
+  const front = buildFlashcardRenderSandbox({ confidenceOn: true, revealed: false });
+  front.renderFlashcard();
+  assert.equal(front.elements.flashcardConfidenceActions.hidden, false, "申告の3択が出る");
+  assert.equal(front.elements.flashcardActions.hidden, true, "従来のボタンは出さない");
+  assert.equal(front.elements.flashcardNextRow.hidden, true, "次へはまだ出さない");
+  assert.equal(front.elements.flashcardMeaning.hidden, true, "意味はまだ見せない");
+
+  const back = buildFlashcardRenderSandbox({ confidenceOn: true, revealed: true });
+  back.renderFlashcard();
+  assert.equal(back.elements.flashcardConfidenceActions.hidden, true, "申告後は3択を消す");
+  assert.equal(back.elements.flashcardNextRow.hidden, false, "次へを出す");
+  assert.equal(back.elements.flashcardActions.hidden, true, "従来のボタンは出さない");
+  assert.equal(back.elements.flashcardMeaning.hidden, false, "意味を見せる");
+});
+
+// --- 確信度サイドカーの掃除 --------------------------------------------
+test("確信度: 失効した申告と、消えた単語の記録を捨てる", () => {
+  const store = new Map();
+  const sandbox = { __store: store, __words: [{ id: "alive" }] };
+  const pieces = [
+    "const localStorage = { getItem: (k) => globalThis.__store.get(k) ?? null," +
+      " setItem: (k, v) => globalThis.__store.set(k, String(v)), removeItem: (k) => globalThis.__store.delete(k) };",
+    "const appState = { words: globalThis.__words };",
+    `const CONFIDENCE_STORE_KEY = ${JSON.stringify(html.match(/const CONFIDENCE_STORE_KEY = "([^"]+)"/)[1])};`,
+    `const CONFIDENCE_MAX_PENDING = ${html.match(/const CONFIDENCE_MAX_PENDING = (\d+);/)[1]};`,
+    `const CONFIDENCE_PENDING_TTL_MS = ${html.match(/const CONFIDENCE_PENDING_TTL_MS = ([^;]+);/)[1]};`,
+    extractFunction("loadConfidenceStore"),
+    extractFunction("saveConfidenceStore"),
+    extractFunction("pruneConfidenceStore"),
+    "globalThis.__c = { loadConfidenceStore, saveConfidenceStore, pruneConfidenceStore };",
+  ];
+  new Script(pieces.join("\n\n"), { filename: "confidence-prune-check.js" }).runInNewContext(sandbox);
+  const c = sandbox.__c;
+
+  const now = Date.now();
+  c.saveConfidenceStore({
+    pending: {
+      alive: now,                       // 残る
+      stale: now - 200 * 86400000,      // 失効（90日超）
+      deleted: now,                     // 単語が無い
+    },
+    tally: { low: 0, mid: 0, high: 3 },
+    verified: { correct: 1, wrong: 1 },
+    overconfident: ["alive", "deleted"],
+  });
+  c.pruneConfidenceStore();
+  const after = c.loadConfidenceStore();
+  assert.deepEqual(Object.keys(after.pending).sort(), ["alive"], "生きている申告だけ残す");
+  assert.deepEqual([...after.overconfident], ["alive"], "消えた単語は解き直し対象から外す");
+  assert.equal(after.verified.correct, 1, "検証済みの集計は消さない");
+});
+
+test("確信度: 較正カードは掃除してから数える", () => {
+  const card = html.slice(html.indexOf("function statsConfidenceCard()"));
+  const body = card.slice(0, card.indexOf("\n}\n"));
+  assert.ok(body.includes("pruneConfidenceStore();"), "描くたびに掃除する");
+  assert.ok(
+    body.includes("appState.words.some((w) => w.id === id)"),
+    "未検証件数に、もう無い単語を数えない",
+  );
+});
+
+// --- 確信度: レビュー指摘の回帰固定（実動作） ---------------------------
+test("確信度: 結果画面で「あやふや」を「知ってる」に数えない", () => {
+  // renderReviewResult の計算部だけを取り出して確かめる。
+  const src = html.slice(html.indexOf("function renderReviewResult()"));
+  const line = src.split("\n").find((l) => l.includes("const correct = Math.max"));
+  assert.ok(line, "正解数の計算行が見つからない");
+  const calc = new Function(
+    "result",
+    `${line.trim()} return correct;`,
+  );
+  // 10語中: 知らない2、あやふや3 → 「知ってる」は5であるべき
+  assert.equal(calc({ total: 10, missedCount: 2, midCount: 3 }), 5, "あやふやを差し引く");
+  // midCount が無い旧データでも従来どおり動く
+  assert.equal(calc({ total: 10, missedCount: 2 }), 8, "旧データは従来の計算");
+});
+
+test("確信度: 未採点のカードは「次へ」で飛ばせない", () => {
+  const sandbox = { __calls: [] };
+  const pieces = [
+    "let flashcardSession = { index: 0, order: ['a', 'b'], allIds: ['a', 'b'] };",
+    "let currentQuiz = { answered: false };",
+    "let flashcardRevealed = true;",
+    "let flashcardConfidence = 'high';",
+    "const finishFlashcardSession = () => { globalThis.__calls.push('finish'); };",
+    "const renderQuiz = () => { globalThis.__calls.push('render'); };",
+    extractFunction("advanceFlashcard"),
+    "globalThis.__a = { advanceFlashcard, state: () => ({ index: flashcardSession.index })," +
+      " answer: () => { currentQuiz.answered = true; } };",
+  ];
+  new Script(pieces.join("\n\n"), { filename: "advance-check.js" }).runInNewContext(sandbox);
+  const a = sandbox.__a;
+
+  a.advanceFlashcard();
+  assert.equal(a.state().index, 0, "未採点なら進めない");
+  assert.equal(sandbox.__calls.length, 0, "描画も走らない");
+
+  a.answer();
+  a.advanceFlashcard();
+  assert.equal(a.state().index, 1, "採点済みなら進む");
+});
+
+test("確信度: 進行中のセッションは、途中の設定変更に影響されない", () => {
+  const build = (sessionMode, settingOn) => {
+    const store = new Map();
+    if (settingOn) store.set("wordsnap-flashcard-confidence:v1", "1");
+    const sandbox = { __store: store };
+    const pieces = [
+      "const localStorage = { getItem: (k) => globalThis.__store.get(k) ?? null," +
+        " setItem: () => {}, removeItem: () => {} };",
+      `const FLASHCARD_CONFIDENCE_KEY = ${JSON.stringify(html.match(/const FLASHCARD_CONFIDENCE_KEY = "([^"]+)"/)[1])};`,
+      extractFunction("flashcardConfidenceEnabled"),
+      sessionMode === null
+        ? "let flashcardSession = null;"
+        : `let flashcardSession = { confidenceMode: ${sessionMode} };`,
+      extractFunction("flashcardSessionConfidenceMode"),
+      "globalThis.__m = flashcardSessionConfidenceMode;",
+    ];
+    new Script(pieces.join("\n\n"), { filename: "mode-check.js" }).runInNewContext(sandbox);
+    return sandbox.__m;
+  };
+  // セッション中は開始時のモードを使う（設定を切り替えても変わらない）
+  assert.equal(build(true, false)(), true, "オンで始めたセッションは、設定を切ってもオンのまま");
+  assert.equal(build(false, true)(), false, "オフで始めたセッションは、設定を入れてもオフのまま");
+  // セッション外は現在の設定を見る（次に始めるときから反映される）
+  assert.equal(build(null, true)(), true);
+  assert.equal(build(null, false)(), false);
 });
