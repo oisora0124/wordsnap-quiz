@@ -4005,6 +4005,20 @@ textarea:focus-visible {
   padding: 0.45rem 0.68rem;
 }
 
+/* 確信度モードの3択と「次へ」 */
+.flashcard-actions.is-confidence button,
+.flashcard-actions.is-next button {
+  flex: 1;
+}
+.flashcard-actions button.is-mid {
+  background: color-mix(in srgb, var(--accent) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--ink);
+}
+.stats-card.is-confidence {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 /* 復帰カード。全件の数字より先に「まず20語」を見せるので最上段で目立たせる */
 .stats-card.is-recovery {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
@@ -5876,6 +5890,15 @@ accurate 正確な"
               <button id="flashcardUnknownButton" class="is-unknown" type="button">← 知らない</button>
               <button id="flashcardKnownButton" class="is-known" type="button">知ってる →</button>
             </div>
+            <!-- 確信度モード（設定でオン）。意味を見る前に申告してもらう。 -->
+            <div id="flashcardConfidenceActions" class="flashcard-actions is-confidence" hidden>
+              <button id="flashcardConfLowButton" class="is-unknown" type="button">知らない</button>
+              <button id="flashcardConfMidButton" class="is-mid" type="button">あやふや</button>
+              <button id="flashcardConfHighButton" class="is-known" type="button">確実</button>
+            </div>
+            <div id="flashcardNextRow" class="flashcard-actions is-next" hidden>
+              <button id="flashcardNextButton" class="is-known" type="button">次へ →</button>
+            </div>
           </div>
           <div id="quizTimer" class="quiz-timer" hidden role="timer" aria-atomic="true" aria-label="残り時間">
             <div id="quizTimerTrack" class="quiz-timer-track" role="progressbar" aria-label="残り時間（秒）" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0"><div id="quizTimerFill" class="quiz-timer-fill"></div></div>
@@ -6395,6 +6418,16 @@ accurate 正確な"
                 </label>
               </div>
               <label class="settings-check">
+                <input id="flashcardConfidenceToggle" type="checkbox" />
+                <span>フラッシュカードで自信の度合いを聞く（知らない／あやふや／確実）</span>
+              </label>
+              <p class="settings-desc">
+                意味を見る<strong>前</strong>に自信を選ぶ形に変わります。「確実」と答えた単語が
+                あとで意味の4択クイズに出たとき、本当に答えられたかを照らし合わせて
+                「知っているつもり」を見つけます。記録はこの端末の中だけで、外部には送りません。
+                オフのままなら、これまでどおり裏返してから仕分けます。
+              </p>
+              <label class="settings-check">
                 <input id="adaptiveSrsToggle" type="checkbox" />
                 <span>復習間隔を成績に合わせて自動調整する（個人適応SRS）</span>
               </label>
@@ -6529,7 +6562,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.68</span>
+        <span class="app-footer-version">バージョン 1.0.69</span>
       </footer>
     </main>
 
@@ -6663,8 +6696,8 @@ const WordBankTelemetry = (() => {
   const ERROR_STATE_KEY = "wordsnap-telemetry-errors:v1";
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
-  // 利用者が「バージョン 1.0.68」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.68";
+  // 利用者が「バージョン 1.0.69」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
+  const APP_REV = "1.0.69";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7514,6 +7547,99 @@ function adaptiveSrsMultiplier({ wordFactor, personalFactor, fastCorrect }) {
 // ---------- デイリーゴール（任意・端末内のみ） ----------
 // 「今日◯問」の目標。回答数は既存の word.history から当日分を数えるだけで、
 // 保存データ・同期には一切触れない（モチベーション系はすべて表示のみ）。
+// ---------- フラッシュカードの確信度（任意・既定オフ） ----------
+//
+// 「意味を思い出せた自信」を、意味を見る【前】に申告してもらう。
+// 意味を見たあとに聞くと、それは自己評価であってメタ認知ではない。
+// 高い確信で外した語（hypercorrection effect の対象）を拾うには、
+// 答えを見る前の申告でなければ意味がない。
+//
+// 既定オフ。オンにするとフラッシュカードの操作が変わる（裏返してから仕分ける →
+// 申告すると意味が出る）ので、これまでの操作感を保ちたい人はオフのままにできる。
+const FLASHCARD_CONFIDENCE_KEY = "wordsnap-flashcard-confidence:v1";
+// 確信度の記録はこの端末の中だけに置く。単語の状態・履歴・同期スキーマには一切触れない。
+// 同期させると、端末ごとに違う自己申告が共有のSRSを動かすことになり、
+// 2台で結果が食い違う。まずは端末内に閉じる。
+const CONFIDENCE_STORE_KEY = "wordsnap-confidence-store:v1";
+const CONFIDENCE_MAX_PENDING = 300; // 検証待ちの上限。超えたら古いものから捨てる
+const CONFIDENCE_PENDING_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90日で失効
+
+function loadConfidenceStore() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CONFIDENCE_STORE_KEY));
+    if (!raw || typeof raw !== "object") throw new Error("empty");
+    return {
+      // 「確実」と申告して、まだ意味4択で検証していない語
+      pending: raw.pending && typeof raw.pending === "object" ? raw.pending : {},
+      // 申告した回数（キャリブレーションの分母の一部）
+      tally: { low: 0, mid: 0, high: 0, ...(raw.tally || {}) },
+      // 検証の結果（「確実」と言った語が、後の意味4択でどうだったか）
+      verified: { correct: 0, wrong: 0, ...(raw.verified || {}) },
+      // 「確実」と言って外した語（優先して解き直す対象）
+      overconfident: Array.isArray(raw.overconfident) ? raw.overconfident.map(String) : [],
+    };
+  } catch {
+    return { pending: {}, tally: { low: 0, mid: 0, high: 0 }, verified: { correct: 0, wrong: 0 }, overconfident: [] };
+  }
+}
+
+function saveConfidenceStore(store) {
+  try {
+    localStorage.setItem(CONFIDENCE_STORE_KEY, JSON.stringify(store));
+  } catch {
+    // 保存できなくても学習そのものは止めない。確信度は補助データ。
+  }
+}
+
+function recordConfidenceTally(level) {
+  const store = loadConfidenceStore();
+  if (level in store.tally) store.tally[level] += 1;
+  saveConfidenceStore(store);
+}
+
+// 「確実」の申告を検証待ちとして控える。同じ語の古い申告は新しいもので置き換える
+// （最新の自己認識だけを検証したい）。
+function recordConfidenceDeclaration(wordId) {
+  const store = loadConfidenceStore();
+  store.pending[String(wordId)] = Date.now();
+  const entries = Object.entries(store.pending).sort((a, b) => b[1] - a[1]);
+  store.pending = Object.fromEntries(entries.slice(0, CONFIDENCE_MAX_PENDING));
+  saveConfidenceStore(store);
+}
+
+// 意味4択に答えたときだけ検証する。例文（context-choice）は形式が違うので混ぜない。
+// 1つの申告は1回だけ検証し、使ったら消す（同じ結果を二重に数えない）。
+function verifyConfidenceOnAnswer(wordId, isCorrect, promptMode) {
+  if (promptMode !== "meaning-choice") return;
+  const store = loadConfidenceStore();
+  const id = String(wordId);
+  const declaredAt = store.pending[id];
+  if (!declaredAt) return;
+  delete store.pending[id];
+  if (Date.now() - declaredAt > CONFIDENCE_PENDING_TTL_MS) {
+    saveConfidenceStore(store); // 古すぎる申告は消すだけで数えない
+    return;
+  }
+  if (isCorrect) {
+    store.verified.correct += 1;
+    store.overconfident = store.overconfident.filter((x) => x !== id);
+  } else {
+    store.verified.wrong += 1;
+    // 「確実」と言って外した語。解き直しの対象として控える。
+    if (!store.overconfident.includes(id)) store.overconfident.unshift(id);
+    store.overconfident = store.overconfident.slice(0, 100);
+  }
+  saveConfidenceStore(store);
+}
+
+function flashcardConfidenceEnabled() {
+  try {
+    return localStorage.getItem(FLASHCARD_CONFIDENCE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 const DAILY_GOAL_KEY = "wordsnap-daily-goal";
 const DAILY_GOAL_DONE_KEY = "wordsnap-daily-goal-done"; // 達成のお祝いを1日1回にする
 const DAILY_GOAL_CHOICES = [0, 10, 20, 30, 50];
@@ -16671,6 +16797,12 @@ const elements = {
   flashcardActions: document.querySelector("#flashcardActions"),
   flashcardSpeakButton: document.querySelector("#flashcardSpeakButton"),
   flashcardKnownButton: document.querySelector("#flashcardKnownButton"),
+  flashcardConfidenceActions: document.querySelector("#flashcardConfidenceActions"),
+  flashcardConfLowButton: document.querySelector("#flashcardConfLowButton"),
+  flashcardConfMidButton: document.querySelector("#flashcardConfMidButton"),
+  flashcardConfHighButton: document.querySelector("#flashcardConfHighButton"),
+  flashcardNextRow: document.querySelector("#flashcardNextRow"),
+  flashcardNextButton: document.querySelector("#flashcardNextButton"),
   flashcardUnknownButton: document.querySelector("#flashcardUnknownButton"),
   quizFeedback: document.querySelector("#quizFeedback"),
   quizNextHint: document.querySelector("#quizNextHint"),
@@ -16718,6 +16850,7 @@ const elements = {
   clearAllButton: document.querySelector("#clearAllButton"),
   clearAllStatus: document.querySelector("#clearAllStatus"),
   reviewLogToggle: document.querySelector("#reviewLogToggle"),
+  flashcardConfidenceToggle: document.querySelector("#flashcardConfidenceToggle"),
   prefetchAllToggle: document.querySelector("#prefetchAllToggle"),
   prefetchAllStatus: document.querySelector("#prefetchAllStatus"),
   reviewLogCount: document.querySelector("#reviewLogCount"),
@@ -17554,6 +17687,28 @@ function recordReviewEvent(details) {
 }
 
 function initReviewLogSettings() {
+  if (elements.flashcardConfidenceToggle) {
+    elements.flashcardConfidenceToggle.checked = flashcardConfidenceEnabled();
+    elements.flashcardConfidenceToggle.addEventListener("change", () => {
+      try {
+        if (elements.flashcardConfidenceToggle.checked) {
+          localStorage.setItem(FLASHCARD_CONFIDENCE_KEY, "1");
+        } else {
+          localStorage.removeItem(FLASHCARD_CONFIDENCE_KEY);
+        }
+      } catch {
+        // 保存できなくても、この起動中の指定は活かす。
+      }
+      // 進行中のフラッシュカードにも即座に反映する（描画分岐が変わるため）。
+      if (flashcardSession) renderQuiz();
+      setStatus(
+        elements.flashcardConfidenceToggle.checked
+          ? "フラッシュカードで自信を聞くようにしました。意味を見る前に選んでください。"
+          : "フラッシュカードを元の操作（裏返してから仕分け）に戻しました。",
+      );
+    });
+  }
+
   if (elements.prefetchAllToggle) {
     elements.prefetchAllToggle.checked = prefetchAllEnabled();
     updatePrefetchAllStatus();
@@ -26123,6 +26278,7 @@ function startFlashcardsFromIds(ids, options = {}) {
     allIds: validIds.slice(),
     index: 0,
     knownIds: [],
+    midIds: [], // 「あやふや」。完了画面で「知ってる」に混ぜないよう別に数える
     unknownIds: [],
     shuffled: options.shuffle !== false,
   };
@@ -26208,11 +26364,26 @@ function renderFlashcard() {
     elements.flashcardMeaning.hidden = !flashcardRevealed;
   }
   if (elements.flashcardHint) {
-    elements.flashcardHint.textContent = flashcardRevealed
-      ? "← 知らない / 知ってる →（矢印キーまたはスワイプ）"
-      : "タップまたはスペースキーで意味を表示";
+    elements.flashcardHint.textContent = confMode
+      ? flashcardRevealed
+        ? "意味を確認したら次へ（スペースキーまたは→）"
+        : "意味を思い出せた自信を選んでください（1=知らない 2=あやふや 3=確実）"
+      : flashcardRevealed
+        ? "← 知らない / 知ってる →（矢印キーまたはスワイプ）"
+        : "タップまたはスペースキーで意味を表示";
   }
-  if (elements.flashcardActions) elements.flashcardActions.hidden = !flashcardRevealed;
+  const confMode = flashcardConfidenceEnabled();
+  // 確信度モード: 意味を見る前に申告 → 申告すると意味が出る → 次へ
+  // 通常モード:   裏返す → 意味を見て仕分ける（従来どおり）
+  if (elements.flashcardActions) {
+    elements.flashcardActions.hidden = confMode || !flashcardRevealed;
+  }
+  if (elements.flashcardConfidenceActions) {
+    elements.flashcardConfidenceActions.hidden = !confMode || flashcardRevealed;
+  }
+  if (elements.flashcardNextRow) {
+    elements.flashcardNextRow.hidden = !confMode || !flashcardRevealed;
+  }
   if (elements.flashcardFlipButton) {
     elements.flashcardFlipButton.setAttribute("aria-expanded", String(flashcardRevealed));
     elements.flashcardFlipButton.setAttribute(
@@ -26229,17 +26400,30 @@ function renderFlashcard() {
       `${currentQuiz.answer.term} の発音を聞く`,
     );
   }
-  elements.quizFeedback.textContent = flashcardRevealed
-    ? "思い出せたかを仕分けすると、すぐ次のカードへ進みます。"
-    : "意味を思い出してからカードを裏返してください。";
+  elements.quizFeedback.textContent = confMode
+    ? flashcardRevealed
+      ? `${flashcardConfidenceLabel(flashcardConfidence)}と申告しました。意味を確認してください。`
+      : "意味を思い出してから、どれくらい自信があるかを選んでください。"
+    : flashcardRevealed
+      ? "思い出せたかを仕分けすると、すぐ次のカードへ進みます。"
+      : "意味を思い出してからカードを裏返してください。";
   autoSpeakCurrentQuiz();
 }
 
 function flipFlashcard() {
+  // 確信度モードでは、先に自信を申告してもらう（裏返すと申告が「答えを見た後」になる）。
+  if (flashcardConfidenceEnabled()) return;
   if (!flashcardSession || !currentQuiz || currentQuiz.answered || flashcardRevealed) return;
   flashcardRevealed = true;
   renderFlashcard();
   elements.flashcardKnownButton?.focus({ preventScroll: true });
+}
+
+// この回の自己申告（low/mid/high）。確信度モードのときだけ入る。
+let flashcardConfidence = null;
+
+function flashcardConfidenceLabel(level) {
+  return level === "high" ? "確実" : level === "mid" ? "あやふや" : "知らない";
 }
 
 function gradeFlashcard(isKnown) {
@@ -26252,9 +26436,38 @@ function gradeFlashcard(isKnown) {
   trackUsage("flashcard-answer");
   if (isKnown) flashcardSession.knownIds.push(wordId);
   else flashcardSession.unknownIds.push(wordId);
+  advanceFlashcard();
+}
+
+// 確信度モードの採点。意味を見る【前】に呼ばれる。
+// 採点したあとカードを裏返して意味を見せ、「次へ」を待つ（学習の要は意味の確認なので省かない）。
+function gradeFlashcardConfidence(level) {
+  if (!flashcardSession || !currentQuiz || currentQuiz.answered || flashcardRevealed) return;
+  if (!flashcardConfidenceEnabled()) return;
+  if (level !== "low" && level !== "mid" && level !== "high") return;
+  const wordId = currentQuiz.answer.id;
+  const isCorrect = level !== "low";
+  gradeQuiz(isCorrect ? wordId : "__flashcard_wrong__", false, { selfAssessment: level });
+  if (!currentQuiz?.answered) return;
+  trackUsage("flashcard-answer");
+  flashcardConfidence = level;
+  // 「確実」は後で意味4択に出たときに検証する。端末内にだけ控える。
+  if (level === "high") recordConfidenceDeclaration(wordId);
+  recordConfidenceTally(level);
+  if (level === "high") flashcardSession.knownIds.push(wordId);
+  else if (level === "mid") flashcardSession.midIds.push(wordId);
+  else flashcardSession.unknownIds.push(wordId);
+  // 採点済みだが、意味を見せるために画面はここで止める。
+  flashcardRevealed = true;
+  renderQuiz();
+}
+
+function advanceFlashcard() {
+  if (!flashcardSession) return;
   flashcardSession.index += 1;
   currentQuiz = null;
   flashcardRevealed = false;
+  flashcardConfidence = null;
   if (flashcardSession.index >= flashcardSession.order.length) {
     finishFlashcardSession();
     return;
@@ -26276,6 +26489,7 @@ function finishFlashcardSession() {
     setStatus("対象の単語が0語になったため、フラッシュカードを終了しました。");
     return;
   }
+  const midCount = Array.isArray(session.midIds) ? session.midIds.length : 0;
   const unknownWords = session.unknownIds
     .map((id) => appState.words.find((word) => word.id === id))
     .filter(Boolean)
@@ -26289,7 +26503,8 @@ function finishFlashcardSession() {
     flashcard: true,
     flashcardShuffle: session.shuffled,
   };
-  const known = Math.max(0, session.order.length - session.unknownIds.length);
+  // 「あやふや」を「知ってる」に混ぜない。混ぜると自己申告の精度を上げた意味が消える。
+  const known = Math.max(0, session.order.length - session.unknownIds.length - midCount);
   flashcardSession = null;
   flashcardRevealed = false;
   quizStarted = false;
@@ -26298,7 +26513,9 @@ function finishFlashcardSession() {
   playSound("success");
   renderQuiz();
   setStatus(
-    `フラッシュカード完了：${session.order.length}語中${known}語を「知ってる」に仕分けしました。`,
+    midCount > 0
+      ? `フラッシュカード完了：${session.order.length}語中、確実${known}語 / あやふや${midCount}語でした。`
+      : `フラッシュカード完了：${session.order.length}語中${known}語を「知ってる」に仕分けしました。`,
   );
 }
 
@@ -28681,12 +28898,21 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
     promptMode === "meaning-choice";
   // 「意味は選べたが即答できない」正解は未定着とみなす。ただし例文モード等
   // （skipSpeedGate）は文を読む時間が乗るので速度判定を無効化する。
-  const slowCorrect =
+  const rawSlowCorrect =
     isCorrect &&
     !options.skipSpeedGate &&
     Number.isFinite(responseMs) &&
     responseMs >= SLOW_ANSWER_MS &&
     responseMs < MAX_TIMED_ANSWER_MS; // 上限超は離席等とみなし速度判定しない
+  // フラッシュカードで「あやふや」と自己申告した正解は、遅い正解と同じ扱いにする。
+  // 「意味は出たが確信がない＝未定着」という状態は、速さで測ろうと自己申告で測ろうと同じ。
+  // 既存の遅い正解の分岐（連続正解を1で頭打ち＝2連続の習得に到達しない、段階を進めない、
+  // 翌日へ送る）がそのまま望ましい挙動なので、新しい分岐を作らずここに合流させる。
+  //
+  // これを怠ると「あやふや」を2回押すだけで correctStreak が2に達し、
+  // masteryVerify の付かない本習得ができてしまう（仮習得の仕組みをすり抜ける）。
+  const tentativeCorrect = isCorrect && options.selfAssessment === "mid";
+  const slowCorrect = rawSlowCorrect || tentativeCorrect;
   const srsWasUnstarted = Number(learning.nextReviewAt || 0) <= 0;
   const currentStage = Math.max(
     0,
@@ -28750,6 +28976,11 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
       if (learning.correctStreak >= 2) {
         learning.status = "mastered";
         learning.reviewAt = 0;
+        // 「あやふや」は tentativeCorrect で上の分岐へ流れるので、ここには来ない。
+        // ここで selfAssessment を再チェックする「二重の保険」は置かない。もし
+        // tentativeCorrect の routing が壊れたとき、保険があると masteryVerify だけ
+        // 付かずに status="mastered" が確定してしまい、検証されない本習得という
+        // より悪い状態を作る。守り方は1か所に集約し、そこをテストで固定する。
         if (promptMode === "flashcard") learning.masteryVerify = "flashcard";
       } else {
         // 1回目の正解：まだ習得とせず、数問後にもう一度出して連続正解を確認する
@@ -29306,6 +29537,55 @@ function recentDailyAnswerCount(now = Date.now()) {
   if (counts.length === 0) return 0;
   counts.sort((a, b) => a - b);
   return Math.round(counts[Math.floor(counts.length / 2)]);
+}
+
+// 確信度の較正カード。「確実」と申告した語が、あとの意味4択でどうだったかを見せる。
+//
+// 検証済みの件数と未検証の件数を必ず併記する。検証済みだけを見せると、
+// 「たまたま4択に出た語」に偏った数字を、全体の実力のように見せてしまう。
+// 件数が少ないうちは割合を出さない（少数だと数字が跳ねて誤解を招く）。
+const CONFIDENCE_MIN_SAMPLES = 10;
+
+function statsConfidenceCard() {
+  if (!flashcardConfidenceEnabled()) return "";
+  const store = loadConfidenceStore();
+  const declared = Math.max(0, Math.floor(Number(store.tally?.high) || 0));
+  if (declared === 0) return "";
+  const ok = Math.max(0, Math.floor(Number(store.verified?.correct) || 0));
+  const ng = Math.max(0, Math.floor(Number(store.verified?.wrong) || 0));
+  const checked = ok + ng;
+  const pending = Object.keys(store.pending || {}).length;
+  const overconfident = (store.overconfident || []).filter((id) =>
+    appState.words.some((w) => w.id === id),
+  );
+
+  const headline =
+    checked < CONFIDENCE_MIN_SAMPLES
+      ? `<div class="stats-review-count"><span>—</span><small>データ不足</small></div>`
+      : `<div class="stats-review-count"><span>${escapeHtml(Math.round((ok / checked) * 100))}</span><small>%</small></div>`;
+
+  const action = overconfident.length
+    ? `<button type="button" id="statsOverconfidentButton">自信ありで外した${escapeHtml(overconfident.length)}語を解く</button>`
+    : "";
+
+  return (
+    `<div class="stats-card is-confidence">` +
+    statsCardHeader("「確実」と答えた単語", "意味4択で確かめた結果") +
+    `<div class="stats-review-body">` +
+    `<div>` +
+    headline +
+    `<div class="stats-review-breakdown">` +
+    `<span>確かめた <strong>${escapeHtml(checked)}語</strong></span>` +
+    `<span>まだ確かめていない <strong>${escapeHtml(pending)}語</strong></span>` +
+    `</div>` +
+    `</div>` +
+    action +
+    `</div>` +
+    (checked < CONFIDENCE_MIN_SAMPLES
+      ? `<p class="stats-recovery-note">意味4択で${escapeHtml(CONFIDENCE_MIN_SAMPLES)}語ぶん確かめると割合を出します。</p>`
+      : `<p class="stats-recovery-note">「確実」と答えた${escapeHtml(declared)}語のうち、意味4択に出た${escapeHtml(checked)}語での正答率です。まだ出ていない語は含みません。</p>`) +
+    `</div>`
+  );
 }
 
 // 復帰カード。期限切れが積み上がった状態で戻ってきたときだけ出す。
@@ -29881,6 +30161,7 @@ function renderStatsCharts(byDay) {
   const cards = [
     // 復帰カードは最上段。全件の数字より先に「まず20語」を見せる。
     statsRecoveryCard(),
+    statsConfidenceCard(),
     statsTodayReviewCard(),
     statsActivityCard(activity),
     statsMasteryCard(),
@@ -29991,7 +30272,7 @@ function renderDailyGoalChip() {
   chip.textContent = count >= goal ? `🎯 今日 ${count}/${goal}問 達成！` : `🎯 今日 ${count}/${goal}問`;
 }
 
-function gradeQuiz(choiceId, dontKnow = false) {
+function gradeQuiz(choiceId, dontKnow = false, options = {}) {
   if (!currentQuiz || currentQuiz.answered) return;
   // 生成側の全経路で防いでいるが、古い画面状態や将来の呼び出し追加があっても
   // 1択で採点・SRS更新へ進まないよう、更新直前にも最後のガードを置く。
@@ -30033,6 +30314,15 @@ function gradeQuiz(choiceId, dontKnow = false) {
   word.history.push({ at: new Date().toISOString(), correct: isCorrect });
   // 復帰の抜き取り中なら、この語の「最初の回答」だけを控える（誤答の再挑戦を拾わない）。
   recordRecoveryProbeAnswer(word.id, isCorrect);
+  // フラッシュカードで「確実」と申告していた語なら、ここで検証する。
+  // 意味4択に限る（例文は形式が違うため混ぜない）。フラッシュカード自身では検証しない。
+  if (!currentQuiz.flashcard) {
+    verifyConfidenceOnAnswer(
+      word.id,
+      isCorrect,
+      currentQuiz.context ? "context-choice" : "meaning-choice",
+    );
+  }
   if (word.history.length > 50) word.history = word.history.slice(-50);
   // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
   // 場合の保険で、実際には◯問後の条件が先に成立することが多い（OR判定はavailableQuizWords側）
@@ -30060,6 +30350,8 @@ function gradeQuiz(choiceId, dontKnow = false) {
   // 範囲クイズ・総復習でも通常クイズと同じ判定で学習状態（習得/復習）を更新する
   appState.quizCounter += 1;
   const srsInfo = applyLearningResult(word, isCorrect, Boolean(currentQuiz.srsDueAtStart), answeredAt, {
+    // フラッシュカードの自己申告（low/mid/high）。4択には渡さない。
+    selfAssessment: currentQuiz.flashcard ? options.selfAssessment : undefined,
     responseMs,
     skipSpeedGate,
     historyBeforeAnswer,
@@ -31882,6 +32174,10 @@ elements.flashcardFlipButton?.addEventListener("click", (event) => {
   flipFlashcard();
 });
 elements.flashcardKnownButton?.addEventListener("click", () => gradeFlashcard(true));
+elements.flashcardConfLowButton?.addEventListener("click", () => gradeFlashcardConfidence("low"));
+elements.flashcardConfMidButton?.addEventListener("click", () => gradeFlashcardConfidence("mid"));
+elements.flashcardConfHighButton?.addEventListener("click", () => gradeFlashcardConfidence("high"));
+elements.flashcardNextButton?.addEventListener("click", () => advanceFlashcard());
 elements.flashcardUnknownButton?.addEventListener("click", () => gradeFlashcard(false));
 elements.flashcardSpeakButton?.addEventListener("click", () => {
   if (currentQuiz?.flashcard) speakWord(currentQuiz.answer.term, elements.flashcardSpeakButton);
@@ -32105,13 +32401,21 @@ elements.streakPanelClose?.addEventListener("click", closeStreakPanel);
 // 成績カードの復習導線（カードは再描画で作り直されるため委譲で受ける）。
 elements.statsGrid?.addEventListener("click", (event) => {
   const button = event.target.closest?.(
-    "#statsWeakQuizButton, #statsTodayReviewButton, #recoveryStartButton," +
+    "#statsWeakQuizButton, #statsTodayReviewButton, #statsOverconfidentButton, #recoveryStartButton," +
       " #recoveryResumeProbeButton, #recoveryTodayButton, #recoveryDismissButton",
   );
   if (!button) return;
   closeStreakPanel();
   if (button.id === "statsTodayReviewButton") {
     startGeneralReview();
+    return;
+  }
+  if (button.id === "statsOverconfidentButton") {
+    const store = loadConfidenceStore();
+    const ids = (store.overconfident || []).filter((id) =>
+      appState.words.some((w) => w.id === id),
+    );
+    if (ids.length) startReview(ids, { label: "自信ありで外した単語", shuffle: false });
     return;
   }
   if (button.id === "recoveryStartButton") {

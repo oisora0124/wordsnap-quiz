@@ -15,7 +15,22 @@ const html = readFileSync(join(here, "..", "publish", "index.html"), "utf8");
 function extractFunction(name) {
   const start = html.indexOf(`function ${name}(`);
   if (start < 0) throw new Error(`function ${name} not found`);
-  const bodyBrace = html.indexOf("{", html.indexOf(")", start));
+  // 引数リストの括弧を数えて終わりを見つける。既定引数に Date.now() のような
+  // 括弧が入ると、最初の ")" で切ると本体の開始位置を取り違える。
+  const paramOpen = html.indexOf("(", start);
+  let paren = 0;
+  let paramEnd = paramOpen;
+  for (let i = paramOpen; i < html.length; i += 1) {
+    if (html[i] === "(") paren += 1;
+    else if (html[i] === ")") {
+      paren -= 1;
+      if (paren === 0) {
+        paramEnd = i;
+        break;
+      }
+    }
+  }
+  const bodyBrace = html.indexOf("{", paramEnd);
   let depth = 0;
   for (let i = bodyBrace; i < html.length; i += 1) {
     if (html[i] === "{") depth += 1;
@@ -94,6 +109,15 @@ function buildSandbox() {
     extractFunction("personalAccuracyFactor"),
     extractFunction("adaptiveSrsMultiplier"),
     extractFunction("srsIntervalMs"),
+    // 学習結果の適用。フラッシュカードの自己申告(low/mid/high)の分岐を実コードで検査する。
+    `const SLOW_ANSWER_MS = ${html.match(/const SLOW_ANSWER_MS = (\d+);/)[1]};`,
+    `const FAST_ANSWER_MS = ${html.match(/const FAST_ANSWER_MS = (\d+);/)[1]};`,
+    `const MAX_TIMED_ANSWER_MS = ${html.match(/const MAX_TIMED_ANSWER_MS = (\d+);/)[1]};`,
+    `const WRONG_COOLDOWN_MS = ${html.match(/const WRONG_COOLDOWN_MS = ([^;]+);/)[1]};`,
+    "const adaptiveSrsEnabled = () => false;", // 適応SRSはOFF＝従来の間隔で検査する
+    "const personalAccuracyFactorCached = () => 1;",
+    "const scheduleReview = () => {};",
+    extractFunction("applyLearningResult"),
     // 取り込み経路。サンプル単語集が実際に1行=1候補として読めることを確かめるために使う。
     extractFunction("normalizeTerm"),
     `const JP_CHAR = ${html.match(/const JP_CHAR = (\/.+\/);/)[1]};`,
@@ -112,6 +136,7 @@ function buildSandbox() {
       " normalizeSpeechRate, normalizeSpeechVoiceUri, buildFlashcardOrder," +
       " sliceWordsByQuizRange, isMasteryVerificationDue, flashcardEligibleIds," +
       " wordAccuracyFactor, personalAccuracyFactor, adaptiveSrsMultiplier, srsIntervalMs, SRS_INTERVAL_DAYS, SRS_DAY_MS," +
+      " applyLearningResult," +
       " parseVocabulary, validPair, firstMeaning };",
   ];
   const sandbox = {};
@@ -1732,4 +1757,146 @@ test("復帰: 期限切れが0件になっても例外にならない", () => {
   for (const w of words) w.learning.nextReviewAt = Date.now() + 86400000;
   assert.doesNotThrow(() => f.startRecoveryToday(), "実行時例外を出さない");
   assert.doesNotThrow(() => f.statsRecoveryCard(), "カード描画も落ちない");
+});
+
+// --- フラッシュカードの確信度（設定・既定オフ） -------------------------
+// 「あやふや」を素の正解として流すと、2回で correctStreak が2に達し
+// masteryVerify の付かない本習得ができてしまう（仮習得の仕組みをすり抜ける）。
+// 既存の「遅い正解」と同じ扱いに合流させることでこれを防いでいる。
+function applyLearning(word, isCorrect, opts = {}) {
+  const now = opts.now ?? Date.now();
+  return q.applyLearningResult(word, isCorrect, opts.srsDueAtStart ?? false, now, {
+    promptMode: opts.promptMode ?? "flashcard",
+    selfAssessment: opts.selfAssessment,
+    responseMs: opts.responseMs ?? 1000,
+    skipSpeedGate: opts.skipSpeedGate,
+  });
+}
+const freshWord = () => ({
+  id: "w1",
+  term: "resilient",
+  meaning: "回復力のある",
+  stats: { correct: 0, wrong: 0 },
+  history: [],
+  progressUpdatedAt: 0,
+  learning: {
+    status: "new",
+    firstAttempted: false,
+    reviewAt: 0,
+    blockedUntil: 0,
+    correctStreak: 0,
+    srsStage: 0,
+    nextReviewAt: 0,
+    srsUpdatedAt: 0,
+    lastSrsResult: "",
+  },
+});
+
+test("確信度: 「あやふや」を2回続けても習得にならない", () => {
+  const word = freshWord();
+  applyLearning(word, true, { selfAssessment: "mid" });
+  applyLearning(word, true, { selfAssessment: "mid" });
+  assert.notEqual(word.learning.status, "mastered", "あやふや2回で習得にしてはいけない");
+  assert.equal(word.learning.masteryVerify, undefined, "検証マークも付かない");
+  assert.ok(word.learning.correctStreak < 2, `連続正解が2に達しない: ${word.learning.correctStreak}`);
+});
+
+test("確信度: 「確実」2回は従来どおり仮習得になる", () => {
+  const word = freshWord();
+  applyLearning(word, true, { selfAssessment: "high" });
+  applyLearning(word, true, { selfAssessment: "high" });
+  assert.equal(word.learning.status, "mastered");
+  assert.equal(word.learning.masteryVerify, "flashcard", "フラッシュカード由来は検証待ちにする");
+});
+
+test("確信度: 「あやふや」は正解として数え、段階は進めない", () => {
+  const word = freshWord();
+  word.learning.srsStage = 3;
+  word.learning.nextReviewAt = Date.now() - 86400000;
+  const before = word.learning.srsStage;
+  applyLearning(word, true, { selfAssessment: "mid", srsDueAtStart: true });
+  assert.equal(word.learning.lastSrsResult, "correct", "正解として記録する");
+  assert.equal(word.learning.srsStage, before, "段階は進めない");
+});
+
+test("確信度: 「知らない」は従来の不正解と完全に同じ", () => {
+  const a = freshWord();
+  const b = freshWord();
+  a.learning.srsStage = 4;
+  b.learning.srsStage = 4;
+  const now = 1_700_000_000_000;
+  applyLearning(a, false, { selfAssessment: "low", now });
+  applyLearning(b, false, { now }); // 申告なし＝従来の不正解
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(a.learning)),
+    JSON.parse(JSON.stringify(b.learning)),
+    "lowは従来の不正解と同じ結果になるべき",
+  );
+});
+
+test("確信度: 4択では自己申告が学習結果に影響しない", () => {
+  // selfAssessment は4択経路には渡さない設計。渡っても mid の分岐に入らないこと。
+  const withMid = freshWord();
+  const plain = freshWord();
+  const now = 1_700_000_000_000;
+  applyLearning(withMid, true, { promptMode: "meaning-choice", selfAssessment: undefined, now });
+  applyLearning(plain, true, { promptMode: "meaning-choice", now });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(withMid.learning)),
+    JSON.parse(JSON.stringify(plain.learning)),
+  );
+});
+
+test("確信度: 設定は既定オフで、オンのときだけUIが切り替わる", () => {
+  // 既定オフ＝これまでフラッシュカードを使ってきた人の操作感が変わらない。
+  assert.ok(
+    /localStorage\.getItem\(FLASHCARD_CONFIDENCE_KEY\) === "1"/.test(html),
+    "キーが無ければ false（既定オフ）",
+  );
+  const grade = html.slice(html.indexOf("function gradeFlashcardConfidence("));
+  const body = grade.slice(0, grade.indexOf("\n}"));
+  assert.ok(body.includes("if (!flashcardConfidenceEnabled()) return;"), "オフなら動かない");
+  assert.ok(
+    body.includes("flashcardRevealed) return;"),
+    "意味を見た後には申告できない（見る前の申告であることを守る）",
+  );
+  // 裏返す操作は確信度モードでは無効（裏返せると申告が「答えを見た後」になる）
+  const flip = html.slice(html.indexOf("function flipFlashcard()"));
+  assert.ok(
+    flip.slice(0, 260).includes("if (flashcardConfidenceEnabled()) return;"),
+    "確信度モードでは裏返し操作を無効にする",
+  );
+});
+
+test("確信度: 検証は意味4択だけ。例文やフラッシュカードでは数えない", () => {
+  const verify = html.slice(html.indexOf("function verifyConfidenceOnAnswer("));
+  const body = verify.slice(0, verify.indexOf("\n}"));
+  assert.ok(
+    body.includes('if (promptMode !== "meaning-choice") return;'),
+    "意味4択以外は検証に使わない",
+  );
+  assert.ok(body.includes("delete store.pending[id];"), "1つの申告は1回だけ検証する");
+  // 呼び出し側でフラッシュカード自身を除外している
+  const call = html.slice(html.indexOf("verifyConfidenceOnAnswer(\n"));
+  assert.ok(
+    html.includes("if (!currentQuiz.flashcard) {\n    verifyConfidenceOnAnswer("),
+    "フラッシュカードの回答では検証しない",
+  );
+});
+
+test("確信度: 較正の表示は未検証件数を隠さない", () => {
+  const card = html.slice(html.indexOf("function statsConfidenceCard()"));
+  const body = card.slice(0, card.indexOf("\n}\n"));
+  assert.ok(body.includes("まだ確かめていない"), "未検証の件数を併記する");
+  assert.ok(body.includes("CONFIDENCE_MIN_SAMPLES"), "少数のときは割合を出さない");
+  assert.ok(body.includes("データ不足"), "少数のときの表示がある");
+});
+
+test("確信度: 完了画面で「あやふや」を「知ってる」に数えない", () => {
+  const fn = html.slice(html.indexOf("function finishFlashcardSession()"));
+  const body = fn.slice(0, fn.indexOf("\n}\n"));
+  assert.ok(
+    body.includes("session.unknownIds.length - midCount"),
+    "あやふやを知ってるから差し引く",
+  );
 });
