@@ -1,3 +1,34 @@
+// レート制限のキーに使う送信元の識別子。
+//
+// CF-Connecting-IP をそのまま使うと、IPv6では回避できてしまう。IPv6は1契約者に
+// /64（アドレス2^64個）が割り当たるのが普通で、アドレスを1つずらすだけで別人として
+// 扱われる。IPv4なら効く上限が、IPv6では素通りする。
+//
+// そこでIPv6は /64（先頭4ハクステット）へ丸めてから鍵にする。実運用の割当単位に
+// 合わせることで、同一契約者からの試行を1つのバケツにまとめられる。
+// IPv4はそのまま使う（NAT配下の同居利用者を巻き込む範囲を広げないため）。
+//
+// 「::」の省略記法があるので、素朴に ":" で切ると桁数を取り違える。展開してから丸める。
+export function rateLimitClientKey(rawIp) {
+  const ip = String(rawIp || "").trim().toLowerCase();
+  if (!ip) return "unknown";
+  if (!ip.includes(":")) return ip; // IPv4 かそれ以外はそのまま
+  // IPv4射影アドレス（::ffff:203.0.113.1）は末尾のIPv4として扱う
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(ip);
+  if (mapped) return mapped[1];
+  const zoneless = ip.split("%")[0];
+  const [head, tail = ""] = zoneless.split("::");
+  const headParts = head ? head.split(":").filter(Boolean) : [];
+  const tailParts = tail ? tail.split(":").filter(Boolean) : [];
+  if (headParts.length + tailParts.length > 8) return ip; // 壊れた入力はそのまま
+  const fill = zoneless.includes("::") ? 8 - headParts.length - tailParts.length : 0;
+  if (fill < 0) return ip;
+  const full = [...headParts, ...Array(fill).fill("0"), ...tailParts];
+  if (full.length !== 8) return ip;
+  // /64 = 先頭4ハクステット。桁を揃えて表記ゆれ（0 と 0000）を吸収する。
+  return full.slice(0, 4).map((h) => h.replace(/^0+(?=.)/, "")).join(":") + "::/64";
+}
+
 // WordBank のユーザー要望・フィードバックを受け取る Pages Function（書き込み専用）。
 //
 // 契約:
@@ -270,7 +301,7 @@ async function mailRateLimited(env, request) {
   const now = Date.now();
   let keys;
   try {
-    const bucket = await ipBucket(env, request.headers.get("CF-Connecting-IP") || "unknown");
+    const bucket = await ipBucket(env, rateLimitClientKey(request.headers.get("CF-Connecting-IP")));
     keys = MAIL_RATE_LIMITS.map((rule) => ({
       rule,
       key: rule.scope === "ip" ? `fb-mail:${bucket}` : "fb-mail:all",
@@ -349,7 +380,7 @@ async function saveRateLimited(env, request) {
   const now = Date.now();
   let keys;
   try {
-    const bucket = await ipBucket(env, request.headers.get("CF-Connecting-IP") || "unknown");
+    const bucket = await ipBucket(env, rateLimitClientKey(request.headers.get("CF-Connecting-IP")));
     keys = SAVE_RATE_LIMITS.map((rule) => ({
       rule,
       key: rule.scope === "ip" ? `fb-save:${bucket}` : "fb-save:all",

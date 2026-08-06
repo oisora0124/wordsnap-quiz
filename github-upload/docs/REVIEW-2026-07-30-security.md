@@ -68,6 +68,33 @@ Cloudflare 側のレート制限ルール（WAF / Rate Limiting Rules）で入�
 
 ---
 
+### M1b. レート制限がIPv6で回避できた（2026-08-06 修正済み）
+
+`CF-Connecting-IP` をそのままレート制限の鍵に使っていた。IPv6は1契約者に
+`/64`（アドレス2^64個）が割り当たるのが普通なので、**アドレスを1つずらすだけで
+別人として扱われ、上限が素通りしていた**。IPv4では効く対策が、IPv6では効かない。
+
+対象は4箇所:
+
+- `functions/api/telemetry.js` の `consumeTelemetryRateLimit`
+- `functions/api/wordsnap-state.js` の `consumeV2RateLimit`
+- `functions/api/feedback.js` の `ipBucket` 呼び出し2箇所
+
+**対処**: `rateLimitClientKey()` を各ファイルに置き、IPv6は `/64` へ丸めてから
+鍵にする。IPv4はそのまま使う（NAT配下の同居利用者を巻き込む範囲を広げないため）。
+`::` の省略記法と `::ffff:` のIPv4射影、ゾーンID（`%eth0`）も正しく扱う。
+
+**なぜ共有モジュールにしないか**: `functions/api/` に共有モジュールを置く構成に
+なっておらず、ビルド工程も無い。3ファイルへ同じ実装を置き、
+`scripts/rate-limit-key.test.mjs` が**3実装の出力が一致すること**を検査する
+（コピーのずれが最大のリスクなので、そこを直接固定した）。
+
+**残る限界**: 攻撃者が複数の `/64` を持つ場合は依然として回避できる。処理量そのものを
+抑えるなら、下の M1 と同じく Cloudflare 側の WAF / Rate Limiting Rules が本来の
+置き場所になる。これはリポジトリではなくアカウント設定なので運用判断。
+
+---
+
 ### M2. テレメトリのイベント名にサーバー側の許可リストが無い
 
 クライアント側には許可リスト（`USAGE_NAMES`）があり、名前の一致はゲートで固定済み。
