@@ -11,7 +11,8 @@
 - 静的サイト: `publish/`（アプリ本体は `publish/index.html` の単一ファイル）
 - 保存API（**稼働中**）: `functions/api/wordsnap-state.js`
   — Cloudflare Pages Functions + D1。`rev` による原子的CAS、gzip+base64圧縮、差分同期に対応。
-- D1初期スキーマ: `schema.sql`
+- D1スキーマ: `migrations/0001_initial.sql` 〜 `0006_telemetry.sql`
+  （`schema.sql` は最初の1枚と同じもの。**これだけでは足りない** — 下記「D1の初期構築」参照）
 
 契約は `GET`/`PUT /api/wordsnap-state?sync=KEY`、`baseRev`/`stateRev` による楽観的排他、
 競合時 409。（Netlify Blobs 版は非原子的CAS・圧縮非対応のまま停止していたため削除した。
@@ -57,11 +58,56 @@ npm test
 単一HTML保存処理、`_headers`の個人キー漏えい防止、D1スキーマとAPIの基本契約、
 秘密情報の誤混入を確認します。
 
+一部だけ回すなら:
+
+| コマンド | 対象 |
+| --- | --- |
+| `npm run test:api` | 同期・フィードバック・テレメトリのAPI契約、D1スキーマの齟齬 |
+| `npm run test:quiz` | クイズ・学習アルゴリズムの不変条件 |
+| `npm run test:a11y` | アクセシビリティ（静的検査＋モーダルのフォーカス） |
+| `npm run test:sw` | Service Worker の契約 |
+| `npm run test:scale` | 語数が増えたときの計算量 |
+| `npm run check` | 公開物の整合性のみ（`check-release.mjs`） |
+
+### なぜそう検査しているかの記録
+
+壊れ方が分かりにくい箇所は、経緯を残してあります。
+
+| 文書 | 内容 |
+| --- | --- |
+| [docs/csp-hashes.md](docs/csp-hashes.md) | ハッシュ型CSP。**壊れてもローカルでは何も起きず、本番だけが壊れる** |
+| [docs/service-worker.md](docs/service-worker.md) | キャッシュの契約。過去に個人キーが端末に残る不具合を踏んでいる |
+| [docs/schema-drift.md](docs/schema-drift.md) | Functions と D1 スキーマの齟齬。実行時エラーとしてしか現れない |
+| [docs/accessibility.md](docs/accessibility.md) | 自動で見ている範囲と、人が見るしかない範囲 |
+| [docs/scale-guard.md](docs/scale-guard.md) | 語数が増えたときの計算量。二次に落ちても機能は正しく動く |
+
 ## D1の初期構築
 
-Cloudflare PagesプロジェクトでD1データベースを作成し、`schema.sql` を一度適用した後、
-Pages FunctionsのD1バインディング名を `DB` に設定します。既存環境へ再適用しても
-`CREATE TABLE IF NOT EXISTS` のため既存データは削除されません。
+Cloudflare PagesプロジェクトでD1データベースを作成し、**`migrations/` を番号順にすべて**
+適用してから、Pages FunctionsのD1バインディング名を `DB` に設定します。
+
+```bash
+for f in migrations/*.sql; do
+  npx wrangler d1 execute <DB名> --remote --file "$f"
+done
+```
+
+| migration | テーブル | 無いとどうなるか |
+| --- | --- | --- |
+| `0001_initial.sql` | `states` | 同期がまったく動かない |
+| `0002_state_revisions.sql` | `state_revisions` | 過去状態からの復元ができない |
+| `0003_feedback.sql` | `feedback` | 要望が保存されない |
+| `0004_auth_v2.sql` | `rooms` | 新方式（V2）の同期が動かない |
+| `0005_rate_limits.sql` | `rate_limits` | 上限判定が例外になり、API が落ちる |
+| `0006_telemetry.sql` | `telemetry` | 障害の記録が残らない |
+
+**`schema.sql` だけを適用しても足りません。** これは `0001` と同じ内容で、
+`states` しか作られません。以前この記述だけがあったため、手順どおりに
+作り直すと同期以外がすべて壊れる状態でした。
+
+すべて `CREATE TABLE IF NOT EXISTS` なので、既存環境へ再適用してもデータは消えません。
+`npm test` の `scripts/schema-drift.test.mjs` が、Functions の使うテーブル・列が
+`migrations/` に揃っていることを検査します（[docs/schema-drift.md](docs/schema-drift.md)）。
 
 GitHubの `main` をCloudflare Pagesへ接続している現在の運用では、変更をpushすると
 `publish/` と `functions/` がデプロイ対象になります。push前に必ず `npm test` を実行します。
