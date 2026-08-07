@@ -106,7 +106,14 @@ Cloudflare 側のレート制限ルール（WAF / Rate Limiting Rules）で入�
 
 ---
 
-### M7. 結合テストが無い（FakeD1は実D1ではない）
+### M7. 結合テストが無い（FakeD1は実D1ではない）→ **2026-08-07 対応済み**
+
+`node:sqlite`（Node標準・依存ゼロ）で migrations を実際に適用し、
+本番の Functions をそのまま動かす結合テストを入れた（`scripts/d1-integration.test.mjs`、10件）。
+変異テストで、FakeD1 が素通りさせる5種（存在しない列・migration適用漏れ・
+列の欠落・ON CONFLICT の対象違い・テーブル定義の狂い）を全部捕まえることを確認済み。
+詳細は [d1-integration.md](d1-integration.md)。以下は当時の記録。
+
 
 指摘は正しい。契約テストのFakeD1は期待するSQLの意味を再実装したもので、
 実D1の構文・制約・マイグレーションは通らない。

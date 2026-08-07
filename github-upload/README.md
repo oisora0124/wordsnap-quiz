@@ -81,6 +81,7 @@ npm test
 | [docs/accessibility.md](docs/accessibility.md) | 自動で見ている範囲と、人が見るしかない範囲 |
 | [docs/scale-guard.md](docs/scale-guard.md) | 語数が増えたときの計算量。二次に落ちても機能は正しく動く |
 | [docs/data-retention.md](docs/data-retention.md) | サーバー側データの保持方針。**進捗は休眠を理由に消さない** |
+| [docs/d1-integration.md](docs/d1-integration.md) | 実SQLiteでの結合テスト。FakeD1が素通りさせる5種を捕まえる |
 
 ## D1の初期構築
 
