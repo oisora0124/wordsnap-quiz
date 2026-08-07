@@ -158,6 +158,46 @@ async function readBodyCapped(request, maxBytes) {
   return new TextDecoder().decode(merged);
 }
 
+// 匿名統計の保持期限。障害の傾向を追うには十分な長さを取る。
+// これより短くしても得られる容量はわずかで、失う情報のほうが大きい。
+export const TELEMETRY_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+
+// 1回の掃除で消す上限。無制限の DELETE にしてはいけない:
+//   - D1 は1クエリ30秒の上限がある。溜まった行が多いと届きうる
+//   - D1 はDB単位で逐次処理するので、長い DELETE の間は通常の INSERT も待たされる
+// 期限切れは日々わずかしか増えないので、この上限で足りる。
+// 溜まっている場合も、窓が明けるたびに少しずつ減っていく。
+export const TELEMETRY_PRUNE_LIMIT = 500;
+
+/**
+ * 保持期限を過ぎた匿名統計を落とす。
+ *
+ * 呼ぶのはレート制限の窓が明けたときだけ＝1IPにつき高々1日1回。
+ * 失敗しても握り潰す。統計の掃除が原因で統計の保存や応答を落とさない。
+ *
+ * **対象は telemetry のみ。** states / rooms（進捗の控えと引き継ぎ）と
+ * feedback（利用者が書いた要望）には触れない。
+ */
+export async function pruneOldTelemetry(db, now) {
+  try {
+    await db
+      .prepare(
+        `DELETE FROM telemetry WHERE id IN (
+           SELECT id FROM telemetry WHERE created_at <= ? ORDER BY created_at LIMIT ?
+         )`,
+      )
+      .bind(now - TELEMETRY_TTL_MS, TELEMETRY_PRUNE_LIMIT)
+      .run();
+  } catch {
+    // 掃除の失敗は握り潰す（次に窓が明けた誰かが再試行する）。
+    //
+    // 注: 現在の呼び出し元（consumeTelemetryRateLimit）も外側で catch しているため、
+    // この try/catch を外しても応答は変わらず、**テストでは差が出ない**
+    // （変異テストで確認済み）。冗長だが、呼び出し元が変わっても
+    // 「掃除は何も壊さない」が局所で保証されるように残してある。
+  }
+}
+
 // wordsnap-state.js の固定窓レート制限と同じ方式。補助テーブルが無い場合や
 // 一時的なD1障害では、匿名統計の保存を優先してfail-openにする。
 async function consumeTelemetryRateLimit(db, request) {
@@ -208,6 +248,14 @@ async function consumeTelemetryRateLimit(db, request) {
       } catch {
         // 掃除の失敗は握り潰す（次に窓が明けた誰かが再試行する）。
       }
+      // 匿名統計そのものにも保持期限を入れる。ここは追記しかしないテーブルなので、
+      // 放置すると利用者数×利用頻度で増え続ける（上限は 1IPあたり 60req×20件/日）。
+      // 利用者2名なら数十年先の話だが、50名で年2GB、1000名なら数週間で無料枠に届く。
+      //
+      // 消すのは「いつ何回起きたか」の集計値だけで、学習の進捗とは無関係。
+      // 進捗の控えは states / rooms にあり、そちらには一切触れない
+      //（休眠を理由に消すと、久しぶりに再開する人の復元経路を壊す）。
+      await pruneOldTelemetry(db, now);
     }
     return Number(result?.meta?.changes) === 0;
   } catch {

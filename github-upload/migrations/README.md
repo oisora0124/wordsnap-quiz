@@ -10,6 +10,7 @@ WordBank の Cloudflare D1 スキーマ。`wrangler.jsonc` の `migrations_dir` 
 | 0004_auth_v2.sql | `rooms`（同期V2。秘密をURLに載せない方式） | 新方式の同期が動かない |
 | 0005_rate_limits.sql | `rate_limits`（同期・フィードバック・テレメトリで共有） | 上限判定が例外になり、経路ごと落ちる |
 | 0006_telemetry.sql | `telemetry`（匿名の利用統計とエラー） | 障害の記録が残らない |
+| 0007_telemetry_created_at.sql | `telemetry.created_at` の索引 | 保持期限の掃除が全表走査になる（行が増えるほど遅くなる） |
 
 **`schema.sql` を1枚適用するだけでは足りない。** あれは 0001 と同じ内容で、
 `states` しか作られない。新しいD1を作るときは、ここを番号順に全部適用する。

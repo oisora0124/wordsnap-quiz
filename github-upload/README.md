@@ -11,7 +11,7 @@
 - 静的サイト: `publish/`（アプリ本体は `publish/index.html` の単一ファイル）
 - 保存API（**稼働中**）: `functions/api/wordsnap-state.js`
   — Cloudflare Pages Functions + D1。`rev` による原子的CAS、gzip+base64圧縮、差分同期に対応。
-- D1スキーマ: `migrations/0001_initial.sql` 〜 `0006_telemetry.sql`
+- D1スキーマ: `migrations/0001_initial.sql` 〜 `0007_telemetry_created_at.sql`
   （`schema.sql` は最初の1枚と同じもの。**これだけでは足りない** — 下記「D1の初期構築」参照）
 
 契約は `GET`/`PUT /api/wordsnap-state?sync=KEY`、`baseRev`/`stateRev` による楽観的排他、
@@ -80,6 +80,7 @@ npm test
 | [docs/schema-drift.md](docs/schema-drift.md) | Functions と D1 スキーマの齟齬。実行時エラーとしてしか現れない |
 | [docs/accessibility.md](docs/accessibility.md) | 自動で見ている範囲と、人が見るしかない範囲 |
 | [docs/scale-guard.md](docs/scale-guard.md) | 語数が増えたときの計算量。二次に落ちても機能は正しく動く |
+| [docs/data-retention.md](docs/data-retention.md) | サーバー側データの保持方針。**進捗は休眠を理由に消さない** |
 
 ## D1の初期構築
 
@@ -100,6 +101,7 @@ done
 | `0004_auth_v2.sql` | `rooms` | 新方式（V2）の同期が動かない |
 | `0005_rate_limits.sql` | `rate_limits` | 上限判定が例外になり、API が落ちる |
 | `0006_telemetry.sql` | `telemetry` | 障害の記録が残らない |
+| `0007_telemetry_created_at.sql` | `telemetry.created_at` の索引 | 保持期限の掃除が全表走査になる |
 
 **`schema.sql` だけを適用しても足りません。** これは `0001` と同じ内容で、
 `states` しか作られません。以前この記述だけがあったため、手順どおりに
