@@ -34,6 +34,7 @@ function extractFunction(name) {
 function makeWordRuntime() {
   const pieces = [
     "const LEARNING_SCHEMA_VERSION = 1;",
+    "const WORD_HISTORY_LIMIT = 50;",
     "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];",
     "const SRS_DAY_MS = 24 * 60 * 60 * 1000;",
     "const SRS_MAX_FUTURE_DAYS = 400;",
@@ -79,6 +80,10 @@ function makeWordRuntime() {
     extractFunction("mergeEnrichData"),
     extractFunction("mergeLearningState"),
     extractFunction("minPositiveNumber"),
+    extractFunction("learningEvidenceCount"),
+    extractFunction("learningEvidence"),
+    extractFunction("dominantLearningEvidence"),
+    extractFunction("evidenceCoversWrongAnswers"),
     "globalThis.__wordRuntime = {" +
       " normalizeHistory, normalizeLearning, normalizeWord, normalizeState, stateSignature," +
       " mergeHistory, mergeLearningState, mergeEnrichData, mergeWord, mergeAppStates," +
@@ -754,4 +759,529 @@ test("2端末の往復: 時計の狂った端末の値が、正常な端末の�
     "取り込む向きが逆でも未来の復習予定を残さない",
   );
   assert.notEqual(reversed.streak.last, "2030-01-01", "向きが逆でも未来日付を残さない");
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 学習状態マージの因果判定（証拠ベクトル）。設計は docs/DESIGN-2026-08-08-srs-merge-evidence.md。
+// srsUpdatedAt は端末の時計なので、時計が遅れた端末は解答が少なくても「新しい」と
+// 主張して勝ててしまう（clampSrsTs は進んだ時計しか弾けない）。解答数は時計に
+// 依存しないため、これで因果の前後を判定する。
+// ────────────────────────────────────────────────────────────────────────────
+
+// 解答 n 件ぶんの履歴。時刻は端末の時計（offsetMs）で刻む。
+function answerHistory(count, { correct = true, startMs, stepMs = 60_000 } = {}) {
+  return Array.from({ length: count }, (_, index) => ({
+    at: new Date(startMs + index * stepMs).toISOString(),
+    correct,
+  }));
+}
+
+function evidenceWord(overrides) {
+  const { learning, ...rest } = overrides || {};
+  return {
+    id: "wordone",
+    term: "apple",
+    meaning: "りんご",
+    deckId: "deckone",
+    addedAt: "2026-01-01T00:00:00.000Z",
+    ...rest,
+    learning: {
+      status: "review",
+      firstAttempted: true,
+      reviewAt: 0,
+      blockedUntil: 0,
+      lastSrsResult: "correct",
+      ...(learning || {}),
+    },
+  };
+}
+
+const EV_BASE = Date.UTC(2026, 6, 1);
+
+test("解答数で勝つ側が、時計の遅れた新しい時刻に負けない（D2）", () => {
+  const runtime = makeWordRuntime();
+  // 進んだ端末。時計が1時間遅れているので srsUpdatedAt は古く見える。
+  const advanced = evidenceWord({
+    stats: { correct: 6, wrong: 0 },
+    history: answerHistory(6, { startMs: EV_BASE }),
+    progressUpdatedAt: EV_BASE - 3_600_000,
+    learning: {
+      status: "mastered", srsStage: 5, correctStreak: 6,
+      nextReviewAt: EV_BASE + 30 * 86_400_000, srsUpdatedAt: EV_BASE - 3_600_000,
+    },
+  });
+  // 長く同期していなかった端末。1回しか解いていないが時計は正常で新しい。
+  const behind = evidenceWord({
+    stats: { correct: 1, wrong: 0 },
+    history: answerHistory(1, { startMs: EV_BASE + 7 * 86_400_000 }),
+    progressUpdatedAt: EV_BASE,
+    learning: {
+      status: "review", srsStage: 1, correctStreak: 1,
+      nextReviewAt: EV_BASE + 86_400_000, srsUpdatedAt: EV_BASE,
+    },
+  });
+
+  for (const [left, right, label] of [
+    [advanced, behind, "進んだ側から取り込む"],
+    [behind, advanced, "遅れた側から取り込む"],
+  ]) {
+    const merged = runtime.mergeWord(
+      runtime.normalizeWord(left),
+      runtime.normalizeWord(right),
+      "remote",
+    );
+    assert.equal(merged.learning.srsStage, 5, `${label}: 段階が巻き戻らない`);
+    assert.equal(merged.learning.correctStreak, 6, `${label}: 連続正解数が巻き戻らない`);
+    assert.equal(merged.learning.status, "mastered", `${label}: 習得状態が消えない`);
+  }
+});
+
+test("誤答で正当に降格した新しい状態を、古い高段階が消さない", () => {
+  const runtime = makeWordRuntime();
+  // 同期済みの地点から、片方だけが「誤答→正解」と進んだ。lastSrsResult は correct のまま
+  // 段階だけが低いので、時刻でも「正解では下がらない」不変条件でも区別できない形。
+  const stale = evidenceWord({
+    stats: { correct: 6, wrong: 0 },
+    history: answerHistory(6, { startMs: EV_BASE }),
+    progressUpdatedAt: EV_BASE + 5 * 60_000,
+    learning: {
+      status: "mastered", srsStage: 5, correctStreak: 6,
+      nextReviewAt: EV_BASE + 30 * 86_400_000, srsUpdatedAt: EV_BASE + 5 * 60_000,
+    },
+  });
+  const demoted = evidenceWord({
+    stats: { correct: 7, wrong: 1 },
+    history: [
+      ...answerHistory(6, { startMs: EV_BASE }),
+      { at: new Date(EV_BASE + 86_400_000).toISOString(), correct: false },
+      { at: new Date(EV_BASE + 2 * 86_400_000).toISOString(), correct: true },
+    ],
+    progressUpdatedAt: EV_BASE + 2 * 86_400_000,
+    learning: {
+      status: "review", srsStage: 4, correctStreak: 1,
+      nextReviewAt: EV_BASE + 3 * 86_400_000, srsUpdatedAt: EV_BASE + 2 * 86_400_000,
+    },
+  });
+
+  for (const [left, right, label] of [
+    [stale, demoted, "古い側から取り込む"],
+    [demoted, stale, "降格した側から取り込む"],
+  ]) {
+    const merged = runtime.mergeWord(
+      runtime.normalizeWord(left),
+      runtime.normalizeWord(right),
+      "remote",
+    );
+    assert.equal(merged.learning.srsStage, 4, `${label}: 正当な降格が残る`);
+    assert.equal(merged.learning.status, "review", `${label}: 復習へ戻した状態が残る`);
+  }
+});
+
+test("勝つ側が持っていない誤答があるときは、証拠判定を使わず取りこぼさない", () => {
+  const runtime = makeWordRuntime();
+  // 両端末とも誤答1件・別々の事象。正解数は左が多いので数の上では左が支配するが、
+  // 右の誤答を左は見ていない。ここで左を採ると「忘れた語が復習に戻らない」ため落とす。
+  const manyCorrect = evidenceWord({
+    stats: { correct: 7, wrong: 1 },
+    history: [
+      { at: new Date(EV_BASE).toISOString(), correct: false },
+      ...answerHistory(7, { startMs: EV_BASE + 60_000 }),
+    ],
+    progressUpdatedAt: EV_BASE + 8 * 60_000,
+    learning: {
+      status: "mastered", srsStage: 5, correctStreak: 5,
+      nextReviewAt: EV_BASE + 30 * 86_400_000, srsUpdatedAt: EV_BASE + 8 * 60_000,
+    },
+  });
+  const freshWrong = evidenceWord({
+    stats: { correct: 5, wrong: 1 },
+    history: [
+      ...answerHistory(5, { startMs: EV_BASE + 60_000 }),
+      { at: new Date(EV_BASE + 9 * 60_000).toISOString(), correct: false },
+    ],
+    progressUpdatedAt: EV_BASE + 9 * 60_000,
+    learning: {
+      status: "review", srsStage: 1, correctStreak: 0, lastSrsResult: "wrong",
+      nextReviewAt: EV_BASE + 86_400_000, srsUpdatedAt: EV_BASE + 9 * 60_000,
+    },
+  });
+
+  for (const [left, right, label] of [
+    [manyCorrect, freshWrong, "正解の多い側から取り込む"],
+    [freshWrong, manyCorrect, "誤答した側から取り込む"],
+  ]) {
+    const merged = runtime.mergeWord(
+      runtime.normalizeWord(left),
+      runtime.normalizeWord(right),
+      "remote",
+    );
+    assert.equal(merged.learning.status, "review", `${label}: 誤答を取りこぼさない`);
+    assert.ok(merged.learning.srsStage <= 1, `${label}: 段階を上げ直さない`);
+  }
+});
+
+test("解答数が同じ（真に並行）なら従来どおり時刻と保守的マージで決める", () => {
+  const runtime = makeWordRuntime();
+  const base = {
+    stats: { correct: 4, wrong: 0 },
+    history: answerHistory(4, { startMs: EV_BASE }),
+  };
+  const older = evidenceWord({
+    ...base,
+    progressUpdatedAt: EV_BASE + 60_000,
+    learning: {
+      status: "mastered", srsStage: 5, correctStreak: 4,
+      nextReviewAt: EV_BASE + 30 * 86_400_000, srsUpdatedAt: EV_BASE + 60_000,
+    },
+  });
+  const newerWrong = evidenceWord({
+    ...base,
+    progressUpdatedAt: EV_BASE + 120_000,
+    learning: {
+      status: "review", srsStage: 3, correctStreak: 0, lastSrsResult: "wrong",
+      nextReviewAt: EV_BASE + 86_400_000, srsUpdatedAt: EV_BASE + 120_000,
+    },
+  });
+  const merged = runtime.mergeWord(
+    runtime.normalizeWord(older),
+    runtime.normalizeWord(newerWrong),
+    "remote",
+  );
+  assert.equal(merged.learning.srsStage, 3, "解答数が同じなら新しい時刻の側を採る（従来どおり）");
+  assert.equal(merged.learning.status, "review", "新しい誤答が古い習得に負けない（従来どおり）");
+});
+
+test("証拠を渡さない2引数呼び出しは従来と完全に同じ結果を返す", () => {
+  const runtime = makeWordRuntime();
+  const a = {
+    status: "mastered", srsStage: 5, correctStreak: 4, firstAttempted: true,
+    reviewAt: 0, blockedUntil: 0, nextReviewAt: EV_BASE + 30 * 86_400_000,
+    srsUpdatedAt: EV_BASE + 60_000, lastSrsResult: "correct",
+  };
+  const b = {
+    status: "review", srsStage: 1, correctStreak: 1, firstAttempted: true,
+    reviewAt: 0, blockedUntil: 0, nextReviewAt: EV_BASE + 86_400_000,
+    srsUpdatedAt: EV_BASE + 120_000, lastSrsResult: "correct",
+  };
+  // 証拠なし＝時刻LWW。新しい側（b）がそのまま採られる。
+  const merged = runtime.mergeLearningState(a, b);
+  assert.equal(merged.srsStage, 1, "証拠なしでは時刻の新しい側を採る");
+  assert.equal(merged.correctStreak, 1, "証拠なしでは時刻の新しい側の連続正解数を採る");
+  // 同じ入力に証拠を添えると、解答数の多い側が勝つ。
+  const withEvidence = runtime.mergeLearningState(
+    a, b,
+    { correct: 6, wrong: 0, history: answerHistory(6, { startMs: EV_BASE }) },
+    { correct: 1, wrong: 0, history: answerHistory(1, { startMs: EV_BASE + 86_400_000 }) },
+  );
+  assert.equal(withEvidence.srsStage, 5, "証拠ありでは解答数の多い側を採る");
+});
+
+test("証拠判定は左右対称で、往復しても振動しない", () => {
+  const runtime = makeWordRuntime();
+  const advanced = twoDeviceState(runtime, evidenceWord({
+    stats: { correct: 6, wrong: 0 },
+    history: answerHistory(6, { startMs: EV_BASE }),
+    progressUpdatedAt: EV_BASE - 3_600_000,
+    learning: {
+      status: "mastered", srsStage: 5, correctStreak: 6,
+      nextReviewAt: EV_BASE + 30 * 86_400_000, srsUpdatedAt: EV_BASE - 3_600_000,
+    },
+  }));
+  const behind = twoDeviceState(runtime, evidenceWord({
+    stats: { correct: 1, wrong: 0 },
+    history: answerHistory(1, { startMs: EV_BASE + 7 * 86_400_000 }),
+    progressUpdatedAt: EV_BASE,
+    learning: {
+      status: "review", srsStage: 1, correctStreak: 1,
+      nextReviewAt: EV_BASE + 86_400_000, srsUpdatedAt: EV_BASE,
+    },
+  }));
+
+  let a = advanced;
+  let b = behind;
+  const seen = [];
+  for (let round = 0; round < 5; round += 1) {
+    const nextA = runtime.mergeAppStates(a, b, { normalized: true });
+    const nextB = runtime.mergeAppStates(b, nextA, { normalized: true });
+    a = nextA;
+    b = nextB;
+    seen.push(runtime.stateSignature(a) + "|" + runtime.stateSignature(b));
+  }
+  assert.equal(seen[0], seen[seen.length - 1], "往復を重ねても状態が行き来しない");
+  assert.equal(
+    a.words[0].learning.srsStage,
+    5,
+    "収束先が進んだ側の段階になる",
+  );
+  assert.equal(
+    runtime.stateSignature(a),
+    runtime.stateSignature(b),
+    "両端末が同じ状態になる",
+  );
+});
+
+test("履歴から押し出された誤答も、誤答数として支配判定を止める", () => {
+  const runtime = makeWordRuntime();
+  // 履歴は直近50件しか残らないので、何十回も解いた語では古い誤答が押し出され、
+  // 履歴上は全件正解に見えることがある。誤答の実体で照合するだけでは
+  // 「相手の誤答を見ていない側」が勝ててしまうため、誤答数でも止める。
+  const manyCorrect = {
+    status: "mastered", srsStage: 7, correctStreak: 12, firstAttempted: true,
+    reviewAt: 0, blockedUntil: 0, nextReviewAt: EV_BASE + 120 * 86_400_000,
+    srsUpdatedAt: EV_BASE + 60_000, lastSrsResult: "correct",
+  };
+  const hadWrongs = {
+    status: "review", srsStage: 3, correctStreak: 2, firstAttempted: true,
+    reviewAt: 0, blockedUntil: 0, nextReviewAt: EV_BASE + 7 * 86_400_000,
+    // 時刻を同じにして、判定が証拠だけで決まるようにする
+    srsUpdatedAt: EV_BASE + 60_000, lastSrsResult: "correct",
+  };
+  // どちらの履歴も直近50件＝すべて正解。誤答は stats にしか残っていない。
+  const trimmedHistory = answerHistory(50, { startMs: EV_BASE });
+  const merged = runtime.mergeLearningState(
+    manyCorrect,
+    hadWrongs,
+    { correct: 60, wrong: 0, history: trimmedHistory },
+    { correct: 58, wrong: 3, history: trimmedHistory },
+  );
+  assert.equal(
+    merged.srsStage,
+    3,
+    "誤答数で相手に劣る側は、正解数が多くても支配側にならない（保守的マージへ落ちる）",
+  );
+
+  // 誤答数が並んでいれば、正解数の多い側が正しく支配する（上の判定が過剰でないこと）
+  const dominates = runtime.mergeLearningState(
+    manyCorrect,
+    hadWrongs,
+    { correct: 60, wrong: 3, history: trimmedHistory },
+    { correct: 58, wrong: 3, history: trimmedHistory },
+  );
+  assert.equal(dominates.srsStage, 7, "誤答数が同じなら正解数の多い側を採る");
+});
+
+test("向きを変えても学習状態が変わらない（ランダム1000通り）", () => {
+  const runtime = makeWordRuntime();
+  // 往復合流だけを見ていると、履歴の和集合が成績を押し上げて同点が崩れ、
+  // 左右非対称な判定バグが隠れる（実際に隠れた）。単発の合流を直接比べる。
+  // 乱数は固定種で、失敗したら同じ入力を再現できるようにする。
+  let seed = 20260808;
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const int = (max) => Math.floor(rnd() * max);
+  const makeSide = (base) => {
+    const correct = int(40);
+    const wrong = int(10);
+    const total = Math.min(50, correct + wrong);
+    const wrongLeft = { n: wrong };
+    return {
+      ...evidenceWord({
+        stats: { correct, wrong },
+        history: Array.from({ length: total }, (_, index) => {
+          const isWrong = wrongLeft.n > 0 && rnd() < 0.3;
+          if (isWrong) wrongLeft.n -= 1;
+          return {
+            at: new Date(base + index * 3_600_000 + int(1000)).toISOString(),
+            correct: !isWrong,
+          };
+        }),
+        progressUpdatedAt: base + int(10) * 86_400_000,
+      }),
+      learning: {
+        status: ["new", "review", "mastered"][int(3)],
+        firstAttempted: true,
+        reviewAt: int(5),
+        blockedUntil: base + int(3) * 86_400_000,
+        correctStreak: int(6),
+        srsStage: int(8),
+        nextReviewAt: base + int(60) * 86_400_000,
+        srsUpdatedAt: base + int(20) * 86_400_000,
+        lastSrsResult: ["correct", "wrong", ""][int(3)],
+      },
+    };
+  };
+
+  for (let trial = 0; trial < 1000; trial += 1) {
+    const left = runtime.normalizeWord(makeSide(EV_BASE));
+    const rightRaw = makeSide(EV_BASE + int(5) * 86_400_000);
+    // 4割は成績を左とぴったり同じにする。支配関係が付かない「同点」は
+    // 判定が従来ロジックへ落ちる分かれ道で、非対称なバグが出るならここ。
+    // 完全なランダムだと同点は400回に1回しか起きず、検査にならない。
+    if (rnd() < 0.4) rightRaw.stats = { ...left.stats };
+    const right = runtime.normalizeWord(rightRaw);
+    const forward = runtime.mergeWord(left, right, "remote").learning;
+    const backward = runtime.mergeWord(right, left, "remote").learning;
+    assert.deepEqual(
+      forward,
+      backward,
+      `${trial}回目: 取り込む向きで学習状態が変わる\n` +
+        `  左 ${JSON.stringify(left.stats)} ${JSON.stringify(left.learning)}\n` +
+        `  右 ${JSON.stringify(right.stats)} ${JSON.stringify(right.learning)}`,
+    );
+  }
+});
+
+test("時計が先に進んだ端末は、相手の誤答を履歴の窓の外へ追い出せない", () => {
+  const runtime = makeWordRuntime();
+  // Codex の指摘。履歴が上限(WORD_HISTORY_LIMIT件)に達していない端末の履歴を
+  // まるごと未来へずらすと、相手の正当な誤答が「最古エントリより古い」となって
+  // 判定から外れ、誤答を持っていない側が証拠で勝ててしまっていた。
+  // 上限未満の履歴は一度も切り詰められていないので、載っていない＝見ていない、と断定できる。
+  //
+  // 時計が進んだ端末は clampSrsTs で時刻の主張を失う（＝従来なら必ず負ける）。
+  // それを再現するため、ここだけは実時刻を基準にする。
+  const now = Date.now();
+  const hour = 3_600_000;
+  const skewedAhead = evidenceWord({
+    stats: { correct: 6, wrong: 1 },
+    // 7件すべてが1時間先。上限には遠く届かない＝切り詰めは起きていない。
+    history: [
+      { at: new Date(now + hour).toISOString(), correct: false },
+      ...answerHistory(6, { startMs: now + hour + 60_000 }),
+    ],
+    progressUpdatedAt: now + hour,
+    learning: {
+      status: "mastered", srsStage: 5, correctStreak: 5,
+      nextReviewAt: now + 30 * 86_400_000, srsUpdatedAt: now + hour,
+    },
+  });
+  const justAnsweredWrong = evidenceWord({
+    stats: { correct: 1, wrong: 1 },
+    history: [
+      ...answerHistory(1, { startMs: now - 120_000 }),
+      { at: new Date(now - 60_000).toISOString(), correct: false },
+    ],
+    progressUpdatedAt: now - 60_000,
+    learning: {
+      status: "review", srsStage: 1, correctStreak: 0, lastSrsResult: "wrong",
+      nextReviewAt: now + 86_400_000, srsUpdatedAt: now - 60_000,
+    },
+  });
+
+  // 「履歴が上限50件に達していれば切り詰め済み」も証明にならない。ちょうど50問
+  // 解いただけの端末は一度も切り詰められていない（Codex の2回目の指摘）。
+  const skewedAtLimit = evidenceWord({
+    stats: { correct: 49, wrong: 1 },
+    history: [
+      { at: new Date(now + hour).toISOString(), correct: false },
+      ...answerHistory(49, { startMs: now + hour + 60_000 }),
+    ],
+    progressUpdatedAt: now + hour,
+    learning: {
+      status: "mastered", srsStage: 5, correctStreak: 40,
+      nextReviewAt: now + 30 * 86_400_000, srsUpdatedAt: now + hour,
+    },
+  });
+
+  for (const [left, right, label] of [
+    [skewedAhead, justAnsweredWrong, "進んだ時計の側から取り込む（履歴7件）"],
+    [justAnsweredWrong, skewedAhead, "誤答した側から取り込む（履歴7件）"],
+    [skewedAtLimit, justAnsweredWrong, "進んだ時計の側から取り込む（履歴ちょうど50件）"],
+    [justAnsweredWrong, skewedAtLimit, "誤答した側から取り込む（履歴ちょうど50件）"],
+  ]) {
+    const merged = runtime.mergeWord(
+      runtime.normalizeWord(left),
+      runtime.normalizeWord(right),
+      "remote",
+    );
+    assert.equal(merged.learning.status, "review", `${label}: 誤答が握りつぶされない`);
+    assert.ok(merged.learning.srsStage <= 1, `${label}: 習得へ戻さない`);
+  }
+});
+
+test("検証を済ませた端末へ、相手の古い検証待ちマークを戻さない", () => {
+  const runtime = makeWordRuntime();
+  // 仮習得(masteryVerify)は「期限到来後の4択で確かめるまで本習得にしない」安全装置。
+  // 両側のORで残すと、合流結果は両端末に保存されるため、検証するたびに相手側の
+  // 古いマークが復活し、永久に本習得へ到達できなくなる（Codex の2回目の指摘）。
+  // 検証は必ず正答数を1増やすので、検証した側は解答数でも時刻でも勝つ。
+  // 勝った側だけを見れば検証結果が正しく伝わり、ループも起きない。
+  const verified = evidenceWord({
+    stats: { correct: 6, wrong: 0 },
+    history: answerHistory(6, { startMs: EV_BASE }),
+    progressUpdatedAt: EV_BASE + 6 * 60_000,
+    learning: {
+      status: "mastered", srsStage: 5, correctStreak: 3,
+      nextReviewAt: EV_BASE + 30 * 86_400_000, srsUpdatedAt: EV_BASE + 6 * 60_000,
+    },
+  });
+  const stillProvisional = evidenceWord({
+    stats: { correct: 5, wrong: 0 },
+    history: answerHistory(5, { startMs: EV_BASE }),
+    progressUpdatedAt: EV_BASE + 5 * 60_000,
+    learning: {
+      status: "mastered", masteryVerify: "flashcard", srsStage: 5, correctStreak: 2,
+      nextReviewAt: EV_BASE + 30 * 86_400_000, srsUpdatedAt: EV_BASE + 5 * 60_000,
+    },
+  });
+
+  for (const [left, right, label] of [
+    [verified, stillProvisional, "検証済みの側から取り込む"],
+    [stillProvisional, verified, "仮習得の側から取り込む"],
+  ]) {
+    const merged = runtime.mergeWord(
+      runtime.normalizeWord(left),
+      runtime.normalizeWord(right),
+      "remote",
+    );
+    assert.equal(
+      Object.hasOwn(merged.learning, "masteryVerify"),
+      false,
+      `${label}: 検証済みの結果が残る（古いマークを戻さない）`,
+    );
+  }
+
+  // 合流結果を両端末へ保存してから、もう一度合流させても復活しない（ループしない）。
+  const first = runtime.mergeWord(
+    runtime.normalizeWord(verified),
+    runtime.normalizeWord(stillProvisional),
+    "remote",
+  );
+  const again = runtime.mergeWord(first, runtime.normalizeWord(stillProvisional), "remote");
+  assert.equal(
+    Object.hasOwn(again.learning, "masteryVerify"),
+    false,
+    "往復してもマークが復活しない",
+  );
+});
+
+test("仮習得の側が解答数で勝つときは、検証待ちマークを持ち越す", () => {
+  const runtime = makeWordRuntime();
+  // 上の裏返し。マークを持つ側が勝つ場合まで消してしまうと、
+  // 未検証のまま本習得が確定して出題されなくなる。
+  const provisionalAhead = evidenceWord({
+    stats: { correct: 7, wrong: 0 },
+    history: answerHistory(7, { startMs: EV_BASE }),
+    progressUpdatedAt: EV_BASE + 7 * 60_000,
+    learning: {
+      status: "mastered", masteryVerify: "flashcard", srsStage: 5, correctStreak: 2,
+      nextReviewAt: EV_BASE + 30 * 86_400_000, srsUpdatedAt: EV_BASE + 7 * 60_000,
+    },
+  });
+  const fewer = evidenceWord({
+    stats: { correct: 4, wrong: 0 },
+    history: answerHistory(4, { startMs: EV_BASE }),
+    progressUpdatedAt: EV_BASE + 4 * 60_000,
+    learning: {
+      status: "mastered", srsStage: 4, correctStreak: 3,
+      nextReviewAt: EV_BASE + 14 * 86_400_000, srsUpdatedAt: EV_BASE + 4 * 60_000,
+    },
+  });
+  for (const [left, right, label] of [
+    [provisionalAhead, fewer, "仮習得の側から取り込む"],
+    [fewer, provisionalAhead, "解答数の少ない側から取り込む"],
+  ]) {
+    const merged = runtime.mergeWord(
+      runtime.normalizeWord(left),
+      runtime.normalizeWord(right),
+      "remote",
+    );
+    assert.equal(
+      merged.learning.masteryVerify,
+      "flashcard",
+      `${label}: 検証待ちを持ち越す`,
+    );
+  }
 });
