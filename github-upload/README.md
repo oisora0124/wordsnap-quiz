@@ -68,6 +68,7 @@ npm test
 | `npm run test:sw` | Service Worker の契約 |
 | `npm run test:scale` | 語数が増えたときの計算量 |
 | `npm run check` | 公開物の整合性のみ（`check-release.mjs`） |
+| `node scripts/serve-local.mjs` | 実ブラウザ検証用に `publish/` を配信（本番と同じヘッダ） |
 
 ### なぜそう検査しているかの記録
 
@@ -82,6 +83,7 @@ npm test
 | [docs/scale-guard.md](docs/scale-guard.md) | 語数が増えたときの計算量。二次に落ちても機能は正しく動く |
 | [docs/data-retention.md](docs/data-retention.md) | サーバー側データの保持方針。**進捗は休眠を理由に消さない** |
 | [docs/d1-integration.md](docs/d1-integration.md) | 実SQLiteでの結合テスト。FakeD1が素通りさせる5種を捕まえる |
+| [docs/browser-e2e.md](docs/browser-e2e.md) | 実ブラウザでの通し検証。**本番サイトではやらない**（実データに触れるため） |
 
 ## D1の初期構築
 
