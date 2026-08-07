@@ -6568,7 +6568,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.73</span>
+        <span class="app-footer-version">バージョン 1.0.74</span>
       </footer>
     </main>
 
@@ -6702,8 +6702,8 @@ const WordBankTelemetry = (() => {
   const ERROR_STATE_KEY = "wordsnap-telemetry-errors:v1";
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
-  // 利用者が「バージョン 1.0.73」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.73";
+  // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
+  const APP_REV = "1.0.74";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -29189,6 +29189,13 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
       if (picked.length >= count) return;
       const key = normalizeMeaning(word.meaning);
       if (seen.has(key)) continue;
+      // 同じ見出し語の別訳は、意味が違っても**どちらも正解**なので誤答にできない。
+      // 内蔵の単語帳は試験ごとに訳を変えてあり（acquire: 習得する/取得する/獲得する）、
+      // 複数の単語帳を入れると同じ語が別訳で共存する。重複判定は単語帳ごとなので
+      // 取り込みでは弾かれず、ここまで残る。
+      // meaningsTooClose は包含関係しか見ないため、この型は素通りする
+      //（実データで 2285組中 2234組がすり抜ける）。
+      if (normalizeTerm(word.term) === normalizeTerm(answer.term)) continue;
       // 訳が近すぎる語は「難易度」ではなく「正解が2つ」の問題になるので、
       // 選択肢が足りなくなる場合でも必ず除外する（allowConfusable でも緩めない）。
       if (meaningsTooClose(answer.meaning, word.meaning)) continue;

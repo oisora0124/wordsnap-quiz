@@ -131,7 +131,7 @@ function buildSandbox() {
     extractFunction("validPair"),
     extractFunction("parseVocabulary"),
     "globalThis.__q = { appStateRef: () => appState, setWords: (w) => { appState.words = w; }," +
-      " builtinPosTag, builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, spellingDistance," +
+      " builtinPosTag, builtinPosTags, posTagsFor, contextDistractorHasBasis, meaningsTooClose, pickDistractors, normalizeMeaning, normalizeTerm, spellingDistance," +
       " normalizeQuizTimeLimit, cefrRankOfLevel, normalizeDailyGoal," +
       " normalizeSpeechRate, normalizeSpeechVoiceUri, buildFlashcardOrder," +
       " sliceWordsByQuizRange, isMasteryVerificationDue, flashcardEligibleIds," +
@@ -2106,4 +2106,51 @@ test("確信度: 進行中のセッションは、途中の設定変更に影響
   // セッション外は現在の設定を見る（次に始めるときから反映される）
   assert.equal(build(null, true)(), true);
   assert.equal(build(null, false)(), false);
+});
+
+// 同じ見出し語の別訳を誤答に使わない。
+//
+// 内蔵の単語帳は試験ごとに訳を変えてある（acquire: 習得する / 取得する / 獲得する）。
+// 重複判定は**単語帳ごと**なので、複数のサンプルを入れると同じ語が別訳で共存する。
+// この状態で片方を誤答に選ぶと、どちらも正しい選択肢になり問題が成立しない。
+//
+// meaningsTooClose は包含関係しか見ないため、この型は素通りする
+// （実データで 2285組中 2234組がすり抜けた）。
+// 修正前は、重複語が候補の大半を占める状況で 600試行中 333件が壊れていた。
+test("同じ見出し語の別訳は誤答にしない（正解が2つになる）", () => {
+  const sandbox = buildSandbox();
+  const answer = { id: "a1", term: "acquire", meaning: "習得する", deckId: "exam", pos: { tag: "v" } };
+  const pool = [
+    answer,
+    { id: "a2", term: "acquire", meaning: "取得する", deckId: "toeic", pos: { tag: "v" } },
+    { id: "a3", term: "acquire", meaning: "獲得する", deckId: "ielts", pos: { tag: "v" } },
+    { id: "b1", term: "budget", meaning: "予算", deckId: "toeic", pos: { tag: "n" } },
+    { id: "c1", term: "invoice", meaning: "請求書", deckId: "toeic", pos: { tag: "n" } },
+    { id: "d1", term: "revenue", meaning: "収益", deckId: "toeic", pos: { tag: "n" } },
+  ];
+  // 何度引いても混ざらないこと（乱択なので1回では足りない）。
+  for (let i = 0; i < 50; i += 1) {
+    const picked = sandbox.pickDistractors(pool, answer, 3);
+    for (const word of picked) {
+      assert.notEqual(
+        sandbox.normalizeTerm(word.term),
+        sandbox.normalizeTerm(answer.term),
+        `同じ語の別訳が誤答に入った: ${word.term}「${word.meaning}」`,
+      );
+    }
+  }
+});
+
+test("同じ語を除いても、選択肢は必要数そろう", () => {
+  // 除外しすぎて4択に満たなくなっていないことの確認。
+  const sandbox = buildSandbox();
+  const answer = { id: "a1", term: "acquire", meaning: "習得する", deckId: "exam", pos: { tag: "v" } };
+  const pool = [
+    answer,
+    { id: "a2", term: "acquire", meaning: "取得する", deckId: "toeic", pos: { tag: "v" } },
+    { id: "b1", term: "budget", meaning: "予算", deckId: "toeic", pos: { tag: "n" } },
+    { id: "c1", term: "invoice", meaning: "請求書", deckId: "toeic", pos: { tag: "n" } },
+    { id: "d1", term: "revenue", meaning: "収益", deckId: "toeic", pos: { tag: "n" } },
+  ];
+  assert.equal(sandbox.pickDistractors(pool, answer, 3).length, 3, "誤答が3つそろわない");
 });
