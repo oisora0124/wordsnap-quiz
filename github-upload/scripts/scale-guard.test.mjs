@@ -382,3 +382,59 @@ test("同期1回ぶんの処理が、9000語でも現実的な時間で終わる
   });
   assert.ok(ms < 5000, `9000語の同期1回ぶんに ${ms.toFixed(0)}ms かかっている`);
 });
+
+// ---- 起動時の同期1回ぶん ----
+//
+// 利用者が体感するのはここ。内訳（9000語・開発機）:
+//   stateSignature(local)   19ms
+//   normalizeState(remote) 134ms
+//   mergeAppStates          234ms   ← 53%
+//   stateSignature(merged)   32ms
+//   stateSignature(remote)   24ms
+//   合計                     443ms  （スマホ換算 1.3〜2.2秒）
+//
+// **10秒ごとのポーリングではここを通らない。** サーバは sinceRev 付きGETに対し
+// 変更が無ければ state: null を返し、クライアントは `if (remote.state)` で
+// マージごと飛ばす（scripts/d1-integration.test.mjs で実挙動を確認済み）。
+// つまりこのコストは「アプリを開いたとき」と「他端末が実際に変更したとき」だけ。
+//
+// 署名3回はどれも用途が違い、冗長ではない:
+//   local vs merged  → 画面を更新するか
+//   merged vs remote → サーバへ送るか
+test("起動時の同期1回ぶんが、語数に対して線形にとどまる", () => {
+  const run = (n) => {
+    const local = rt.normalizeState(makeState(n, 0));
+    const remoteRaw = makeState(n, 1);
+    return () => {
+      rt.stateSignature(local);
+      const nr = rt.normalizeState(remoteRaw);
+      const merged = rt.mergeAppStates(local, nr, { normalized: true });
+      rt.stateSignature(merged);
+      rt.stateSignature(nr);
+    };
+  };
+  const small = run(SMALL);
+  const large = run(LARGE);
+  const perWordSmall = fastest(2, small) / SMALL;
+  const perWordLarge = fastest(2, large) / LARGE;
+  const detail = `${SMALL}語=${(perWordSmall * 1000).toFixed(1)}µs/語, ${LARGE}語=${(perWordLarge * 1000).toFixed(1)}µs/語`;
+  assert.ok(
+    perWordLarge / perWordSmall < 1.5,
+    `起動時の同期: 1語あたりが ${(perWordLarge / perWordSmall).toFixed(2)}倍に増えている（${detail}）`,
+  );
+});
+
+test("内蔵単語帳を全部入れた規模（9000語）の起動時同期が、現実的な時間で終わる", () => {
+  // 比だけでは「線形のまま10倍遅くなる」を見逃す。絶対値にも緩い上限を置く。
+  // ここが落ちたときは、計算量ではなく定数倍の悪化を疑う。
+  const local = rt.normalizeState(makeState(9000, 0));
+  const remoteRaw = makeState(9000, 1);
+  const ms = fastest(1, () => {
+    rt.stateSignature(local);
+    const nr = rt.normalizeState(remoteRaw);
+    const merged = rt.mergeAppStates(local, nr, { normalized: true });
+    rt.stateSignature(merged);
+    rt.stateSignature(nr);
+  });
+  assert.ok(ms < 4000, `9000語の起動時同期に ${ms.toFixed(0)}ms かかっている`);
+});
