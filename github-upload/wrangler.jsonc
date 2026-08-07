@@ -6,7 +6,10 @@
   "pages_build_output_dir": "publish",
 
   // D1バインディング名は 'DB'（functions/api/wordsnap-state.js が env.DB を参照）。
-  // migrations_dir はこのリポジトリの migrations/。0001=states, 0002=state_revisions。
+  // migrations_dir はこのリポジトリの migrations/。
+  // 0001=states, 0002=state_revisions, 0003=feedback, 0004=rooms(同期V2),
+  // 0005=rate_limits, 0006=telemetry, 0007=telemetry.created_at の索引。
+  // 一覧と「無いとどうなるか」は migrations/README.md にある。
   // database_name は未確認のため、authoritative な database_id で固定する。
   "d1_databases": [
     {
