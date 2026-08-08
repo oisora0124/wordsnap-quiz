@@ -637,7 +637,6 @@ const learningSandbox = {};
 new Script(
   "const SRS_DAY_MS = 86400000;\n" +
     "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];\n" +
-    "const WORD_HISTORY_LIMIT = 50;\n" +
     "const SLOW_ANSWER_MS = 5000;\n" +
     "const MAX_TIMED_ANSWER_MS = 60000;\n" +
     // 個人適応SRSは既定OFF。OFF時に従来の間隔・判定と完全一致することを、
@@ -684,7 +683,6 @@ assert.ok(mergeLearningStart >= 0 && mergeLearningEnd > mergeLearningStart,
 const mergeLearningSandbox = {};
 new Script(
   "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];\n" +
-  "const WORD_HISTORY_LIMIT = 50;\n" +
     `${publicHtml.slice(mergeLearningStart, mergeLearningEnd)}\n` +
     "globalThis.__mergeLearning = mergeLearningState;",
   { filename: "learning-merge-check.js" },
@@ -704,58 +702,6 @@ assert.equal(mergedLearning.status, "review",
 assert.equal(mergedLearning.srsUpdatedAt, validRecent.srsUpdatedAt,
   "a far-future learning timestamp must not survive synchronization");
 
-// 学習マージの因果判定（証拠ベクトル）。時計が遅れた端末は clampSrsTs では弾けないため、
-// 「適用した解答の数」で前後を決める。設計は docs/DESIGN-2026-08-08-srs-merge-evidence.md。
-const evidenceHistory = (count, correct, startMs) =>
-  Array.from({ length: count }, (_, index) => ({
-    at: new Date(startMs + index * 60_000).toISOString(),
-    correct,
-  }));
-const evidenceBase = Date.UTC(2026, 6, 1);
-const advancedLearning = {
-  status: "mastered", srsStage: 5, correctStreak: 6,
-  srsUpdatedAt: evidenceBase - 3_600_000, nextReviewAt: evidenceBase + 30 * 86_400_000,
-  lastSrsResult: "correct",
-};
-const behindLearning = {
-  status: "review", srsStage: 1, correctStreak: 1,
-  srsUpdatedAt: evidenceBase, nextReviewAt: evidenceBase + 86_400_000,
-  lastSrsResult: "correct",
-};
-const advancedEvidence = {
-  correct: 6, wrong: 0, history: evidenceHistory(6, true, evidenceBase),
-};
-const behindEvidence = {
-  correct: 1, wrong: 0, history: evidenceHistory(1, true, evidenceBase + 7 * 86_400_000),
-};
-for (const [left, right, leftEvidence, rightEvidence, direction] of [
-  [advancedLearning, behindLearning, advancedEvidence, behindEvidence, "local-first"],
-  [behindLearning, advancedLearning, behindEvidence, advancedEvidence, "remote-first"],
-]) {
-  const merged = mergeLearningSandbox.__mergeLearning(left, right, leftEvidence, rightEvidence);
-  assert.equal(merged.srsStage, 5,
-    `a lagging device clock must not roll back SRS progress (${direction})`);
-  assert.equal(merged.status, "mastered",
-    `a lagging device clock must not roll back mastery (${direction})`);
-}
-// 負けた側にしかない誤答があるときは証拠判定を使わず、復習へ戻す側を守る。
-const unseenWrongMerged = mergeLearningSandbox.__mergeLearning(
-  { ...advancedLearning, srsUpdatedAt: evidenceBase - 3_600_000 },
-  { ...behindLearning, srsStage: 1, correctStreak: 0, lastSrsResult: "wrong" },
-  { correct: 6, wrong: 1, history: [
-    { at: new Date(evidenceBase - 86_400_000).toISOString(), correct: false },
-    ...evidenceHistory(6, true, evidenceBase),
-  ] },
-  { correct: 1, wrong: 1, history: [
-    ...evidenceHistory(1, true, evidenceBase),
-    { at: new Date(evidenceBase + 7 * 86_400_000).toISOString(), correct: false },
-  ] },
-);
-assert.equal(unseenWrongMerged.status, "review",
-  "a wrong answer the winning side never saw must not be dropped by the evidence rule");
-assert.ok(unseenWrongMerged.srsStage <= 1,
-  "a wrong answer the winning side never saw must keep the SRS stage low");
-
 // 削除墓標は複数端末マージのデータ保護境界。実際の mergeAppStates を固定状態で動かし、
 // 削除語の復活防止と、別デッキの同名語を巻き込まないことを同時に確認する。
 const mergeStateStart = publicHtml.indexOf("function mergeAppStates(");
@@ -773,7 +719,6 @@ new Script(
     `${publicHtml.slice(progressMsStart, progressMsEnd)}\n` +
   "const LEARNING_SCHEMA_VERSION = 1;\n" +
     "const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];\n" +
-    "const WORD_HISTORY_LIMIT = 50;\n" +
     "const defaultState = () => ({ words: [], decks: [] });\n" +
     "const createId = () => 'generated-id';\n" +
     "const sanitizeId = (value) => String(value || '').replace(/[^A-Za-z0-9_-]/g, '') || createId();\n" +

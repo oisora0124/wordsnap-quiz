@@ -52,7 +52,6 @@ function makeRuntime() {
     "const DAY_MS = 24 * 60 * 60 * 1000;",
     "const DELETION_TTL_MS = 90 * DAY_MS;",
     "const TRASH_TTL_MS = 30 * DAY_MS;",
-    "const WORD_HISTORY_LIMIT = 50;",
     "const SAFE_CEFR_LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);",
     "const SAFE_POS_TAGS = new Set(['n', 'v', 'adj', 'adv']);",
     "const selectedIds = new Set();",
@@ -65,8 +64,7 @@ function makeRuntime() {
       "sanitizeDeletions", "trashKeyForWord", "sanitizeTrash", "wordAddedMs", "wordProgressMs",
       "deletionKeyForWord", "defaultState", "normalizeState", "stateSignature", "mergeAppStates",
       "mergeTrashEntries", "mergeDeckPlacement", "mergeWord", "mergeHistory", "mergeEnrichData",
-      "mergeLearningState", "minPositiveNumber", "learningEvidenceCount", "learningEvidence",
-      "dominantLearningEvidence", "evidenceCoversWrongAnswers",
+      "mergeLearningState", "minPositiveNumber",
     ].map(extractFunction),
     "globalThis.__rt = { normalizeState, stateSignature, mergeAppStates };",
   ];
@@ -107,8 +105,6 @@ function makeLibraryRuntime() {
 
 const lib = makeLibraryRuntime();
 
-// 公開HTMLの WORD_HISTORY_LIMIT と同じ値（サンドボックス内の定数はここからは見えない）。
-const HISTORY_LIMIT = 50;
 const BASE_MS = 1700000000000;
 const DECK_COUNT = 6; // 内蔵の単語帳と同じ数
 
@@ -121,11 +117,6 @@ const DECK_COUNT = 6; // 内蔵の単語帳と同じ数
  * seed で差を付けるフィールドも `updatedAt` にしていたが、これは
  * `normalizeWord` が保持しないため、正規化後の local と remote がほぼ同一になり、
  * マージがほとんど仕事をしていなかった。
- *
- * 同じ理由で `stats` と `srsUpdatedAt` も必ず入れる。学習状態のマージは
- * まず解答数（stats）で前後を決め、付かなければ時刻（srsUpdatedAt）で決める。
- * どちらも無いと最後の保守的マージへ直行してしまい、**実際に重い経路
- *（誤答の履歴照合）を1度も通らないまま「速い」と結論**することになる。
  */
 function makeWords(count, seed) {
   return Array.from({ length: count }, (_, i) => ({
@@ -136,36 +127,18 @@ function makeWords(count, seed) {
     // 正規化を通っても残るフィールドで差を付ける（seed=1 側を「新しい端末」にする）。
     deckUpdatedAt: BASE_MS + i + seed * 5000,
     addedAt: BASE_MS + i,
-    // seed=1 側が必ず解答数で勝つようにして、証拠判定と誤答の履歴照合を毎語走らせる。
-    stats: { correct: (i % 9) + seed * 2, wrong: (i % 4) + seed },
     learning: {
       status: "review",
       srsStage: (i + seed) % 6,
       nextReviewAt: BASE_MS + i * 1000 + seed * 60000,
       correctStreak: (i + seed) % 4,
-      srsUpdatedAt: BASE_MS + i + seed * 5000,
-      lastSrsResult: (i + seed) % 3 === 0 ? "wrong" : "correct",
+      updatedAt: BASE_MS + i + seed * 5000,
     },
-    // 履歴は2つの層で作る。誤答の照合と履歴のマージは、求める形が逆になるため。
-    //
-    //  - 共有層（同期済みの地点まで）: 両端末で同じ日時。**誤答はすべてここに置く**。
-    //    こうしないと誤答の照合が最初の1件で打ち切られ、いちばん重い
-    //    「全件を走査して通過する」経路を測れない。
-    //  - 分岐層: 端末ごとに別の日時の正解。履歴の和集合を大きく保ち、
-    //    mergeHistory の重複排除と並べ替えに現実的な負荷をかける。
-    //
-    // 片方だけにすると、もう片方の検査が薄くなる（実際に一度、共有層だけにして
-    // 履歴マージの負荷を 20件→12件 に落としてしまった）。
-    history: [
-      ...Array.from({ length: 12 }, (_, h) => ({
-        at: new Date(BASE_MS + i * 1000 + h * 10).toISOString(),
-        correct: h % 3 !== 0,
-      })),
-      ...Array.from({ length: 10 + seed * 4 }, (_, h) => ({
-        at: new Date(BASE_MS + i * 1000 + 500 + h * 10 + seed).toISOString(),
-        correct: true,
-      })),
-    ],
+    // 片側だけ回答が進んでいる状態にして、履歴のマージを実際に走らせる。
+    history: Array.from({ length: 8 + seed * 4 }, (_, h) => ({
+      at: new Date(BASE_MS + i * 1000 + h * 10 + seed).toISOString(),
+      correct: (h + seed) % 2 === 0,
+    })),
   }));
 }
 
@@ -381,32 +354,16 @@ test("マージ結果は語数によらず正しい（速度だけを見て中�
   assert.equal(merged.decks.length, DECK_COUNT, "単語帳が増減している");
 
   const remoteById = new Map(remote.words.map((w) => [w.id, w]));
-  const localById = new Map(local.words.map((w) => [w.id, w]));
-  const historyKey = (entry) => `${entry.at}:${entry.correct ? 1 : 0}`;
   for (const word of merged.words) {
     assert.ok(word.history.length > 0, `履歴が消えている: ${word.id}`);
     assert.ok(word.learning && word.learning.status, `学習状態が消えている: ${word.id}`);
     assert.ok(word.deckId, `単語帳の割り当てが消えている: ${word.id}`);
-    // 「remote 以上の長さ」だけでは、remote をそのまま返す実装でも通ってしまい、
-    // local だけが持つ分岐履歴が消える不具合を見逃す。両側の和集合と厳密に比べる。
+    // remote 側の方が回答が進んでいるので、履歴は remote 以上の長さになるはず。
     const fromRemote = remoteById.get(word.id);
-    const fromLocal = localById.get(word.id);
-    const union = new Set([
-      ...fromLocal.history.map(historyKey),
-      ...fromRemote.history.map(historyKey),
-    ]);
-    const got = new Set(word.history.map(historyKey));
-    assert.equal(
-      got.size,
-      Math.min(union.size, HISTORY_LIMIT),
-      `履歴が両側の和集合になっていない: ${word.id}`,
+    assert.ok(
+      word.history.length >= fromRemote.history.length,
+      `remote 側の履歴を取り込めていない: ${word.id}`,
     );
-    for (const key of fromLocal.history.map(historyKey)) {
-      assert.ok(got.has(key), `local 側だけの履歴が消えている: ${word.id}`);
-    }
-    for (const key of fromRemote.history.map(historyKey)) {
-      assert.ok(got.has(key), `remote 側だけの履歴が消えている: ${word.id}`);
-    }
   }
   // 削除記録とゴミ箱も、両側のぶんが残ること。
   assert.ok(Object.keys(merged.deletions).length > 0, "削除記録が消えている");

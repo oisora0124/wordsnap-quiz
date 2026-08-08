@@ -6568,7 +6568,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.76</span>
+        <span class="app-footer-version">バージョン 1.0.77</span>
       </footer>
     </main>
 
@@ -6703,7 +6703,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.76";
+  const APP_REV = "1.0.77";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7479,10 +7479,6 @@ const SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60, 120];
 // 同期で流れてきたもの）とみなす。放置すると status=mastered かつ期限が未来の語が
 // availableQuizWords() のどの分岐にも入らず、時計を正しく戻しても自動出題から永久に消える。
 const SRS_MAX_FUTURE_DAYS = 400;
-// 1語あたりに残す解答履歴の件数。保存量を抑えるため直近だけを残す。
-// evidenceCoversWrongAnswers が「押し出されて消えた可能性があるか」の判定に使うので、
-// 実際に切り詰める側と必ず同じ値を参照させる。
-const WORD_HISTORY_LIMIT = 50;
 // リーディング用途では「時間をかければ分かる」より「一瞬で意味が取れる」ことが重要。
 // これ以上悩んで正解した語は"未定着"とみなし、習得（mastered）へは進めない。
 // 例文モードのように文を読む時間が乗る出題では、この速度判定は無効化する。
@@ -19041,13 +19037,10 @@ async function resolvePos(term) {
 
 function normalizeHistory(history) {
   if (!Array.isArray(history)) return [];
-  // 日時を持たない解答は現在時刻で補うが、**1件ずつ違う値にする**。
-  // 補う値を全件で共有すると、mergeHistory の重複排除キー（日時＋正誤）が
-  // 一致してしまい、別々の解答が1件へ潰れて記録が消える。
-  const fallbackBase = Date.now();
+  const fallbackAt = new Date().toISOString();
   return history
-    .map((entry, index) => {
-      let at = new Date(fallbackBase + index).toISOString();
+    .map((entry) => {
+      let at = fallbackAt;
       try {
         // 未設定値は従来どおり現在時刻で補い、値がある場合だけ日時として正規化する。
         if (entry?.at) {
@@ -19060,7 +19053,7 @@ function normalizeHistory(history) {
       return { at, correct: Boolean(entry?.correct) };
     })
     .sort((a, b) => String(a.at).localeCompare(String(b.at)))
-    .slice(-WORD_HISTORY_LIMIT);
+    .slice(-50);
 }
 
 // 実現しえないほど先の復習予定を 0（SRS未開始）へ戻す。段階（srsStage）は保つので
@@ -20598,13 +20591,7 @@ function mergeWord(localWord, remoteWord, source) {
     ),
     stats,
     history,
-    // 学習状態は時刻ではなく「適用した解答の数」で前後を決める（learningEvidence 参照）。
-    learning: mergeLearningState(
-      localWord.learning,
-      remoteWord.learning,
-      learningEvidence(localWord),
-      learningEvidence(remoteWord),
-    ),
+    learning: mergeLearningState(localWord.learning, remoteWord.learning),
   };
 }
 
@@ -20619,7 +20606,7 @@ function mergeHistory(a = [], b = []) {
   });
   return [...entries.values()]
     .sort((x, y) => String(x.at).localeCompare(String(y.at)))
-    .slice(-WORD_HISTORY_LIMIT);
+    .slice(-50);
 }
 
 function mergeEnrichData(a, b) {
@@ -20632,7 +20619,7 @@ function mergeEnrichData(a, b) {
   return base;
 }
 
-function mergeLearningState(a, b, evidenceA = null, evidenceB = null) {
+function mergeLearningState(a, b) {
   const rank = { new: 0, review: 1, mastered: 2 };
   const statusOf = (learning) =>
     learning && rank[learning.status] !== undefined ? learning.status : "new";
@@ -20655,35 +20642,15 @@ function mergeLearningState(a, b, evidenceA = null, evidenceB = null) {
   const updatedA = clampSrsTs(a?.srsUpdatedAt);
   const updatedB = clampSrsTs(b?.srsUpdatedAt);
 
-  // 時刻より先に「適用した解答の数」で前後を決める。clampSrsTs は時計が進んだ端末しか
-  // 弾けないため、時計が遅れた端末は解答が少なくても新しい時刻を主張して勝ってしまい、
-  // 進んだ端末の段階・連続正解数を巻き戻す。解答数は端末の時計に依存しないので、
-  // これを時刻に頼らず判定できる。ただし採用するのは、勝つ側が負ける側の誤答を
-  // すべて持っているときだけ（誤答の取りこぼし＝忘れた語が復習に戻らない、を
-  // 今日より起こりやすくしないため）。それ以外は下の従来判定へ落とす。
-  const dominant = dominantLearningEvidence(evidenceA, evidenceB);
-  const evidenceWinner =
-    dominant === "a" && evidenceCoversWrongAnswers(evidenceA, evidenceB)
-      ? "a"
-      : dominant === "b" && evidenceCoversWrongAnswers(evidenceB, evidenceA)
-        ? "b"
-        : "";
-
   // SRS対応端末同士では最後に答えた側を優先する。これにより、新しい誤答が
   // 古い mastered 状態にマージで負けて復習対象から消えることを防ぐ。
-  if (evidenceWinner || (updatedA !== updatedB && (updatedA > 0 || updatedB > 0))) {
-    const winnerSide = evidenceWinner || (updatedA > updatedB ? "a" : "b");
-    const newer = (winnerSide === "a" ? a : b) || {};
+  if (updatedA !== updatedB && (updatedA > 0 || updatedB > 0)) {
+    const newer = updatedA > updatedB ? a || {} : b || {};
     const status = statusOf(newer);
     const stage = Math.max(
       0,
       Math.min(SRS_INTERVAL_DAYS.length - 1, Math.floor(Number(newer.srsStage) || 0)),
     );
-    // 検証待ちマーク（仮習得）は勝った側だけを見る。両方のORにすると、検証を済ませた
-    // 端末へ相手の古いマークが戻り、しかも合流結果は両端末に保存されるため、
-    // 検証するたびにマークが復活して永久に本習得へ到達できなくなる。
-    // 検証（期限到来後の4択に正解）は必ず正答数を1増やすので、検証した側は
-    // 時刻でも解答数でも勝つ。勝った側だけを見れば、その検証結果が正しく伝わる。
     return {
       status,
       ...(status === "mastered" && newer.masteryVerify === "flashcard"
@@ -20744,100 +20711,6 @@ function mergeLearningState(a, b, evidenceA = null, evidenceB = null) {
 function minPositiveNumber(...values) {
   const positives = values.map(Number).filter((value) => value > 0);
   return positives.length ? Math.min(...positives) : 0;
-}
-
-// 語ごとに呼ばれるので、クロージャを作らずに済むよう外に出してある。
-function learningEvidenceCount(value) {
-  const n = Math.floor(Number(value) || 0);
-  return n > 0 ? n : 0;
-}
-
-// 学習事象の「証拠」。解答処理（submitAnswer）は1問につき必ず stats を1つ増やし、
-// 履歴を1件足し、applyLearningResult で learning を更新する。この3つは同じ経路にしか無く、
-// applyLearningResult の呼び出しも1か所だけ。したがって (正答数, 誤答数) は
-// 「この端末がこの語に適用した解答の数」であり、端末の時計にまったく依存しない。
-// 合流では成分ごとに max を取るので、合流後も単調増加する。
-function learningEvidence(word) {
-  return {
-    correct: learningEvidenceCount(word?.stats?.correct),
-    wrong: learningEvidenceCount(word?.stats?.wrong),
-    history: Array.isArray(word?.history) ? word.history : [],
-  };
-}
-
-// 片側が正答数・誤答数の両方で相手以上なら、相手の解答を数の上ではすべて含んでいる
-// とみなし、その側を採る。互いに相手に無い解答を持つ（＝真に並行した更新）ときや
-// 同数のときは "" を返し、従来の時刻判定・保守的マージへ委ねる。
-function dominantLearningEvidence(a, b) {
-  if (!a || !b) return "";
-  const aCovers = a.correct >= b.correct && a.wrong >= b.wrong;
-  const bCovers = b.correct >= a.correct && b.wrong >= a.wrong;
-  if (aCovers === bCovers) return ""; // 同数（両方true）または並行（両方false）
-  return aCovers ? "a" : "b";
-}
-
-// 負けた側の誤答を、勝った側が取り込んでいるか。誤答は「忘れた」証拠なので、
-// 取りこぼすと復習に戻らなくなる（過剰出題より害が大きい方向）。数だけでは
-// 「別々の誤答を1回ずつ持つ」場合を見分けられないため、履歴の実体で照合する。
-// 負けた側の誤答が1件でも勝った側の履歴に無ければ、証拠判定を使わない。例外は設けない。
-//
-// 履歴は WORD_HISTORY_LIMIT 件で切り詰められるので、「古い誤答は押し出されただけで、
-// 勝った側も見ているはず」と免除したくなる。実際に一度そう書いたが、
-// **「押し出された」と「見ていない」はデータから区別できない**:
-//   - 履歴の日時は端末の時計由来なので、時計が先に進んだ端末は履歴全体が未来へずれ、
-//     相手の正当な誤答を丸ごと「古い」側へ追い出せてしまう
-//   - 「件数が上限に達している」も切り詰めの証明にはならない（ちょうど上限件だけ
-//     解答した端末は一度も切り詰められていない）
-// どちらの免除条件も、時計を進めた端末が誤答を握りつぶす経路を残した。
-// 免除しなければ、この経路は構成的に存在しない。
-//
-// 照合できるのは履歴に実体が残っている誤答だけ。次の2つは「確かめられない」ので
-// 見ていない扱いにする。どちらも実際に穴を作っていた（レビューで指摘された）:
-//
-//   1. 成績が主張する誤答数より、履歴に残る誤答が少ない場合。
-//      差分は上限で押し出されており、勝った側が見たか確かめる術がない。
-//      放置すると「両端末とも誤答1回だが中身は別」で照合が空振りして通り、
-//      負けた側の復習状態が消える。
-//   2. 負けた側の誤答が、勝った側の最新の解答より新しい場合。
-//      勝った側がまだ見ていない解答なので照合が成立しない。
-//      normalizeHistory が不正な `at` を現在時刻で補うため、実体の違う誤答が
-//      偶然一致することがあるが、その偽陽性もここで落ちる。
-//
-// 代償は、1語に50件以上を積んだ端末で古い誤答が押し出されていると証拠判定が
-// 使えなくなること。これは「直らないだけ」で従来判定へ落ちるだけなので安全側。
-//
-// 同期のたびに全語で呼ばれるため、Set も中間配列もクロージャも作らずに走査する
-//（履歴は1語あたり最大 WORD_HISTORY_LIMIT 件なので、素朴な二重ループで十分に速い）。
-function evidenceCoversWrongAnswers(winner, loser) {
-  const winnerHistory = winner?.history || [];
-  const loserHistory = loser?.history || [];
-  let loserWrongEntries = 0;
-  for (const entry of loserHistory) {
-    if (entry && !entry.correct) loserWrongEntries += 1;
-  }
-  // 1. 押し出されて確かめられない誤答がある
-  if (loserWrongEntries < learningEvidenceCount(loser?.wrong)) return false;
-  if (loserWrongEntries === 0) return true;
-  let winnerNewest = "";
-  for (const entry of winnerHistory) {
-    const at = String(entry?.at || "");
-    if (at > winnerNewest) winnerNewest = at;
-  }
-  for (const entry of loserHistory) {
-    if (!entry || entry.correct) continue;
-    const at = String(entry.at || "");
-    // 2. 勝った側の最新の解答より新しい誤答は、まだ見られていない
-    if (!(at < winnerNewest)) return false;
-    let covered = false;
-    for (const known of winnerHistory) {
-      if (known && !known.correct && String(known.at || "") === at) {
-        covered = true;
-        break;
-      }
-    }
-    if (!covered) return false;
-  }
-  return true;
 }
 
 function applyMergedRemoteState(remoteState, suppliedOptions) {
@@ -30538,7 +30411,7 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
       currentQuiz.context ? "context-choice" : "meaning-choice",
     );
   }
-  if (word.history.length > WORD_HISTORY_LIMIT) word.history = word.history.slice(-WORD_HISTORY_LIMIT);
+  if (word.history.length > 50) word.history = word.history.slice(-50);
   // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
   // 場合の保険で、実際には◯問後の条件が先に成立することが多い（OR判定はavailableQuizWords側）
   const answeredAt = Date.now();
