@@ -2301,6 +2301,7 @@ textarea:focus-visible {
 
 .deck-pick select,
 .deck-move select,
+.selection-move select,
 #saveDeckSelect {
   padding: 0.4rem 0.55rem;
   color: var(--ink);
@@ -3414,6 +3415,13 @@ textarea:focus-visible {
   color: var(--accent-text);
   font-size: 0.84rem;
   font-weight: 700;
+}
+
+/* 選んだ単語の一括移動：select + ボタンをひとまとまりにして詰めて並べる */
+.selection-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .ghost.mini {
@@ -5992,6 +6000,10 @@ accurate 正確な"
             <div id="selectionActions" class="selection-actions" hidden>
               <span id="selectionCount" class="selection-count">0件 選択中</span>
               <button id="reviewSelectedButton" class="secondary" type="button">選んだ単語を解く</button>
+              <span class="selection-move">
+                <select id="moveSelectedDeckSelect" aria-label="選んだ単語の移動先の単語帳"></select>
+                <button id="moveSelectedButton" class="ghost mini" type="button">選んだ単語を移動</button>
+              </span>
               <button id="deleteSelectedButton" class="ghost mini danger" type="button">選んだ単語を削除</button>
               <button id="clearSelectionButton" class="ghost mini" type="button">選択解除</button>
             </div>
@@ -6568,7 +6580,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.77</span>
+        <span class="app-footer-version">バージョン 1.0.78</span>
       </footer>
     </main>
 
@@ -6703,7 +6715,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.77";
+  const APP_REV = "1.0.78";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -16863,6 +16875,8 @@ const elements = {
   selectionActions: document.querySelector("#selectionActions"),
   selectionCount: document.querySelector("#selectionCount"),
   reviewSelectedButton: document.querySelector("#reviewSelectedButton"),
+  moveSelectedDeckSelect: document.querySelector("#moveSelectedDeckSelect"),
+  moveSelectedButton: document.querySelector("#moveSelectedButton"),
   deleteSelectedButton: document.querySelector("#deleteSelectedButton"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   exportButton: document.querySelector("#exportButton"),
@@ -25333,6 +25347,15 @@ function renderSelection() {
     elements.selectAllCheckbox.setAttribute("aria-label", `${actionLabel}（${visible.length}件）`);
     if (elements.selectAllLabel) elements.selectAllLabel.textContent = actionLabel;
   }
+  if (elements.moveSelectedDeckSelect) {
+    // 利用者が移動先を選び直していたら、その選択を再描画で捨てない（saveDeckSelect と同じ流儀）。
+    const chosen = elements.moveSelectedDeckSelect.value;
+    const keepChosen = chosen && appState.decks.some((deck) => deck.id === chosen);
+    const preferred = keepChosen
+      ? chosen
+      : (appState.decks.find((deck) => deck.id !== appState.activeDeckId) || appState.decks[0])?.id;
+    elements.moveSelectedDeckSelect.innerHTML = deckOptionsMarkup(preferred);
+  }
 }
 
 // Updates just one saved-word row in place (stats text + history dots) instead
@@ -32733,6 +32756,45 @@ elements.selectAllCheckbox.addEventListener("change", () => {
 elements.reviewSelectedButton.addEventListener("click", () =>
   startReview([...selectedIds], { order: "priority" }),
 );
+
+// 選んだ単語をまとめて別の単語帳へ移動する。取り消し可能な非破壊操作なので
+// 削除・全消去と違い armDangerButton の2段階確認は付けない。
+elements.moveSelectedButton?.addEventListener("click", () => {
+  const deckId = elements.moveSelectedDeckSelect?.value;
+  if (!deckId || !appState.decks.some((deck) => deck.id === deckId)) {
+    setStatus("移動先の単語帳を選んでください。");
+    return;
+  }
+  // 実在する単語だけを対象にする（一括削除ハンドラと同じ流儀）
+  const ids = [...selectedIds].filter((id) => appState.words.some((word) => word.id === id));
+  if (ids.length === 0) {
+    setStatus("移動する単語が選択されていません。");
+    return;
+  }
+  const idSet = new Set(ids);
+  // すでに移動先デッキにいる単語は数えない・触らない。
+  // 触ると deckUpdatedAt が無駄に更新され、他端末で行われた移動を上書きしてしまう。
+  const targets = appState.words.filter((word) => idSet.has(word.id) && word.deckId !== deckId);
+  if (targets.length === 0) {
+    setStatus(`選んだ単語はすでにすべて単語帳「${deckName(deckId)}」に入っています。`);
+    return;
+  }
+  const snapshot = snapshotState();
+  const movedAt = Date.now();
+  targets.forEach((word) => {
+    word.deckId = deckId;
+    // 移動時刻を残す。これが無いとマージでローカル優先に倒れ、別端末での移動が消える。
+    word.deckUpdatedAt = movedAt;
+  });
+  // 移動した単語は、いま表示中の単語帳から外れて画面から消える。選択を残すと
+  // 「5件 選択中」と出ているのにチェックが1つも見えない状態になり、そのまま
+  // 「選んだ単語を削除」を押すと見えない単語が消える。setActiveDeck が切替時に
+  // 選択を捨てているのと同じ理由で、ここでも捨てる（一括削除と同じ扱い）。
+  selectedIds.clear();
+  saveState();
+  offerUndo(snapshot);
+  setStatus(`${targets.length}件を単語帳「${deckName(deckId)}」へ移動しました。`);
+});
 
 // 選んだ単語をまとめて削除（ゴミ箱に30日保管・元に戻せる）
 elements.deleteSelectedButton?.addEventListener("click", () => {
