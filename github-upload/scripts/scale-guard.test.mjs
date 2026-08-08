@@ -107,6 +107,8 @@ function makeLibraryRuntime() {
 
 const lib = makeLibraryRuntime();
 
+// 公開HTMLの WORD_HISTORY_LIMIT と同じ値（サンドボックス内の定数はここからは見えない）。
+const HISTORY_LIMIT = 50;
 const BASE_MS = 1700000000000;
 const DECK_COUNT = 6; // 内蔵の単語帳と同じ数
 
@@ -379,16 +381,32 @@ test("マージ結果は語数によらず正しい（速度だけを見て中�
   assert.equal(merged.decks.length, DECK_COUNT, "単語帳が増減している");
 
   const remoteById = new Map(remote.words.map((w) => [w.id, w]));
+  const localById = new Map(local.words.map((w) => [w.id, w]));
+  const historyKey = (entry) => `${entry.at}:${entry.correct ? 1 : 0}`;
   for (const word of merged.words) {
     assert.ok(word.history.length > 0, `履歴が消えている: ${word.id}`);
     assert.ok(word.learning && word.learning.status, `学習状態が消えている: ${word.id}`);
     assert.ok(word.deckId, `単語帳の割り当てが消えている: ${word.id}`);
-    // remote 側の方が回答が進んでいるので、履歴は remote 以上の長さになるはず。
+    // 「remote 以上の長さ」だけでは、remote をそのまま返す実装でも通ってしまい、
+    // local だけが持つ分岐履歴が消える不具合を見逃す。両側の和集合と厳密に比べる。
     const fromRemote = remoteById.get(word.id);
-    assert.ok(
-      word.history.length >= fromRemote.history.length,
-      `remote 側の履歴を取り込めていない: ${word.id}`,
+    const fromLocal = localById.get(word.id);
+    const union = new Set([
+      ...fromLocal.history.map(historyKey),
+      ...fromRemote.history.map(historyKey),
+    ]);
+    const got = new Set(word.history.map(historyKey));
+    assert.equal(
+      got.size,
+      Math.min(union.size, HISTORY_LIMIT),
+      `履歴が両側の和集合になっていない: ${word.id}`,
     );
+    for (const key of fromLocal.history.map(historyKey)) {
+      assert.ok(got.has(key), `local 側だけの履歴が消えている: ${word.id}`);
+    }
+    for (const key of fromRemote.history.map(historyKey)) {
+      assert.ok(got.has(key), `remote 側だけの履歴が消えている: ${word.id}`);
+    }
   }
   // 削除記録とゴミ箱も、両側のぶんが残ること。
   assert.ok(Object.keys(merged.deletions).length > 0, "削除記録が消えている");

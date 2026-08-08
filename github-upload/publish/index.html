@@ -6568,7 +6568,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.75</span>
+        <span class="app-footer-version">バージョン 1.0.76</span>
       </footer>
     </main>
 
@@ -6703,7 +6703,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.75";
+  const APP_REV = "1.0.76";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -19041,10 +19041,13 @@ async function resolvePos(term) {
 
 function normalizeHistory(history) {
   if (!Array.isArray(history)) return [];
-  const fallbackAt = new Date().toISOString();
+  // 日時を持たない解答は現在時刻で補うが、**1件ずつ違う値にする**。
+  // 補う値を全件で共有すると、mergeHistory の重複排除キー（日時＋正誤）が
+  // 一致してしまい、別々の解答が1件へ潰れて記録が消える。
+  const fallbackBase = Date.now();
   return history
-    .map((entry) => {
-      let at = fallbackAt;
+    .map((entry, index) => {
+      let at = new Date(fallbackBase + index).toISOString();
       try {
         // 未設定値は従来どおり現在時刻で補い、値がある場合だけ日時として正規化する。
         if (entry?.at) {
@@ -20788,18 +20791,43 @@ function dominantLearningEvidence(a, b) {
 // どちらの免除条件も、時計を進めた端末が誤答を握りつぶす経路を残した。
 // 免除しなければ、この経路は構成的に存在しない。
 //
-// 免除をやめた代償は、1語に50件以上を積んだ端末で古い共有の誤答が押し出されている場合に
-// 証拠判定が使えなくなること。これは「直らないだけ」で、従来判定へ落ちるだけなので安全側。
-// 押し出されて履歴に残っていない誤答は、dominantLearningEvidence の誤答数の比較が受け止める。
+// 照合できるのは履歴に実体が残っている誤答だけ。次の2つは「確かめられない」ので
+// 見ていない扱いにする。どちらも実際に穴を作っていた（レビューで指摘された）:
+//
+//   1. 成績が主張する誤答数より、履歴に残る誤答が少ない場合。
+//      差分は上限で押し出されており、勝った側が見たか確かめる術がない。
+//      放置すると「両端末とも誤答1回だが中身は別」で照合が空振りして通り、
+//      負けた側の復習状態が消える。
+//   2. 負けた側の誤答が、勝った側の最新の解答より新しい場合。
+//      勝った側がまだ見ていない解答なので照合が成立しない。
+//      normalizeHistory が不正な `at` を現在時刻で補うため、実体の違う誤答が
+//      偶然一致することがあるが、その偽陽性もここで落ちる。
+//
+// 代償は、1語に50件以上を積んだ端末で古い誤答が押し出されていると証拠判定が
+// 使えなくなること。これは「直らないだけ」で従来判定へ落ちるだけなので安全側。
 //
 // 同期のたびに全語で呼ばれるため、Set も中間配列もクロージャも作らずに走査する
 //（履歴は1語あたり最大 WORD_HISTORY_LIMIT 件なので、素朴な二重ループで十分に速い）。
 function evidenceCoversWrongAnswers(winner, loser) {
   const winnerHistory = winner?.history || [];
   const loserHistory = loser?.history || [];
+  let loserWrongEntries = 0;
+  for (const entry of loserHistory) {
+    if (entry && !entry.correct) loserWrongEntries += 1;
+  }
+  // 1. 押し出されて確かめられない誤答がある
+  if (loserWrongEntries < learningEvidenceCount(loser?.wrong)) return false;
+  if (loserWrongEntries === 0) return true;
+  let winnerNewest = "";
+  for (const entry of winnerHistory) {
+    const at = String(entry?.at || "");
+    if (at > winnerNewest) winnerNewest = at;
+  }
   for (const entry of loserHistory) {
     if (!entry || entry.correct) continue;
     const at = String(entry.at || "");
+    // 2. 勝った側の最新の解答より新しい誤答は、まだ見られていない
+    if (!(at < winnerNewest)) return false;
     let covered = false;
     for (const known of winnerHistory) {
       if (known && !known.correct && String(known.at || "") === at) {
