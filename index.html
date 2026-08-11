@@ -5857,6 +5857,14 @@ accurate 正確な"
                 <option value="all">全部</option>
               </select>
             </label>
+            <label class="quiz-setup-field" title="「クイズを始める（おまかせ）」に適用されます（範囲クイズ・例文問題・フラッシュカードには適用されません）">
+              <span>出題の向き</span>
+              <select id="quizDirectionSelect" aria-describedby="quizSetupHint">
+                <option value="forward">英→日（既定）</option>
+                <option value="reverse">日→英</option>
+                <option value="mix">ミックス</option>
+              </select>
+            </label>
             <button id="quizRangeStartButton" type="button" title="上で選んだ単語帳・範囲の単語を1周だけ出題します（習得済みも含む）">この設定で出題</button>
             <span id="quizDeckCount" class="quiz-setup-count"></span>
           </div>
@@ -5884,6 +5892,7 @@ accurate 正確な"
               <li><strong>クイズを始める（おまかせ）：</strong>覚えていない単語を自動で選び、エンドレスに出題します。</li>
               <li><strong>苦手だけ／今日の復習：</strong>正答率80%未満の誤答歴がある単語、または復習日が来た単語だけを1周します。</li>
               <li><strong>やさしい順：</strong>未着手の単語をCEFRのA1→C2順で1周します。未判定の単語は最後です。</li>
+              <li><strong>出題の向き：</strong>「クイズを始める（おまかせ）」だけに適用されます。日→英は日本語の意味を見て英単語を選ぶ形式、ミックスは1問ごとにランダムです。</li>
             </ul>
           </div>
         </div>
@@ -6580,7 +6589,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.78</span>
+        <span class="app-footer-version">バージョン 1.0.79</span>
       </footer>
     </main>
 
@@ -6715,7 +6724,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.78";
+  const APP_REV = "1.0.79";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -16867,6 +16876,7 @@ const elements = {
   quizRangeTo: document.querySelector("#quizRangeTo"),
   quizShuffle: document.querySelector("#quizShuffle"),
   quizContextAmountSelect: document.querySelector("#quizContextAmountSelect"),
+  quizDirectionSelect: document.querySelector("#quizDirectionSelect"),
   quizRangeStartButton: document.querySelector("#quizRangeStartButton"),
   quizDeckCount: document.querySelector("#quizDeckCount"),
   accuracy: document.querySelector("#accuracy"),
@@ -17023,6 +17033,30 @@ const QUIZ_TIME_LIMIT_CHOICES = [0, 5, 10, 15, 20, 30];
 function normalizeQuizTimeLimit(value) {
   const n = Number(value);
   return QUIZ_TIME_LIMIT_CHOICES.includes(n) ? n : 0;
+}
+// 通常クイズ（おまかせ）の出題の向き。appStateには入れず端末ローカルの表示設定として保存する
+// （同期・データ形式・学習履歴には一切関わらないため）。既定は従来どおりの英→日。
+const QUIZ_DIRECTION_KEY = "wordsnap-quiz-direction:v1";
+const QUIZ_DIRECTION_CHOICES = ["forward", "reverse", "mix"];
+function normalizeQuizDirection(value) {
+  return QUIZ_DIRECTION_CHOICES.includes(value) ? value : "forward";
+}
+// 保存値を読む。localStorageが使えない環境（file://での全滅事故の前科あり）でも
+// 例外を漏らさず、既定の英→日にフォールバックする。
+function quizDirectionSetting() {
+  try {
+    return normalizeQuizDirection(localStorage.getItem(QUIZ_DIRECTION_KEY));
+  } catch {
+    return "forward";
+  }
+}
+// 実際に出題する向き（"forward"|"reverse"）を1問ごとに決める。ミックス以外は
+// Math.random() を消費しないため、既定設定のままなら既存のシャッフル乱数列に影響しない。
+function resolveQuizReverse() {
+  const setting = quizDirectionSetting();
+  if (setting === "reverse") return true;
+  if (setting === "mix") return Math.random() < 0.5;
+  return false;
 }
 const VIBRATE_KEY = "wordsnap-vibrate"; // 正解/不正解の振動フィードバック
 const QUIZ_RESUME_KEY = "wordsnap-quiz-resume:v1"; // 進行中クイズの再開用スナップショット
@@ -17605,6 +17639,9 @@ function autoSpeakCurrentQuiz() {
   // 例文の生成待ち中は読み上げない。まだ問題が出ていないうえ、例文モードで正解の単語を
   // 音声で出してしまうと「文中から意味を推測する」出題の答えを先に漏らすことになる。
   if (currentQuiz.contextPending) return;
+  // 日→英（逆方向）は選択肢が英単語そのものなので、解答前にterm を読み上げると
+  // 答えを言ってしまう。読み上げは gradeQuiz 側で採点確定後にだけ行う。
+  if (currentQuiz.reverse) return;
   if (!("speechSynthesis" in window)) return; // 非対応端末では黙ってスキップ
   if (currentQuiz.autoSpoken) return;
   currentQuiz.autoSpoken = true;
@@ -17638,6 +17675,7 @@ function applyQuizSettings() {
   if (elements.quizTimeLimitSelect) elements.quizTimeLimitSelect.value = String(quizTimeLimitSeconds());
   if (elements.adaptiveSrsToggle) elements.adaptiveSrsToggle.checked = adaptiveSrsEnabled();
   if (elements.dailyGoalSelect) elements.dailyGoalSelect.value = String(dailyGoalWords());
+  if (elements.quizDirectionSelect) elements.quizDirectionSelect.value = quizDirectionSetting();
 }
 
 function reviewLogEnabled() {
@@ -17695,7 +17733,9 @@ function recordReviewEvent(details) {
           ? "flashcard"
           : details.promptMode === "context-choice"
             ? "context-choice"
-            : "meaning-choice",
+            : details.promptMode === "term-choice"
+              ? "term-choice"
+              : "meaning-choice",
       result: details.result === "dont-know" ? "dont-know" : details.result === "correct" ? "correct" : "wrong",
     };
     const responseTimeMs = Math.round(Number(details.responseTimeMs));
@@ -28687,6 +28727,11 @@ function renderQuizPromptWord(quiz) {
     if (label) label.textContent = src ? `空所に入る語は？（${src}）` : "空所に入る語は？";
     elements.quizWord.innerHTML = blankOutTermInSentence(quiz.context.en, quiz.answer.term);
     elements.quizWord.classList.add("is-context");
+  } else if (quiz && quiz.reverse) {
+    // 日→英：日本語の意味を見出しにして、選択肢は英単語（renderChoicesがchoice.labelを使う）
+    if (label) label.textContent = "日本語の意味";
+    elements.quizWord.textContent = quiz.answer.meaning;
+    elements.quizWord.classList.remove("is-context");
   } else {
     if (label) label.textContent = "出題単語";
     elements.quizWord.textContent = quiz ? quiz.answer.term : "";
@@ -28884,14 +28929,26 @@ function buildQuiz() {
   if (!answer) return null;
   const pool = quizSelectedDeckWords().filter((word) => word.id !== answer.id);
   const basePool = pool.length >= 3 ? pool : appState.words.filter((word) => word.id !== answer.id);
-  const distractors = pickDistractors(basePool, answer, 3);
+  // 出題の向き（設定は通常クイズ＝この関数にのみ適用。範囲クイズ・例文問題・
+  // フラッシュカードには触れない）。既定のforwardではMath.random()を消費しないため、
+  // 設定を触らない限り既存の乱数列・出題内容は完全に同一のまま。
+  const reverse = resolveQuizReverse();
+  const distractors = pickDistractors(basePool, answer, 3, [], {
+    dedupeBy: reverse ? "term" : "meaning",
+  });
   if (distractors.length === 0) {
     // 1択のまま正解扱いにできないよう、通常クイズも問題生成の時点で止める。
     quizEmptyReason =
       "意味の異なる単語をもう1語以上登録するか、同じ日本語訳だけの単語が続かないよう訳を見直してください。1択の問題は採点されません。";
     return null;
   }
-  const choices = shuffle([answer, ...distractors]);
+  // 逆方向（日→英）は選択肢に英単語(term)を出す。answer自体は実データのまま変更せず、
+  // 選択肢だけ {id, label} の軽量オブジェクトに包む（buildContextChoicesと同じやり方）。
+  // wordオブジェクトへ直接labelを足すと、appState.wordsの実データが汚れてしまうため。
+  const choiceSource = reverse
+    ? [answer, ...distractors].map((word) => ({ id: word.id, label: word.term }))
+    : [answer, ...distractors];
+  const choices = shuffle(choiceSource);
   // 選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
   elements.quizFeedback.textContent = choiceCountNote(choices);
   normalQuizQuestionNumber += 1; // 通常クイズ（エンドレス）の「◯問目」表示用
@@ -28903,6 +28960,7 @@ function buildQuiz() {
     srsDueAtStart:
       Number(answer.learning?.nextReviewAt || 0) > 0 &&
       Number(answer.learning.nextReviewAt) <= Date.now(),
+    reverse, // 日→英クイズかどうか（採点・promptMode判定・自動読み上げの答え漏れ対策に使う）
   };
 }
 
@@ -28985,7 +29043,10 @@ function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.
       ? "flashcard"
       : options.promptMode === "context-choice"
         ? "context-choice"
-        : "meaning-choice";
+        : options.promptMode === "term-choice"
+          ? "term-choice" // 日→英。masteryVerifyの検証はmeaning-choiceのみが対象なので、
+            // ここで別値として保つことで下のverifiesFlashcardMastery判定に絶対に一致しない。
+          : "meaning-choice";
   const verifiesFlashcardMastery =
     learning.masteryVerify === "flashcard" &&
     srsDueAtStart &&
@@ -29167,10 +29228,19 @@ function meaningsTooClose(a, b) {
 // 同じ品詞の語は空所に文法的に入ってしまい「正解が2つ」に見えて根拠が立たない。
 // 品詞が違えば文の形から確実に除外でき、解答の根拠を持って選べる。
 function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options = {}) {
+  // options.dedupeBy: 選択肢として画面に出す文字列の重複排除に何を見るか。
+  // 英→日（既定）は意味文字列が選択肢に出るので意味で重複排除し、日→英（逆方向）は
+  // 英単語(term)が選択肢に出るのでtermで重複排除する（同じtermが2つ並ぶのを防ぐ）。
+  // 「同じ見出し語の除外」「意味が近すぎる語の除外」は向きに関わらず常に意味ベースで
+  // 判定する＝正解が2つになる問題を作らないための安全側の判定なので変えない。
+  const dedupeByTerm = options.dedupeBy === "term";
+  const labelKey = (word) => (dedupeByTerm ? normalizeTerm(word.term) : normalizeMeaning(word.meaning));
   // excludeMeanings: 既に選択肢に入っている意味（AI生成の誤答など）。ここで一緒に除外しないと、
-  // 呼び出し側で弾いた分だけ選択肢が減って4択に満たなくなる。
+  // 呼び出し側で弾いた分だけ選択肢が減って4択に満たなくなる。dedupeByTermのときは意味の
+  // 重複排除ではなく表示ラベル(term)の重複排除なので、意味の羅列は素通りする（現状どの
+  // 呼び出し元もexcludeMeaningsを空で渡しているため実害はない）。
   const seen = new Set([
-    normalizeMeaning(answer.meaning),
+    labelKey(answer),
     ...excludeMeanings.map((m) => normalizeMeaning(m)),
   ]);
   const answerPos = answer.pos?.tag || null;
@@ -29210,7 +29280,7 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
     }).length;
     for (const { word, confusable } of ranked) {
       if (picked.length >= count) return;
-      const key = normalizeMeaning(word.meaning);
+      const key = labelKey(word);
       if (seen.has(key)) continue;
       // 同じ見出し語の別訳は、意味が違っても**どちらも正解**なので誤答にできない。
       // 内蔵の単語帳は試験ごとに訳を変えてあり（acquire: 習得する/取得する/獲得する）、
@@ -30383,6 +30453,16 @@ function renderDailyGoalChip() {
   chip.textContent = count >= goal ? `🎯 今日 ${count}/${goal}問 達成！` : `🎯 今日 ${count}/${goal}問`;
 }
 
+// 現在の問題の出題形式ラベルを1箇所で決める。採点・SRS更新・確信度検証・ログ記録の
+// 全経路がここを通ることで、どこかだけ判定がずれて逆方向の解答が意味4択として
+// 記録される（＝フラッシュカードの仮習得検証を誤って解除する）事故を防ぐ。
+function currentQuizPromptMode(quiz) {
+  if (quiz.flashcard) return "flashcard";
+  if (quiz.context) return "context-choice";
+  if (quiz.reverse) return "term-choice"; // 日→英：意味4択(meaning-choice)とは別物として扱う
+  return "meaning-choice";
+}
+
 function gradeQuiz(choiceId, dontKnow = false, options = {}) {
   if (!currentQuiz || currentQuiz.answered) return;
   // 生成側の全経路で防いでいるが、古い画面状態や将来の呼び出し追加があっても
@@ -30428,11 +30508,7 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
   // フラッシュカードで「確実」と申告していた語なら、ここで検証する。
   // 意味4択に限る（例文は形式が違うため混ぜない）。フラッシュカード自身では検証しない。
   if (!currentQuiz.flashcard) {
-    verifyConfidenceOnAnswer(
-      word.id,
-      isCorrect,
-      currentQuiz.context ? "context-choice" : "meaning-choice",
-    );
+    verifyConfidenceOnAnswer(word.id, isCorrect, currentQuizPromptMode(currentQuiz));
   }
   if (word.history.length > 50) word.history = word.history.slice(-50);
   // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
@@ -30446,6 +30522,15 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
       currentQuiz.context.en,
       currentQuiz.answer.term,
     );
+  }
+  // 日→英は解答前に英単語を読み上げると答えが漏れるため autoSpeakCurrentQuiz 側で止めてある。
+  // 採点が確定したこのタイミングでだけ、設定ONなら正解の英単語を1回読み上げる。
+  if (currentQuiz.reverse && autoSpeakEnabled() && "speechSynthesis" in window) {
+    try {
+      speakWord(currentQuiz.answer.term);
+    } catch {
+      // 読み上げは補助機能。失敗しても採点・進行は止めない
+    }
   }
 
   // 回答時間（問題を表示してから解答するまで）。速い正解ほど定着とみなす。
@@ -30466,11 +30551,7 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
     responseMs,
     skipSpeedGate,
     historyBeforeAnswer,
-    promptMode: currentQuiz.flashcard
-      ? "flashcard"
-      : currentQuiz.context
-        ? "context-choice"
-        : "meaning-choice",
+    promptMode: currentQuizPromptMode(currentQuiz),
   });
   // セッション集計（復習セッションの解答はデイリーゴールにのみ計上済み）
   if (!reviewSession && !currentQuiz.flashcard) {
@@ -30481,11 +30562,7 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
   maybeCelebrateDailyGoal();
   recordReviewEvent({
     wordId: currentQuiz.answer.id,
-    promptMode: currentQuiz.flashcard
-      ? "flashcard"
-      : currentQuiz.context
-        ? "context-choice"
-        : "meaning-choice",
+    promptMode: currentQuizPromptMode(currentQuiz),
     result: dontKnow ? "dont-know" : isCorrect ? "correct" : "wrong",
     responseTimeMs: Number.isFinite(responseMs) ? responseMs : undefined,
     choiceCount: currentQuiz.flashcard ? undefined : currentQuiz.choices.length,
@@ -30497,9 +30574,13 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
     },
   });
 
+  // 日→英は出題時点で意味を見せているので、正誤メッセージには英単語を出す
+  // （意味をもう一度出しても「もう見た」情報で、確認したいのは英単語の方）。
   const answerFeedback = currentQuiz.context
     ? `「${currentQuiz.answer.term}」（${currentQuiz.answer.meaning}）`
-    : `「${currentQuiz.answer.meaning}」`;
+    : currentQuiz.reverse
+      ? `「${currentQuiz.answer.term}」`
+      : `「${currentQuiz.answer.meaning}」`;
 
   if (currentQuiz.flashcard) {
     persistAppState();
@@ -33366,6 +33447,15 @@ elements.quizTimeLimitSelect?.addEventListener("change", () => {
   // 出題中に変更したら、その場のタイマーを新しい設定で仕切り直す。
   stopQuizTimer();
   if (activeStepId === "quiz") updateQuizControls();
+  playSound("tap");
+});
+
+elements.quizDirectionSelect?.addEventListener("change", () => {
+  try {
+    localStorage.setItem(QUIZ_DIRECTION_KEY, normalizeQuizDirection(elements.quizDirectionSelect.value));
+  } catch {
+    // 保存できない環境ではその場限りで動く（他の設定と同様、例外は漏らさない）
+  }
   playSound("tap");
 });
 
