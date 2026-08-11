@@ -1,0 +1,22 @@
+# 旧Netlifyサイト（wordbank-quiz.netlify.app）を本番へ転送する設定。
+#
+# 2026-08-12: 無料枠凍結が明けてGitHub連携が再開し、旧ドメインが
+# 「アプリは開けるが同期APIが404で保存できない」状態で公開されていた
+# （サーバー関数はリポジトリから削除済みのため）。放置すると、古い
+# ブックマークから開いた利用者の単語がその端末のlocalStorageにだけ
+# たまり、同期されずに孤立する。
+#
+# ?w=KEY の個人リンクはクエリごと転送されるので、新ドメインでそのまま開ける。
+# Cloudflare Pages はこのファイルを読まないため、本番の配信には影響しない。
+# 元に戻す場合はこのファイル（と github-upload/netlify.toml）を削除して push する。
+#
+# 同じ内容が github-upload/netlify.toml にもある。Netlify はベース
+# ディレクトリの netlify.toml を読むが、その設定値（ルートか
+# github-upload か）をコードから確認できないため、両方に置いてある。
+# 変更するときは必ず両方を揃えること。
+
+[[redirects]]
+  from = "/*"
+  to = "https://wordbank.pages.dev/:splat"
+  status = 301
+  force = true
