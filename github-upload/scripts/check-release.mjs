@@ -235,12 +235,15 @@ for (const origin of [
   "https://api.mymemory.translated.net",
   "https://generativelanguage.googleapis.com",
   "https://api.groq.com",
-  "https://cdn.jsdelivr.net",
   "https://tessdata.projectnaptha.com",
 ]) {
   assert.ok(connectSources.has(origin),
     `runtime connection origin is missing from connect-src: ${origin}`);
 }
+// 言語データを自前配信へ移した（1.0.80）ため、jsdelivr は connect-src に不要になった。
+// 残すと、万一別の穴（XSS等）が開いたときの持ち出し先として機能する。復活を禁止する。
+assert.ok(!connectSources.has("https://cdn.jsdelivr.net"),
+  "cdn.jsdelivr.net must stay out of connect-src (language data is vendored; see assets/tessdata/VENDOR.md)");
 assert.match(publicHtml, /<title>\s*WordBank\s*<\/title>/i, "WordBank title is missing");
 assert.doesNotMatch(publicHtml, /WordSnap\s+単語帳/,
   "the OS share title still exposes the retired WordSnap product name");
@@ -1040,6 +1043,35 @@ assert.match(
   publicHtml,
   /Tesseract\.createWorker\(\["eng", "jpn"\], engineMode, options\)/,
   "createWorker must receive the checked engineMode and the vendored paths",
+);
+// 言語データ（traineddata）も既定モードは自前配信（1.0.80、assets/tessdata/VENDOR.md）。
+// 実行コードと同じく、版付きパス・アプリ側宣言との一致・ファイルの無改変を固定する。
+// 高精度モードだけは projectnaptha のCDN（12MB×2をリポジトリで抱えないため）。
+const tessdataVersionMatch = publicHtml.match(/const TESSDATA_VERSION = "([\w.]+)";/);
+assert.ok(tessdataVersionMatch, "OCR language data version declaration is missing");
+const TESSDATA_VERSION = tessdataVersionMatch[1];
+assert.match(
+  publicHtml,
+  /const TESSDATA_ASSET_BASE = new URL\(`assets\/tessdata\/\$\{TESSDATA_VERSION\}`, document\.baseURI\)\.href;/,
+  "OCR language data must be served from a version-scoped path (no trailing slash: the worker joins with '/')",
+);
+const TESSDATA_VENDOR_DIR = join(publishDir, "assets", "tessdata", TESSDATA_VERSION);
+const TESSDATA_VENDOR_HASHES = {
+  "eng.traineddata.gz": "JI+fraGAoc5GBGIliuqzHRnP1nJyrukg5ggNSBv/TO+YOVj+6Te6XXQOx7ia10xq",
+  "jpn.traineddata.gz": "OlgrInD77KoJd+WsE8cHWtmI3mKzvi69lIv6JSH3t3bFDa4/vH8MaxvO1mdX3UQ3",
+};
+for (const [name, expected] of Object.entries(TESSDATA_VENDOR_HASHES)) {
+  const path = join(TESSDATA_VENDOR_DIR, name);
+  assert.ok(existsSync(path), `vendored OCR language data is missing: ${name}`);
+  const actual = createHash("sha384").update(readFileSync(path)).digest("base64");
+  assert.equal(actual, expected, `vendored OCR language data was modified: ${name}`);
+}
+// 既定は自前・高精度だけCDN、という分岐そのものを固定する。既定側がCDNへ戻ると
+// connect-src の except と食い違って言語データが取得できず、OCRが黙って死ぬ。
+assert.match(
+  publicHtml,
+  /options\.langPath = highAccuracy \? "https:\/\/tessdata\.projectnaptha\.com\/4\.0\.0_best" : TESSDATA_ASSET_BASE;/,
+  "default-mode language data must come from the vendored copy (high-accuracy stays on projectnaptha)",
 );
 assert.match(publicHtml, /id=["']runtimeStorageWarning["']/, "runtime storage warning is missing");
 assert.match(publicHtml, /外部辞書への通信：/, "external dictionary data disclosure is missing");

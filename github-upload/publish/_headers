@@ -5,9 +5,10 @@
 # https://translate.googleapis.com、https://api.mymemory.translated.net をfetchで利用。
 # AI: ユーザー自身のAPIキーで https://generativelanguage.googleapis.com（Gemini）と
 # https://api.groq.com（Groq）へブラウザから直接fetchする。OpenAI/Anthropicへの直接通信はない。
-# OCR: SRI付きTesseract.js 7.0.0本体、既定Worker/core/WASM/通常精度言語データを
-# https://cdn.jsdelivr.net から取得し、高精度traineddataは
-# https://tessdata.projectnaptha.com から取得する。Workerはblob: URL、coreはWebAssemblyを使う。
+# OCR: Tesseract.js本体・Worker・core(WASM)・通常精度の言語データはすべて自前配信
+# （publish/assets/tesseract/ と publish/assets/tessdata/。由来は各VENDOR.md）。
+# 高精度traineddataだけ https://tessdata.projectnaptha.com から取得する。
+# Workerはblob: URL、coreはWebAssemblyを使う。
 # 画像: 同一オリジンのアイコン、blob:のユーザー画像、data:のCanvasプレビュー/保存版埋め込みを使う。
 # 音声はWeb Audioの合成音とspeechSynthesisのみで外部取得なし。フォントもシステムフォントのみ。
 # 外部リンク（AIキー取得、語源検索、公開URL案内）はナビゲーションだけで、リソース取得には使わない。
@@ -35,4 +36,4 @@
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
   X-Frame-Options: DENY
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-QZv/C9PpEZL2Rdp9VSnYZD8Ao/EWzMfaUl2HJTrXUT0=' 'sha256-ibeqat9+Wak18ZIAZ+ujRG18RJlpFZLjUbAh3WChvOM=' 'sha256-CeFtSYmmm4RDcUUaZ6YoTdikehQpxuyvpfBsz5+2Y1k=' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.datamuse.com https://api.dictionaryapi.dev https://translate.googleapis.com https://api.mymemory.translated.net https://generativelanguage.googleapis.com https://api.groq.com https://cdn.jsdelivr.net https://tessdata.projectnaptha.com; img-src 'self' data: blob:; media-src 'self' data: blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; manifest-src 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-Jv1VCh5J/2nRA1QKdomaR5ahRJu5VM1MFMe0vqY/Gfk=' 'sha256-ibeqat9+Wak18ZIAZ+ujRG18RJlpFZLjUbAh3WChvOM=' 'sha256-9m32s6AEZVGSy9HELSQ5n5IuL/XU3tXCZSbpAf7Mzvc=' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.datamuse.com https://api.dictionaryapi.dev https://translate.googleapis.com https://api.mymemory.translated.net https://generativelanguage.googleapis.com https://api.groq.com https://tessdata.projectnaptha.com; img-src 'self' data: blob:; media-src 'self' data: blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; manifest-src 'self'

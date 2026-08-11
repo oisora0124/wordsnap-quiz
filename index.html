@@ -6589,7 +6589,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.79</span>
+        <span class="app-footer-version">バージョン 1.0.80</span>
       </footer>
     </main>
 
@@ -6724,7 +6724,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.79";
+  const APP_REV = "1.0.80";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23056,6 +23056,12 @@ function validPair(term, meaning) {
 // ので更新が自然に届いていた）。版をディレクトリ名に入れておけば、更新＝別URL＝再取得になる。
 const TESSERACT_VERSION = "7.0.0";
 const TESSERACT_ASSET_BASE = new URL(`assets/tesseract/${TESSERACT_VERSION}/`, document.baseURI).href;
+// 言語データ（traineddata）の自前配信。版をパスに含める理由は実行コードと同じ
+// （Service Workerのcache-firstで古いものが残らないようにする）。
+// 末尾にスラッシュを付けない: worker が `${langPath}/${lang}.traineddata.gz` の形で
+// "/" を挟んで連結するため（高精度モードの projectnaptha 指定と同じ形式）。
+const TESSDATA_VERSION = "4.0.0_best_int";
+const TESSDATA_ASSET_BASE = new URL(`assets/tessdata/${TESSDATA_VERSION}`, document.baseURI).href;
 
 let tesseractLoadPromise = null;
 
@@ -24764,9 +24770,11 @@ async function getOcrWorker(Tesseract, highAccuracy, run) {
       workerPath: TESSERACT_ASSET_BASE + "worker.min.js",
       corePath: TESSERACT_ASSET_BASE,
     };
-    // 言語データは実行されないデータなので取得元はCDNのまま（合計26MBあり、
-    // 自前で抱える利点が小さい。壊れたデータでもコード実行にはならない）。
-    if (highAccuracy) options.langPath = "https://tessdata.projectnaptha.com/4.0.0_best";
+    // 言語データも既定モードは自オリジンから読む（eng+jpn 計4.7MB を同梱。
+    // 由来と検証は assets/tessdata/VENDOR.md）。これで通常のOCRは外部へ一切
+    // 出ず、connect-src から CDN を消せる。高精度モードだけは 12MB×2 と大きく
+    // 利用実績も無いため、従来どおり projectnaptha から取得する（要オンライン）。
+    options.langPath = highAccuracy ? "https://tessdata.projectnaptha.com/4.0.0_best" : TESSDATA_ASSET_BASE;
     // LSTM_ONLY 固定。worker はこの指定に応じて core の -lstm 版を選ぶため、
     // 置いてある自前ファイルもその3種（素/simd/relaxedsimd）だけでよい。
     // 変えるなら VENDOR.md の手順で -lstm 無しの3種も追加すること。
