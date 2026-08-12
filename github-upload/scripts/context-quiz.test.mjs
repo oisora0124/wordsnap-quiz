@@ -780,3 +780,221 @@ test("形式の割り当ては決定的：同じ種と語IDなら何度呼んで
   // mixFormat が立っていなければ常に false
   assert.equal(mixedFormatUsesContext({ mixFormat: false, formatSeed: "seed1234" }, "a1"), false);
 });
+
+// ============================================================================
+// 6. 誤答の選び方（1.0.85）
+//    以前は「誤答を選んでから4択全体を every で検査」していた。1つでも根拠を欠くと
+//    問題が丸ごと破棄されるため、実測で TOEIC 2.3% / 中学 0.3% しか空所補充が
+//    出題されず、「例文で解く」を選んでもほぼ通常出題になっていた。
+//    根拠のある候補だけを選ぶように変え、判定基準そのものは変えていない。
+// ============================================================================
+
+// buildContextChoices は依存が多い。定数はHTML内の出現順に並べないと
+// 「初期化前アクセス」で落ちるため、位置でソートしてから連結する。
+function buildContextChoicesSandbox() {
+  const consts = [
+    "IRREGULAR_INFLECTION_GROUPS", "AMBIGUOUS_DERIVATIONAL_SUFFIXES", "DERIVATIONAL_SUFFIXES",
+    "IRREGULAR_COMPARISON_GROUPS", "BUILTIN_POS_GROUPS", "BUILTIN_POS_MULTI_GROUPS",
+    "BUILTIN_POS_MULTI", "BUILTIN_POS", "BUILTIN_POS_NOUN_AND_VERB",
+  ].sort((a, b) => html.indexOf(`const ${a} `) - html.indexOf(`const ${b} `));
+  const fns = [
+    "normalizeTerm", "normalizeMeaning", "meaningsTooClose", "spellingDistance", "shuffle",
+    "pickDistractors", "termWordRegex", "sentenceContainsTerm", "derivationStem",
+    "hasDerivationalSuffix", "wordsShareGroup", "regularInflectionForms", "isInflectionOf",
+    "regularComparativeDegree", "comparativeFormDegree", "isUnsafeComparativeDistractor",
+    "isAmbiguousDerivationPair", "builtinPosTags", "posTagsFor",
+    "isContextDistractorSafe", "contextDistractorHasBasis", "aiSelfCheckedTerms",
+    "contextDistractorAdmissible", "contextChoicesHaveBasis", "buildContextChoices",
+  ];
+  const pieces = [
+    ...consts.map((n) => extractConst(n)),
+    "let contextFallbackNote = '';",
+    "const appState = { words: [] };",
+    "function quizSelectedDeckWords() { return appState.words; }",
+    ...fns.map((n) => extractFunction(n)),
+    "globalThis.__b = {" +
+      " setWords: (w) => { appState.words = w; }," +
+      " getNote: () => contextFallbackNote," +
+      " contextDistractorAdmissible," +
+      " buildContextChoices };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "context-quiz-choices-check.js" }).runInNewContext(sandbox);
+  return sandbox.__b;
+}
+
+// `const NAME = ...;` を対応する括弧の末尾まで切り出す（reverse-quiz.test.mjs と同じ実装）
+function extractConst(name) {
+  const start = html.indexOf(`const ${name} `);
+  if (start < 0) throw new Error(`const ${name} not found`);
+  let depth = 0;
+  let seen = false;
+  for (let i = start; i < html.length; i += 1) {
+    const ch = html[i];
+    if (ch === "(" || ch === "[" || ch === "{") {
+      depth += 1;
+      seen = true;
+    } else if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+    } else if (ch === ";" && depth === 0 && seen) {
+      return html.slice(start, i + 1);
+    } else if (ch === "\n" && depth === 0 && seen) {
+      return html.slice(start, i);
+    }
+  }
+  throw new Error(`could not terminate const ${name}`);
+}
+
+// 実在の英単語で語彙を作る（品詞判定は組み込み表を引くため、造語では検証にならない）
+const REAL_VOCAB = [
+  ["abolition", "廃止"], ["celebrate", "祝う"], ["purchase", "購入する"], ["outcome", "結果"],
+  ["immediate", "即座の"], ["innovation", "革新"], ["luggage", "荷物"], ["criterion", "基準"],
+  ["series", "連続"], ["demonstration", "実演"], ["innovative", "革新的な"], ["obtain", "得る"],
+].map(([term, meaning], i) => ({
+  id: "v" + i, term, meaning, pos: null,
+  stats: { correct: 0, wrong: 0 }, history: [],
+  learning: { status: "review", srsStage: 1, nextReviewAt: 0, blockedUntil: 0, correctStreak: 0 },
+}));
+
+const ANSWER = {
+  id: "A", term: "abolish", meaning: "廃止する", pos: { tag: "v" },
+  stats: { correct: 0, wrong: 0 }, history: [],
+  learning: { status: "review", srsStage: 1, nextReviewAt: 0, blockedUntil: 0, correctStreak: 0 },
+};
+const EN = "The government decided to abolish the outdated rule last year.";
+
+test("誤答の選び方: 誤答の供給が無くても、登録語彙から空所補充を組める", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const choices = b.buildContextChoices(ANSWER, { en: EN, distractors: [], src: "dict" });
+  assert.ok(choices.length >= 2, "以前はここが空になり、ほぼ全問が通常出題へ落ちていた");
+  assert.ok(choices.some((c) => c.id === ANSWER.id), "正解が入っている");
+});
+
+test("誤答の選び方: 供給が1つだけでも、補充した誤答が根拠を持つので破棄されない", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const choices = b.buildContextChoices(ANSWER, { en: EN, distractors: ["abolition"], src: "dict" });
+  assert.ok(choices.length >= 2);
+  assert.ok(
+    choices.some((c) => c.label.toLowerCase() === "abolition"),
+    "供給された派生形はそのまま使う",
+  );
+});
+
+test("誤答の選び方: 供給の一部が根拠を欠いても、その語だけ落として出題を続ける", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  // abolitionist は組み込み表に品詞が無く根拠なし。以前はこの1語で4択全体が消えていた。
+  const choices = b.buildContextChoices(ANSWER, {
+    en: EN, distractors: ["abolition", "abolitionist", "abolishment"], src: "dict",
+  });
+  assert.ok(choices.length >= 2, "1語の巻き添えで問題ごと捨てない");
+  assert.ok(
+    !choices.some((c) => c.label.toLowerCase() === "abolitionist"),
+    "根拠を欠く語は誤答に採用しない（基準は緩めていない）",
+  );
+});
+
+test("誤答の選び方: 採用された誤答は全て根拠を持つ", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const item = { en: EN, distractors: [], src: "dict" };
+  const choices = b.buildContextChoices(ANSWER, item);
+  for (const choice of choices) {
+    if (choice.id === ANSWER.id) continue;
+    assert.equal(
+      b.contextDistractorAdmissible(ANSWER, item, choice.label),
+      true,
+      `根拠のない誤答が混ざっている: ${choice.label}`,
+    );
+  }
+});
+
+test("誤答の選び方: AIが自己検証した同品詞の誤答は採用する", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  // プロンプトは (b)(c) で「出題語と同じ品詞」の誤答を明示的に要求している。
+  // AIが4語すべてを fit で自己検証していれば、それが根拠になる。
+  const choices = b.buildContextChoices(ANSWER, {
+    en: EN,
+    distractors: ["abolition", "celebrate", "purchase"],
+    fit: ["abolish"],
+    integratedChoices: ["abolish", "abolition", "celebrate", "purchase"],
+    src: "ai",
+  });
+  const labels = choices.map((c) => c.label.toLowerCase());
+  assert.ok(labels.includes("celebrate") && labels.includes("purchase"),
+    "AI検証済みの同品詞誤答が捨てられている（AI経路が機能しない）");
+});
+
+test("誤答の選び方: 自己検証が無ければ同品詞の誤答は採用しない（基準を緩めていない）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const choices = b.buildContextChoices(ANSWER, {
+    en: EN, distractors: ["celebrate", "purchase"], src: "dict", // fit も integratedChoices も無い
+  });
+  const labels = choices.map((c) => c.label.toLowerCase());
+  assert.ok(!labels.includes("celebrate"), "検証の裏付けなく同品詞を誤答にしてはいけない");
+  assert.ok(!labels.includes("purchase"));
+});
+
+test("誤答の選び方: 根拠のある誤答が1つも作れなければ空所補充にしない", () => {
+  const b = buildContextChoicesSandbox();
+  // 同じ品詞(v)の語しか無い語彙にする＝根拠のある誤答が存在しない
+  const verbsOnly = [["celebrate", "祝う"], ["obtain", "得る"], ["decide", "決める"]]
+    .map(([term, meaning], i) => ({ id: "x" + i, term, meaning, pos: null,
+      stats: { correct: 0, wrong: 0 }, history: [],
+      learning: { status: "review", srsStage: 1, nextReviewAt: 0, blockedUntil: 0, correctStreak: 0 } }));
+  b.setWords([ANSWER, ...verbsOnly]);
+  const choices = b.buildContextChoices(ANSWER, { en: EN, distractors: [], src: "dict" });
+  assert.ok(choices.length < 2, "根拠が無いなら従来どおり通常出題へ落とす");
+});
+
+test("誤答の選び方: 根拠のある語が十分あれば、毎回4択が埋まる（50回引いても）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  // 補充元を絞らずに pickDistractors へ渡すと、選ばれた語をこの後のループで
+  // 落とすことになり、選択肢が減る。pickDistractors の preferDifferentPos は
+  // 保存済みの品詞タグを見るため、タグの無い語（大多数）では効かない。
+  for (let i = 0; i < 50; i += 1) {
+    const choices = b.buildContextChoices(ANSWER, { en: EN, distractors: [], src: "dict" });
+    assert.equal(choices.length, 4, `${i}回目で4択が埋まらなかった（選択肢数が引くたびに変わる）`);
+  }
+});
+
+test("誤答の選び方: fit の無いAI応答は自己検証済みとみなさない", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const choices = b.buildContextChoices(ANSWER, {
+    en: EN,
+    distractors: ["celebrate", "purchase"],
+    // integratedChoices はあるが fit が無い＝AIが自己検証を返せなかった応答
+    integratedChoices: ["abolish", "celebrate", "purchase"],
+    src: "ai",
+  });
+  const labels = choices.map((c) => c.label.toLowerCase());
+  assert.ok(!labels.includes("celebrate"), "検証結果が無いのに検証済み扱いしてはいけない");
+  assert.ok(!labels.includes("purchase"));
+});
+
+test("誤答の選び方: 1.0.84以前に焼き付いた記録（誤答0件・choicesFinal）を救済する", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  // 旧コードは「誤答を選んでから4択全体を検査」したため、候補が空のまま
+  // choicesFinal:true で保存された。例文そのものは無事なので、作り直さずに使う。
+  const choices = b.buildContextChoices(ANSWER, {
+    en: EN, distractors: [], choicesFinal: true, choiceValidation: "ai", src: "ai",
+  });
+  assert.ok(choices.length >= 2, "例文があるのに出題できない状態が残ってはいけない");
+});
+
+test("誤答の選び方: 誤答が残っていれば choicesFinal は従来どおり補充を止める", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const choices = b.buildContextChoices(ANSWER, {
+    en: EN, distractors: ["abolition"], choicesFinal: true, src: "ai",
+  });
+  assert.equal(choices.length, 2, "AIが用意した誤答があるなら登録語で水増ししない");
+  assert.ok(choices.some((c) => c.label.toLowerCase() === "abolition"));
+});
