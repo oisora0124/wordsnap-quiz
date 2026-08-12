@@ -6589,7 +6589,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.82</span>
+        <span class="app-footer-version">バージョン 1.0.83</span>
       </footer>
     </main>
 
@@ -6724,7 +6724,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.82";
+  const APP_REV = "1.0.83";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -28461,7 +28461,7 @@ async function ensureContextItem(word) {
 // 空所補充の選択肢は「英単語」。正解も誤答も label に英単語を入れて表示を統一する。
 // 正解は登録単語オブジェクトそのものではなく id を保った包みにする（採点は id 比較のまま動く）。
 // 直近の空所補充で「根拠を担保できず通常出題に切り替えた」理由。表示用。
-let contextBasisFallbackNote = "";
+let contextFallbackNote = "";
 
 // その誤答が「空所には入らない」と学習者が根拠を持って言い切れるか。
 // 言い切れる型は次の2つだけ:
@@ -28546,12 +28546,12 @@ function buildContextChoices(answer, item) {
   // 根拠を持って選べない4択は出題しない（当てずっぽうを正解として記録しないため）。
   // 呼び出し側は空配列を受けて通常の単語出題へ切り替える。
   if (choices.length >= 2 && !contextChoicesHaveBasis(answer, item, choices)) {
-    contextBasisFallbackNote =
+    contextFallbackNote =
       "この単語は「空所に入らない」と言い切れる誤答を用意できなかったため、" +
       "根拠のない出題を避けて通常の単語出題にしました。";
     return [];
   }
-  contextBasisFallbackNote = "";
+  contextFallbackNote = "";
   return shuffle(choices);
 }
 
@@ -28802,7 +28802,7 @@ function buildReviewQuiz() {
       !isMasteryVerificationDue(answer) &&
       (reviewSession.context || mixedFormatUsesContext(reviewSession, answer.id));
     // 通常形式を明示選択した問題には、直前の例文フォールバック理由を持ち越さない。
-    if (!useContextFormat) contextBasisFallbackNote = "";
+    if (!useContextFormat) contextFallbackNote = "";
     if (useContextFormat) {
       const item = contextItemFor(answer);
       if (!item && !contextAttempted(answer)) {
@@ -28830,6 +28830,13 @@ function buildReviewQuiz() {
         return { answer, choices: [], answered: false, shownAt: 0, context: null, contextPending: true, srsDueAtStart };
       }
       prefetchNextContextItem();
+      if (!item) {
+        // 生成を試したが例文を用意できなかった語（生成失敗・保存容量切れ・キー変更後の破棄など）。
+        // 黙って通常出題へ変わると「例文モードのはずなのになぜ単語が出るのか」が分からないので、
+        // 下の通常出題パスで理由を表示させる。
+        contextFallbackNote =
+          "この単語は例文を用意できなかったため、通常の単語出題にしました。";
+      }
       if (item) {
         // 検証失敗でもローカル安全判定済みの同じ問題を使い、自動再検証は仕掛けない。
         // キー変更などで本当にstaleなら contextItemFor がnullを返し、上の待機経路へ入る。
@@ -28847,8 +28854,15 @@ function buildReviewQuiz() {
             srsDueAtStart,
           };
         }
+        // 誤答候補が足りず空所補充にできなかった。「言い切れる誤答が作れない」場合は
+        // buildContextChoices が既に理由を入れているので、それを上書きしない。
+        if (!contextFallbackNote) {
+          contextFallbackNote =
+            "この単語は空所に入らない誤答を十分に用意できなかったため、通常の単語出題にしました。";
+        }
       }
       // 例文を用意できなかった語は、通常の単語出題にフォールバックして続行する。
+      // 理由は contextFallbackNote に入れてあり、下の通常出題パスが表示する。
     }
 
     // 出題の向き。セッション開始時に固定した値を使う（1問ごとに引き直すと、
@@ -28870,7 +28884,7 @@ function buildReviewQuiz() {
       quizEmptyReason =
         "意味の異なる単語をもう1語以上登録するか、同じ日本語訳だけの単語が続かないよう訳を見直してください。1択の問題は採点されません。";
       // この語の切り替え理由を持ち越さない（次の問題で無関係な注記が出るのを防ぐ）
-      contextBasisFallbackNote = "";
+      contextFallbackNote = "";
       return null;
     }
     // 逆方向は選択肢に英単語(term)を出す。answer自体は実データのまま変更せず、
@@ -28887,8 +28901,8 @@ function buildReviewQuiz() {
     // 黙って形式が変わると「なぜ例文が出ないのか」が分からないため。
     // それ以外は、選択肢が4未満になったときだけ注記を出す（解答すると上書きされて消える）
     elements.quizFeedback.textContent =
-      contextBasisFallbackNote || choiceCountNote(choices);
-    contextBasisFallbackNote = "";
+      contextFallbackNote || choiceCountNote(choices);
+    contextFallbackNote = "";
     return {
       answer,
       choices,
