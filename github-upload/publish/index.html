@@ -5328,6 +5328,28 @@ body.tutorial-open {
   .shell {
     padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
   }
+
+  /* ソフトウェアキーボードが開いている間だけボトムナビを退避する。
+     iOS Safari の position:fixed は「レイアウトビューポート」基準のままなので、
+     キーボードが出るとナビが鍵盤の裏に隠れたり、スクロールのたびに飛び跳ねて見える。
+     入力中にナビは使えないので、隠して入力欄のための縦幅を返す方が素直。
+     JS 側（visualViewport）が body.keyboard-open を付け外しする。 */
+  body.keyboard-open .step-tabs {
+    /* display:none だとフォーカス中の要素が消えた場合に位置が飛ぶことがあるため、
+       画面外へ送り出して当たり判定だけ消す */
+    transform: translateY(110%);
+    pointer-events: none;
+  }
+
+  body.keyboard-open .shell {
+    /* ナビの分の余白も返す（入力欄の下に無駄な空白が残らないように） */
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* 保存通知はナビの上に出す想定で 88px 浮かせてある。ナビを退避したら下げる */
+  body.keyboard-open .save-notice {
+    bottom: calc(16px + env(safe-area-inset-bottom));
+  }
 }
 
 /* 320px幅など極狭の端末向け：ボトムナビの「保存した単語」を「単語」に短縮し、
@@ -6589,7 +6611,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.83</span>
+        <span class="app-footer-version">バージョン 1.0.84</span>
       </footer>
     </main>
 
@@ -6724,7 +6746,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.83";
+  const APP_REV = "1.0.84";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -17438,6 +17460,53 @@ function populateSpeechVoices() {
   select.value = voices.some((voice) => voice.voiceURI === savedUri) ? savedUri : "";
   select.disabled = !supported;
   if (elements.speechTestButton) elements.speechTestButton.disabled = !supported;
+}
+
+// iOS Safari は、ユーザー操作を伴わない speechSynthesis.speak() を黙って無視する。
+// 通常は「クイズを始める」のタップ内で最初の発話が起きるので問題にならないが、
+// クイズ中に読み上げ設定をONにして自動送りが有効だと、最初の発話がタイマー経由に
+// なって弾かれ、以降ずっと無音のままになる。最初のユーザー操作で無音の発話を1回だけ
+// 流し、音声を解放しておく。
+let speechUnlocked = false;
+function unlockSpeechSynthesis() {
+  if (speechUnlocked) return;
+  if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance !== "function") return;
+  speechUnlocked = true; // 失敗しても再試行しない（毎操作で例外を出さないため）
+  try {
+    // 空文字だと発話自体が起きず解放されない環境があるため、空白1文字を音量0で流す。
+    // speakWord() は冒頭で cancel() するので、これが後の読み上げに残ることはない。
+    const warmup = new SpeechSynthesisUtterance(" ");
+    warmup.volume = 0;
+    window.speechSynthesis.speak(warmup);
+  } catch {
+    // 解放は補助的な処理。失敗しても通常の読み上げ経路はそのまま動かす
+  }
+}
+
+// ソフトウェアキーボードが開いている間だけ、スマホのボトムナビを退避させる。
+// iOS の position:fixed はレイアウトビューポート基準のままなので、キーボードが出ると
+// ナビが鍵盤の裏に隠れたりスクロールのたびに飛び跳ねて見える。CSS 側の
+// body.keyboard-open が実際の退避を行う。visualViewport 非対応の環境では何もしない。
+const KEYBOARD_MIN_SHRINK_PX = 140; // アドレスバーの出入り程度では反応させない閾値
+
+// キーボードが出る入力欄かどうか（ボタンやチェックボックスでは出ない）
+function isTextEntryElement(element) {
+  if (!element) return false;
+  if (element.isContentEditable) return true;
+  const tag = element.tagName;
+  if (tag === "TEXTAREA") return true;
+  if (tag !== "INPUT") return false;
+  const type = String(element.type || "text").toLowerCase();
+  return !["button", "checkbox", "radio", "range", "submit", "reset", "file", "color", "hidden"].includes(type);
+}
+
+function syncKeyboardOpenState() {
+  const viewport = window.visualViewport;
+  if (!viewport) return;
+  // 入力欄にフォーカスが無いのに縮んでいる場合（ブラウザUIの出入り等）は反応しない
+  const shrink = window.innerHeight - viewport.height;
+  const open = shrink >= KEYBOARD_MIN_SHRINK_PX && isTextEntryElement(document.activeElement);
+  document.body.classList.toggle("keyboard-open", open);
 }
 
 function applySpeechSettings() {
@@ -32480,6 +32549,20 @@ elements.choices.addEventListener("keydown", (event) => {
   event.preventDefault();
 });
 
+// 最初のユーザー操作で音声を解放する（iOSの自動再生制限対策）。capture で拾い、
+// 種類ごとに once なので、通常は1回目のタップかキー入力で終わる。
+for (const type of ["pointerdown", "keydown"]) {
+  document.addEventListener(type, unlockSpeechSynthesis, { once: true, capture: true });
+}
+
+// ソフトウェアキーボードの開閉に body.keyboard-open を追従させる。
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", syncKeyboardOpenState);
+  document.addEventListener("focusin", syncKeyboardOpenState);
+  // focusout の直後は activeElement が body になるため、次の処理単位で判定し直す
+  document.addEventListener("focusout", () => window.setTimeout(syncKeyboardOpenState, 0));
+}
+
 // キーボード操作: 1〜4で解答、N/Enterで次の問題、0で「わからない」。
 document.addEventListener("keydown", (event) => {
   // チュートリアルが開いている間は、背後のクイズ/フラッシュカードをキー操作しない。
@@ -32793,11 +32876,21 @@ elements.quizSetupHintToggle?.addEventListener("keydown", (event) => {
 });
 
 // 検索ボックス：単語・意味の両方向から絞り込み
+// 1打鍵ごとに全語を絞り込んで描き直すと、数千語では入力が引っかかる。
+// 手が止まってから描き直す（体感できるほどの遅れではない）。
+const WORD_SEARCH_DEBOUNCE_MS = 180;
+let wordSearchDebounceTimer = 0;
+function scheduleWordSearchRender() {
+  window.clearTimeout(wordSearchDebounceTimer);
+  wordSearchDebounceTimer = window.setTimeout(renderSavedWords, WORD_SEARCH_DEBOUNCE_MS);
+}
 elements.wordSearchInput?.addEventListener("input", () => {
   wordSearchQuery = elements.wordSearchInput.value;
-  renderSavedWords();
+  scheduleWordSearchRender();
 });
 function clearWordSearch({ focus = true } = {}) {
+  // 待機中の描き直しは捨てる（クリア後に古い検索語の結果で上書きされないように）
+  window.clearTimeout(wordSearchDebounceTimer);
   wordSearchQuery = "";
   elements.wordSearchInput.value = "";
   renderSavedWords();
