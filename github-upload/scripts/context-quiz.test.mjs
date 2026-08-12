@@ -410,7 +410,7 @@ test("採点後: 通常出題の読み上げは従来どおり起きない（採
 function buildPendingSandbox() {
   const pieces = [
     "let quizEmptyReason = '';",
-    "let contextBasisFallbackNote = '';",
+    "let contextFallbackNote = '';",
     "let reviewSession = null;",
     "let currentQuiz = null;",
     "const appState = { words: [] };",
@@ -428,7 +428,10 @@ function buildPendingSandbox() {
       " }",
     "function prefetchNextContextItem() { calls.prefetch += 1; }",
     "function renderQuiz() { calls.renderQuiz += 1; }",
-    "function buildContextChoices() { return []; }",
+    // 空所補充の選択肢作りは差し替え可能にする。実物は「言い切れる誤答が作れない」ときだけ
+    // 自分で contextFallbackNote を立てて [] を返すので、その挙動も再現できるようにする。
+    "let __contextChoices = () => [];",
+    "function buildContextChoices(answer, item) { return __contextChoices(answer, item); }",
     "function isContextDistractorSafe() { return true; }",
     "function quizSelectedDeckWords() { return appState.words; }",
     "function contextGenMode() { return 'off'; }",
@@ -453,6 +456,9 @@ function buildPendingSandbox() {
       " getCurrentQuiz: () => currentQuiz," +
       " setItem: (id, item) => { __items[id] = item; }," +
       " setAttempted: (id) => { __attempted[id] = true; }," +
+      " setContextChoices: (fn) => { __contextChoices = fn; }," +
+      " setFallbackNote: (t) => { contextFallbackNote = t; }," +
+      " getFeedback: () => elements.quizFeedback.textContent," +
       " resolveGeneration: () => { if (__resolve) __resolve(null); }," +
       " buildReviewQuiz };",
   ];
@@ -639,6 +645,116 @@ test("フォールバック: 仮習得の検証待ちは、逆方向セッショ
   assert.equal(quiz.context, null, "同じ理由で空所補充にもしない");
   assert.notEqual(quiz.contextPending, true, "生成待ちにも入らない");
   assert.deepEqual(Array.from(p.calls.ensure), [], "検証待ちの語で例文生成を始めない");
+});
+
+// ============================================================================
+// 5. フォールバックの理由表示（1.0.83）
+//    黙って形式が変わると「例文モードのはずなのになぜ単語が出るのか」が分からない。
+//    通常出題へ落ちる3経路すべてで理由を出す。
+// ============================================================================
+
+const FALLBACK_WORDS = () => [
+  W("a1", "gather", "集める"),
+  W("p1", "wisdom", "知恵"),
+  W("p2", "urban", "都会の"),
+  W("p3", "fragile", "もろい"),
+];
+
+test("フォールバック理由: 例文を用意できなかった語は、その理由を表示する", () => {
+  const p = buildPendingSandbox();
+  p.setWords(FALLBACK_WORDS());
+  p.setAttempted("a1"); // 生成を試したが例文なし
+  p.setSession(contextSession(["a1"]));
+
+  const quiz = p.buildReviewQuiz();
+
+  assert.equal(quiz.context, null, "通常出題へ落ちる");
+  assert.match(
+    p.getFeedback(),
+    /例文を用意できなかった/,
+    "無言で形式を変えず、理由を伝える",
+  );
+});
+
+test("フォールバック理由: 誤答候補が足りなかった語は、そう伝える", () => {
+  const p = buildPendingSandbox();
+  p.setWords(FALLBACK_WORDS());
+  p.setItem("a1", { en: "They ___ data.", ja: null, src: "ai" });
+  // 正解1つしか作れなかった（2未満なので空所補充にできない）
+  p.setContextChoices(() => [{ id: "a1", label: "gather" }]);
+  p.setSession(contextSession(["a1"]));
+
+  const quiz = p.buildReviewQuiz();
+
+  assert.equal(quiz.context, null, "通常出題へ落ちる");
+  assert.match(p.getFeedback(), /誤答を十分に用意できなかった/);
+});
+
+test("フォールバック理由: 「言い切れる誤答が作れない」理由は上書きしない（既存の説明を残す）", () => {
+  const p = buildPendingSandbox();
+  p.setWords(FALLBACK_WORDS());
+  p.setItem("a1", { en: "They ___ data.", ja: null, src: "ai" });
+  // 実物の buildContextChoices と同じく、自分で理由を立てて [] を返す
+  p.setContextChoices(() => {
+    p.setFallbackNote("この単語は「空所に入らない」と言い切れる誤答を用意できなかったため、根拠のない出題を避けて通常の単語出題にしました。");
+    return [];
+  });
+  p.setSession(contextSession(["a1"]));
+
+  p.buildReviewQuiz();
+
+  assert.match(p.getFeedback(), /言い切れる誤答を用意できなかった/, "より具体的な理由が残る");
+  assert.doesNotMatch(p.getFeedback(), /十分に用意できなかった/, "後から一般的な文言で上書きしない");
+});
+
+test("フォールバック理由: 理由は次の問題へ持ち越さない", () => {
+  const p = buildPendingSandbox();
+  p.setWords(FALLBACK_WORDS());
+  p.setAttempted("a1");
+  p.setSession(contextSession(["a1"]));
+  p.buildReviewQuiz();
+  assert.match(p.getFeedback(), /例文を用意できなかった/);
+
+  // 通常出題を明示選択した回では、表示後に理由が消えていて再表示されない
+  p.setSession(contextSession(["a1"], { context: false, contextAmount: "none" }));
+  p.buildReviewQuiz();
+  assert.doesNotMatch(
+    p.getFeedback(),
+    /例文を用意できなかった/,
+    "前の語の切り替え理由が次の問題に残ってはいけない",
+  );
+});
+
+test("フォールバック理由: 通常出題を明示選択した回は、残っている理由を持ち込まない", () => {
+  // 例文の成功パスや生成待ちパスは理由を消さずに return するため、直前の理由が
+  // 残ったまま通常出題の回に入ることがありうる。その持ち越しを断つガードを固定する。
+  const p = buildPendingSandbox();
+  p.setWords(FALLBACK_WORDS());
+  p.setFallbackNote("この単語は例文を用意できなかったため、通常の単語出題にしました。");
+  // 例文を使わない回（mixFormat で通常出題に割り当てられた語と同じ状態）
+  p.setSession(contextSession(["a1"], { context: false, contextAmount: "none" }));
+
+  p.buildReviewQuiz();
+
+  assert.doesNotMatch(
+    p.getFeedback(),
+    /例文を用意できなかった/,
+    "例文を出そうとしていない回に、無関係な切り替え理由を出してはいけない",
+  );
+});
+
+test("フォールバック理由: 仮習得の検証待ちでは理由を出さない（失敗ではないため）", () => {
+  const p = buildPendingSandbox();
+  const answer = W("a1", "gather", "集める");
+  answer.learning.status = "mastered";
+  answer.learning.masteryVerify = "flashcard";
+  answer.learning.nextReviewAt = Date.now() - 1000;
+  p.setWords([answer, W("p1", "wisdom", "知恵"), W("p2", "urban", "都会の"), W("p3", "fragile", "もろい")]);
+  p.setSession(contextSession(["a1"]));
+
+  p.buildReviewQuiz();
+
+  assert.doesNotMatch(p.getFeedback(), /例文を用意できなかった|誤答を十分に/);
 });
 
 test("形式の割り当ては決定的：同じ種と語IDなら何度呼んでも同じ結果", () => {

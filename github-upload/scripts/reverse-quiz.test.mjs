@@ -699,7 +699,7 @@ test("gradeQuiz: forward (meaning-choice) still propagates meaning-choice throug
 //      こと自体も、startReview本体を動かして直接固定する
 
 // ---------- サンドボックス2: buildReviewQuiz 単体 ----------
-// reviewSession / appState.words / quizEmptyReason / contextBasisFallbackNote は
+// reviewSession / appState.words / quizEmptyReason / contextFallbackNote は
 // module-level の可変状態なので、setSession/setWordsで直接注入する。
 // 例文（context）分岐に入らないよう、テストでは常に context:false, mixFormat:false を渡す
 // （その場合 mixedFormatUsesContext は先頭のガードで即falseを返すため、
@@ -707,7 +707,7 @@ test("gradeQuiz: forward (meaning-choice) still propagates meaning-choice throug
 function buildReviewQuizSandbox() {
   const pieces = [
     "let quizEmptyReason = '';",
-    "let contextBasisFallbackNote = '';",
+    "let contextFallbackNote = '';",
     "let reviewSession = null;",
     "let currentQuiz = null;",
     "const appState = { words: [] };",
