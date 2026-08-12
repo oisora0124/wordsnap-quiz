@@ -5857,7 +5857,7 @@ accurate 正確な"
                 <option value="all">全部</option>
               </select>
             </label>
-            <label class="quiz-setup-field" title="「クイズを始める（おまかせ）」に適用されます（範囲クイズ・例文問題・フラッシュカードには適用されません）">
+            <label class="quiz-setup-field" title="4択クイズ全体に適用されます（例文問題・フラッシュカードは形式が違うため対象外）">
               <span>出題の向き</span>
               <select id="quizDirectionSelect" aria-describedby="quizSetupHint">
                 <option value="forward">英→日（既定）</option>
@@ -5892,7 +5892,7 @@ accurate 正確な"
               <li><strong>クイズを始める（おまかせ）：</strong>覚えていない単語を自動で選び、エンドレスに出題します。</li>
               <li><strong>苦手だけ／今日の復習：</strong>正答率80%未満の誤答歴がある単語、または復習日が来た単語だけを1周します。</li>
               <li><strong>やさしい順：</strong>未着手の単語をCEFRのA1→C2順で1周します。未判定の単語は最後です。</li>
-              <li><strong>出題の向き：</strong>「クイズを始める（おまかせ）」だけに適用されます。日→英は日本語の意味を見て英単語を選ぶ形式、ミックスは1問ごとにランダムです。</li>
+              <li><strong>出題の向き：</strong>4択クイズ全体（おまかせ・この設定で出題・今日の復習・苦手だけ など）に適用されます。日→英は日本語の意味を見て英単語を選ぶ形式です。ミックスは、おまかせでは1問ごと、それ以外はセッション開始時に向きが決まります。例文問題とフラッシュカードは形式が違うため対象外です。また、フラッシュカードで覚えた語を確かめる回だけは、設定に関わらず英→日で出ます。</li>
             </ul>
           </div>
         </div>
@@ -6589,7 +6589,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.80</span>
+        <span class="app-footer-version">バージョン 1.0.81</span>
       </footer>
     </main>
 
@@ -6724,7 +6724,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.80";
+  const APP_REV = "1.0.81";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -17034,7 +17034,7 @@ function normalizeQuizTimeLimit(value) {
   const n = Number(value);
   return QUIZ_TIME_LIMIT_CHOICES.includes(n) ? n : 0;
 }
-// 通常クイズ（おまかせ）の出題の向き。appStateには入れず端末ローカルの表示設定として保存する
+// 4択クイズの出題の向き。appStateには入れず端末ローカルの表示設定として保存する
 // （同期・データ形式・学習履歴には一切関わらないため）。既定は従来どおりの英→日。
 const QUIZ_DIRECTION_KEY = "wordsnap-quiz-direction:v1";
 const QUIZ_DIRECTION_CHOICES = ["forward", "reverse", "mix"];
@@ -25795,6 +25795,7 @@ function persistReviewProgress() {
         contextAmount: reviewSession.contextAmount,
         mixFormat: reviewSession.mixFormat,
         formatSeed: reviewSession.formatSeed,
+        reverse: reviewSession.reverse, // 出題の向きも維持する（再開で向きが変わらないように）
         missedIds: reviewSession.missedIds,
         savedAt: Date.now(),
       }),
@@ -25873,6 +25874,8 @@ function resumeSavedReview() {
     contextAmount,
     mixFormat: contextAmount === "some" && Boolean(saved.mixFormat),
     formatSeed: String(saved.formatSeed || ""),
+    // 旧い保存データには reverse が無い。その場合は false（従来どおり英→日）になる。
+    reverse: Boolean(saved.reverse),
     missedIds: Array.isArray(saved.missedIds) ? saved.missedIds : [],
   };
   reviewResult = null; // 再開したら前回の結果表示は消す
@@ -25925,6 +25928,11 @@ function startReview(ids, options = {}) {
     // 形式は「セッションの種＋単語ID」から決める。同じ問題を組み立て直しても
     // 形式が変わらず、再開しても同じ出題になる（乱数を都度引くと再描画で入れ替わる）。
     formatSeed: Math.random().toString(36).slice(2, 10),
+    // 出題の向き（日→英かどうか）はセッション開始時に一度だけ決めて固定する。
+    // 1問ごとに引き直すと、ミックス設定で途中から向きが変わったように見え、
+    // 再開（resume）でも保存前と違う向きになりうる。formatSeed と同じ考え方。
+    // 例文問題は語の意味を空所で問う形式なので、この向きの影響を受けない。
+    reverse: resolveQuizReverse(),
     missedIds: [], // このセッション中に一度でも間違えた単語ID（完走時のサマリ用）
     easyOrder: Boolean(options.easyOrder), // やさしい順モード（進捗欄に現在レベルを表示）
     // 復帰の抜き取りセッションだけに付く印。通常の復習で同じ語に答えた結果を
@@ -28839,7 +28847,19 @@ function buildReviewQuiz() {
       // 例文を用意できなかった語は、通常の単語出題にフォールバックして続行する。
     }
 
-    const distractors = pickDistractors(pool, answer, 3);
+    // 出題の向き。セッション開始時に固定した値を使う（1問ごとに引き直すと、
+    // ミックス設定で「途中から向きが変わる」ように見えるうえ、resume（再開）で
+    // 保存前と違う向きになりうる）。例文問題は上の分岐で既に返しているので、
+    // ここへ来るのは通常の4択だけ。
+    // ただし仮習得の検証待ち（フラッシュカードで習得した語の期限到来回）は必ず
+    // 英→日にする。本習得への確定は「意味4択に正解すること」が条件で、日→英は
+    // term-choice 扱いになって条件を満たさない。向きを固定しないと、逆方向を
+    // 使っている間その語は永久に仮習得のまま残り、フラッシュカードの対象からも
+    // 外れ続ける。上で例文形式を抑止しているのと同じ理由・同じ対象。
+    const reverse = Boolean(reviewSession.reverse) && !isMasteryVerificationDue(answer);
+    const distractors = pickDistractors(pool, answer, 3, [], {
+      dedupeBy: reverse ? "term" : "meaning",
+    });
     if (distractors.length === 0) {
       // 正解だけの1択で採点するとSRSが不当に進む。通常・総復習・苦手復習・resumeの
       // どの入口でも、誤答を1件も作れない場合は問題を返さず共通の空状態へ合流させる。
@@ -28849,7 +28869,13 @@ function buildReviewQuiz() {
       contextBasisFallbackNote = "";
       return null;
     }
-    const choices = shuffle([answer, ...distractors]);
+    // 逆方向は選択肢に英単語(term)を出す。answer自体は実データのまま変更せず、
+    // 選択肢だけ {id, label} に包む（buildQuiz / buildContextChoices と同じやり方）。
+    const choices = shuffle(
+      reverse
+        ? [answer, ...distractors].map((word) => ({ id: word.id, label: word.term }))
+        : [answer, ...distractors],
+    );
     // 形式が混在するセッションでは、通常出題の回でも次が例文なら先に用意しておく
     // （そうしないと例文に当たるたびに生成待ちが挟まる）。
     if (reviewSession.mixFormat) prefetchNextContextItem();
@@ -28866,6 +28892,7 @@ function buildReviewQuiz() {
       shownAt: Date.now(),
       context: null,
       srsDueAtStart,
+      reverse, // 日→英かどうか（採点・promptMode判定・自動読み上げの答え漏れ対策に使う）
     };
   }
   return null;
@@ -28937,10 +28964,13 @@ function buildQuiz() {
   if (!answer) return null;
   const pool = quizSelectedDeckWords().filter((word) => word.id !== answer.id);
   const basePool = pool.length >= 3 ? pool : appState.words.filter((word) => word.id !== answer.id);
-  // 出題の向き（設定は通常クイズ＝この関数にのみ適用。範囲クイズ・例文問題・
-  // フラッシュカードには触れない）。既定のforwardではMath.random()を消費しないため、
-  // 設定を触らない限り既存の乱数列・出題内容は完全に同一のまま。
-  const reverse = resolveQuizReverse();
+  // 出題の向き。おまかせクイズは1問ごとに引く（ミックスで問題ごとに変わる）。
+  // 範囲クイズ・復習セッションは startReview でセッション単位に固定する。
+  // 既定のforwardではMath.random()を消費しないため、設定を触らない限り
+  // 既存の乱数列・出題内容は完全に同一のまま。
+  // 仮習得の検証待ちの語だけは必ず英→日にする（本習得への確定は意味4択の正解が
+  // 条件で、日→英では永久に確定しない）。理由は buildReviewQuiz 側と同じ。
+  const reverse = resolveQuizReverse() && !isMasteryVerificationDue(answer);
   const distractors = pickDistractors(basePool, answer, 3, [], {
     dedupeBy: reverse ? "term" : "meaning",
   });
