@@ -998,3 +998,120 @@ test("誤答の選び方: 誤答が残っていれば choicesFinal は従来ど�
   assert.equal(choices.length, 2, "AIが用意した誤答があるなら登録語で水増ししない");
   assert.ok(choices.some((c) => c.label.toLowerCase() === "abolition"));
 });
+
+// ============================================================================
+// 7. 辞書の失敗の分類（1.0.86）
+//    429・5xx・通信断・タイムアウトを「例文なし」と同じ扱いにすると、その語は
+//    次に作り直されるまで（最大6時間）例文モードから外れる。時間をおけば直る失敗は
+//    15分で取り直せるように区別する。
+// ============================================================================
+
+function buildDictionarySandbox({ status = 200, body = [], throwKind = null } = {}) {
+  const pieces = [
+    `const CONTEXT_GEN_TIMEOUT_MS = ${html.match(/const CONTEXT_GEN_TIMEOUT_MS = (\d+);/)[1]};`,
+    "const appState = { words: [] };",
+    "function setTimeout(fn, ms) { return 0; }",
+    "function clearTimeout() {}",
+    "function AbortController() { this.signal = {}; this.abort = () => {}; }",
+    throwKind === "abort"
+      ? "function fetch() { const e = new Error('aborted'); e.name = 'AbortError'; return Promise.reject(e); }"
+      : throwKind === "network"
+        ? "function fetch() { return Promise.reject(new TypeError('Failed to fetch')); }"
+        : `function fetch() { return Promise.resolve({ ok: ${status === 200}, status: ${status},` +
+          ` json: () => Promise.resolve(${JSON.stringify(body)}) }); }`,
+    extractFunction("termWordRegex"),
+    extractFunction("sentenceLikeExamples"),
+    extractFunction("pickExample"),
+    // extractFunction は "function 名(" から切り出すため async が落ちる。付け直す。
+    "async " + extractFunction("fetchContextFromDictionary"),
+    "globalThis.__d = { fetchContextFromDictionary };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "context-quiz-dictionary-check.js" }).runInNewContext(sandbox);
+  return sandbox.__d;
+}
+
+const WORD = { id: "w1", term: "abolish", meaning: "廃止する", pos: null };
+
+test("辞書の失敗: 404（項目が無い）は作り直しても変わらないので、そのまま諦める", async () => {
+  const d = buildDictionarySandbox({ status: 404 });
+  const item = await d.fetchContextFromDictionary(WORD);
+  assert.equal(item, null, "例外にせず null を返す（＝恒久的に例文なし）");
+});
+
+test("辞書の失敗: 429（レート制限）は一時的な失敗として投げる", async () => {
+  const d = buildDictionarySandbox({ status: 429 });
+  await assert.rejects(
+    () => d.fetchContextFromDictionary(WORD),
+    (error) => error?.transient === true,
+    "混んでいるだけの語を「例文なし」として扱ってはいけない",
+  );
+});
+
+test("辞書の失敗: 5xx も一時的な失敗として投げる", async () => {
+  for (const status of [500, 502, 503]) {
+    const d = buildDictionarySandbox({ status });
+    await assert.rejects(
+      () => d.fetchContextFromDictionary(WORD),
+      (error) => error?.transient === true,
+      `HTTP ${status}`,
+    );
+  }
+});
+
+test("辞書の失敗: 通信断・タイムアウトはそのまま例外として伝わる（呼び出し側が一時失敗と判定する）", async () => {
+  const offline = buildDictionarySandbox({ throwKind: "network" });
+  await assert.rejects(
+    () => offline.fetchContextFromDictionary(WORD),
+    // vm内で作られた TypeError は別realmなので instanceof では比較できない
+    (error) => error?.name === "TypeError",
+  );
+
+  const timeout = buildDictionarySandbox({ throwKind: "abort" });
+  await assert.rejects(
+    () => timeout.fetchContextFromDictionary(WORD),
+    (error) => error?.name === "AbortError",
+  );
+});
+
+test("辞書の成功: 例文にその語がそのままの形で出てくるものだけ使う", async () => {
+  const d = buildDictionarySandbox({
+    status: 200,
+    body: [{ meanings: [{ partOfSpeech: "verb", definitions: [
+      { example: "Slavery was abolished in the nineteenth century." }, // 活用形なので不採用
+      { example: "They want to abolish the rule." },                   // これを使う
+    ] }] }],
+  });
+  const item = await d.fetchContextFromDictionary(WORD);
+  assert.ok(item, "例文が取れている");
+  assert.match(item.en, /\babolish\b/, "空所化できる形（そのままの形）でなければ答えが露出する");
+});
+
+test("辞書の失敗: 一時失敗を retryAt へつなぐ配線が ensureContextItem に残っている", () => {
+  // ensureContextItem は依存が非常に多く、丸ごと動かすと配線以外の理由で壊れやすい。
+  // reverse-quiz.test.mjs の「gradeQuiz本体を正しく切り出せている」と同じ流儀で、
+  // 3か所の配線が揃っていることを本体の字面で固定する（どれか1つ消えると効果が出ない）。
+  const body = extractFunction("ensureContextItem");
+
+  assert.match(
+    body,
+    /error\?\.transient \|\| error\?\.name === "AbortError" \|\| error instanceof TypeError/,
+    "辞書側の一時失敗（429・5xx／タイムアウト／通信断）を拾う判定が消えている",
+  );
+  assert.match(
+    body,
+    /dictTransientFailure = true/,
+    "拾った一時失敗を記録していない",
+  );
+  assert.match(
+    body,
+    /aiTransientFailure \|\| \(!item && dictTransientFailure\)/,
+    "一時失敗を retryAt につないでいない／例文が取れた回にも印を付けている",
+  );
+  // 辞書呼び出しは2か所（先読みと本呼び出し）あり、両方が同じ経路を通る必要がある
+  assert.equal(
+    (body.match(/runDictionary\(\)/g) || []).length,
+    2,
+    "辞書呼び出しの一部が一時失敗を拾わない経路のまま残っている",
+  );
+});

@@ -6611,7 +6611,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.85</span>
+        <span class="app-footer-version">バージョン 1.0.86</span>
       </footer>
     </main>
 
@@ -6746,7 +6746,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.85";
+  const APP_REV = "1.0.86";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -28280,7 +28280,14 @@ async function fetchContextFromDictionary(word) {
       `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`,
       { signal: controller.signal },
     );
-    if (!res.ok) return null;
+    // 404 は「その語の項目が無い」＝作り直しても結果は変わらない。
+    // 429（レート制限）・5xx は時間をおけば直る失敗なので、恒久的な「例文なし」として
+    // 焼き付けず、あとで取り直せるよう印を付けて投げる。通信断・タイムアウトも同じ扱い
+    // （fetch 自体が例外を投げるため、呼び出し側が transient として拾う）。
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      throw Object.assign(new Error(`dictionary ${res.status}`), { transient: true });
+    }
     const data = await res.json();
     // 多義語で語義違いの例文を出さないよう、登録済みの品詞に一致する定義の例文を優先する。
     // （品詞が分からない語は従来どおり全定義から選ぶ。辞書だけで語義までは特定できない）
@@ -28401,10 +28408,19 @@ async function ensureContextItem(word) {
         : null;
     // 配布時の不要な通信と辞書APIのレート消費を抑えるため、AIキーがあるときはAIを先に試す。
     // 辞書はAI生成が失敗した場合だけ開始する。キーなしでは従来どおりDatamuseと並行取得する。
+    // 辞書側の一時的な失敗（429・5xx・通信断・タイムアウト）を「例文なし」として
+    // 恒久的に焼き付けると、その語は二度と例文を取りに行かない。AIの一時失敗と同じく
+    // retryAt を付けて後で取り直せるようにするため、印だけ拾って null に潰す。
+    let dictTransientFailure = false;
+    const runDictionary = () =>
+      fetchContextFromDictionary(word).catch((error) => {
+        if (error?.transient || error?.name === "AbortError" || error instanceof TypeError) {
+          dictTransientFailure = true;
+        }
+        return null;
+      });
     let dictionaryPromise =
-      mode !== "off" && !willUseAI && networkAllowed()
-        ? fetchContextFromDictionary(word).catch(() => null)
-        : null;
+      mode !== "off" && !willUseAI && networkAllowed() ? runDictionary() : null;
     // 時間をおけば直る障害だったかを覚えておく。その結果を
     // キャッシュへ焼き付けると、その語は以後ずっと辞書品質のままAIで作り直されない。
     let aiTransientFailure = false;
@@ -28418,7 +28434,7 @@ async function ensureContextItem(word) {
     }
     if (!item && mode !== "off" && networkAllowed()) {
       if (!dictionaryPromise) {
-        dictionaryPromise = fetchContextFromDictionary(word).catch(() => null);
+        dictionaryPromise = runDictionary();
       }
       if (!derivedPromise) {
         derivedPromise = fetchDerivedFormDistractors(word, "").catch(() => []);
@@ -28507,7 +28523,10 @@ async function ensureContextItem(word) {
     // 呼び出し側が再描画したときに「未試行」と見なされて同じ語のAI生成が即座に走り直し、
     // レート制限中にリクエストを増やし続けてしまう（画面も生成待ちのまま止まる）。
     // 保存はするが retryAt を過ぎたら stale になるので、恒久的に焼き付くこともない。
-    const retryAt = aiTransientFailure ? Date.now() + CONTEXT_TRANSIENT_RETRY_MS : 0;
+    // 例文を1つも用意できず、その原因が一時的な失敗だった回だけ再試行の印を付ける。
+    // 例文が取れた回に印を付けると、使える結果を持っているのに作り直しに行ってしまう。
+    const transientFailure = aiTransientFailure || (!item && dictTransientFailure);
+    const retryAt = transientFailure ? Date.now() + CONTEXT_TRANSIENT_RETRY_MS : 0;
     const base = { cap, at: Date.now(), lastUsed: Date.now(), ...(retryAt ? { retryAt } : {}) };
     const entry = item ? { ...item, ...base } : { failed: true, ...base };
     // 開始後にcapが変わった旧タスクは返却だけに留め、新しいcapの結果を後から上書きしない。
@@ -28730,7 +28749,9 @@ function renderContextGenSettings() {
       "AIが使えないときは辞書API（dictionaryapi.dev）に切り替わります。無料枠の1分あたりの上限に当たった語は、その回だけ辞書の例文で出題し、あとで作り直します。";
   } else {
     hint.textContent =
-      "APIキーが未設定のため、いまは辞書API（キー不要）の例文を使います。上の「外部AI設定」で無料のAPIキーを入れると、AIが例文と誤答をまとめて作り、誤答が正解になっていないかも確認するので、問題の質が上がります。";
+      // 外部AI設定は「取り込む」タブの中にあり、この案内が出る設定タブには無い。
+      // 「上の」と書くと同じ画面を探してしまうので、実際の場所を書く。
+      "APIキーが未設定のため、いまは辞書API（キー不要）の例文を使います。手順1「取り込む」→「写真から読み取る」の中の「外部AI設定」で無料のAPIキーを入れると、AIが例文と誤答をまとめて作り、誤答が正解になっていないかも確認するので、問題の質が上がります。";
   }
 }
 
