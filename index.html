@@ -6611,7 +6611,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.84</span>
+        <span class="app-footer-version">バージョン 1.0.85</span>
       </footer>
     </main>
 
@@ -6746,7 +6746,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.84";
+  const APP_REV = "1.0.85";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -28569,14 +28569,33 @@ function contextDistractorHasBasis(answer, term) {
   return !candidateTags.some((tag) => answerTags.includes(tag));
 }
 
+// AIが同じ応答内で「空所に入れて自然になるか」を自己検証した語（正解＋AIの誤答）。
+// 生成直後は choiceValidation がまだ決まっていないため、その判定を待たずに
+// 「この語はAIが検証済み」と言えるかをここで見る。fit が無い応答は検証なしとみなす。
+function aiSelfCheckedTerms(item) {
+  if (!Array.isArray(item?.fit) || !Array.isArray(item?.integratedChoices)) return new Set();
+  const terms = item.integratedChoices.map((term) => String(term || "").trim().toLowerCase());
+  return new Set(terms);
+}
+
+// この語を誤答として採用してよいか。根拠は2通りある。
+//   (1) AIが同じ応答内で自己検証した語（プロンプトは (b)(c) で「出題語と同じ品詞」の誤答を
+//       明示的に要求しているので、品詞の重なりだけで捨てるとAIの誤答が全て消える）
+//   (2) 品詞が1つも重ならない、または出題語の派生形（＝空所へ文法的に入らないと言える）
+function contextDistractorAdmissible(answer, item, term) {
+  if (item?.choiceValidation === "ai") return true;
+  if (aiSelfCheckedTerms(item).has(String(term || "").trim().toLowerCase())) return true;
+  return contextDistractorHasBasis(answer, term);
+}
+
 // 4択全体として、根拠を持って正解を選べるか。
-// AIが「空所に自然に入るのは正解だけ」を同じ応答内で自己検証できていれば、それが根拠になる。
-// 検証が無い経路（辞書のみ等）では、誤答が1つずつ上の型で除外できることを求める。
+// 選ぶ段階で同じ基準を使っているので通常はここで落ちない。将来 pool の作り方が変わっても
+// 根拠のない誤答が混ざらないよう、最後の砦として残す。
 function contextChoicesHaveBasis(answer, item, choices) {
   if (item?.choiceValidation === "ai") return true;
   return choices
     .filter((choice) => choice.id !== answer.id)
-    .every((choice) => contextDistractorHasBasis(answer, choice.label));
+    .every((choice) => contextDistractorAdmissible(answer, item, choice.label));
 }
 
 function buildContextChoices(answer, item) {
@@ -28587,19 +28606,32 @@ function buildContextChoices(answer, item) {
     const term = String(raw || "").trim();
     const k = term.toLowerCase();
     if (!term || seenTerms.has(k) || !isContextDistractorSafe(answer, item, term)) continue;
+    // 根拠のない語はここで落とす。以前は採用してから4択全体を every で検査していたため、
+    // 1つでも根拠を欠くと問題が丸ごと破棄され、空所補充がほとんど出題されなかった。
+    if (!contextDistractorAdmissible(answer, item, term)) continue;
     seenTerms.add(k);
     generated.push({ id: `gen-${generated.length}`, label: term });
     if (generated.length >= 3) break;
   }
   const choices = [{ id: answer.id, label: answerTerm }, ...generated];
-  if (generated.length < 3 && !item?.choicesFinal) {
+  // choicesFinal は「誤答まで用意済みなので登録語から補充しない」という印。
+  // ただし使える誤答が1つも残らなかった場合まで補充を止めると、例文はあるのに
+  // 出題できない。1.0.84以前に作られたキャッシュは、この印が付いたまま誤答が
+  // 空で焼き付いているため（誤答を選んでから4択全体を検査していた名残）、
+  // 例文を作り直さずにそのまま救済できる。
+  if (generated.length < 3 && (!item?.choicesFinal || generated.length === 0)) {
     // 足りない分は登録済みの他の単語から補う（同じ品詞・紛らわしい綴りが優先される）
     const scoped = quizSelectedDeckWords().filter((w) => w.id !== answer.id);
     const basePool = (scoped.length >= 3 ? scoped : appState.words.filter((w) => w.id !== answer.id))
       .filter((w) => !seenTerms.has(String(w.term || "").trim().toLowerCase()))
       // pickDistractors 自体は通常クイズでも使うため意味重複の責務を保ち、空所補充固有の
       // 語形安全性はここで先に絞る。足りなくても危険語で4択を埋めず、注記付きで続行する。
-      .filter((w) => isContextDistractorSafe(answer, item, w.term));
+      .filter((w) => isContextDistractorSafe(answer, item, w.term))
+      // 根拠のある語だけを補充元にする。pickDistractors の preferDifferentPos は
+      // 保存済みの品詞タグ(word.pos.tag)を見るが、多くの語はタグを持たないため
+      // 実質ランダムに選ばれる。ここで絞らないと、選ばれた語をこの下のループで
+      // 落とすことになり、根拠のある語が十分あるのに選択肢が減る。
+      .filter((w) => contextDistractorAdmissible(answer, item, w.term));
     for (const w of pickDistractors(basePool, answer, 3 - generated.length, [], {
       preferDifferentPos: true,
     })) {
@@ -28607,6 +28639,7 @@ function buildContextChoices(answer, item) {
       const k = term.toLowerCase();
       // 最終追加の直前にも再確認し、将来 pool の作り方が変わっても検証を迂回させない。
       if (!term || seenTerms.has(k) || !isContextDistractorSafe(answer, item, term)) continue;
+      if (!contextDistractorAdmissible(answer, item, term)) continue;
       seenTerms.add(k);
       choices.push({ id: w.id, label: term });
       if (choices.length >= 4) break;
