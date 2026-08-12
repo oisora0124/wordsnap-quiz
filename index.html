@@ -6589,7 +6589,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.81</span>
+        <span class="app-footer-version">バージョン 1.0.82</span>
       </footer>
     </main>
 
@@ -6724,7 +6724,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.81";
+  const APP_REV = "1.0.82";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -17636,9 +17636,13 @@ function handleQuizTimeout() {
 // 再描画のたびに鳴らないよう、再生済みフラグを問題オブジェクト自体に立てておく。
 function autoSpeakCurrentQuiz() {
   if (!autoSpeakEnabled() || !currentQuiz || currentQuiz.answered) return;
-  // 例文の生成待ち中は読み上げない。まだ問題が出ていないうえ、例文モードで正解の単語を
-  // 音声で出してしまうと「文中から意味を推測する」出題の答えを先に漏らすことになる。
+  // 例文の生成待ち中は読み上げない。まだ問題自体が出ていない。
   if (currentQuiz.contextPending) return;
+  // 空所補充（例文）は、英文の空所に入る英単語そのものを4択で選ばせる形式。
+  // 解答前に term を読み上げると答えを声で言ってしまい、出題が成立しない。
+  // 画面側は blankOutTermInSentence で空所化しているのに音声だけ素通しになっていた。
+  // 逆方向と同じく、読み上げは gradeQuiz 側で採点確定後にだけ行う。
+  if (currentQuiz.context) return;
   // 日→英（逆方向）は選択肢が英単語そのものなので、解答前にterm を読み上げると
   // 答えを言ってしまう。読み上げは gradeQuiz 側で採点確定後にだけ行う。
   if (currentQuiz.reverse) return;
@@ -30503,6 +30507,11 @@ function currentQuizPromptMode(quiz) {
 
 function gradeQuiz(choiceId, dontKnow = false, options = {}) {
   if (!currentQuiz || currentQuiz.answered) return;
+  // 例文の生成待ちは選択肢0件で、まだ解答できる状態ではない。表示側（解答ボタン・
+  // 「次の問題」・キー操作）で既に塞いでいるが、そこが壊れて到達すると次の1択ガードに
+  // 落ちる。1択ガードは「出題不能」の後始末として復習セッションと再開データを破棄する
+  // ため、生成待ちが数秒あるだけで進行中の復習が消えてしまう。ここで何もせず戻す。
+  if (currentQuiz.contextPending) return;
   // 生成側の全経路で防いでいるが、古い画面状態や将来の呼び出し追加があっても
   // 1択で採点・SRS更新へ進まないよう、更新直前にも最後のガードを置く。
   // フラッシュカードは選択肢を持たず、本人が裏面を確認して正誤を明示するため例外。
@@ -30561,9 +30570,11 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
       currentQuiz.answer.term,
     );
   }
-  // 日→英は解答前に英単語を読み上げると答えが漏れるため autoSpeakCurrentQuiz 側で止めてある。
-  // 採点が確定したこのタイミングでだけ、設定ONなら正解の英単語を1回読み上げる。
-  if (currentQuiz.reverse && autoSpeakEnabled() && "speechSynthesis" in window) {
+  // 日→英と空所補充は、解答前に英単語を読み上げると答えが漏れるため
+  // autoSpeakCurrentQuiz 側で止めてある。採点が確定したこのタイミングでだけ、
+  // 設定ONなら正解の英単語を1回読み上げる（読み上げ機能自体は失わせない）。
+  // 空所補充はこの直前に完成した英文へ差し替えているので、音声と表示が一致する。
+  if ((currentQuiz.reverse || currentQuiz.context) && autoSpeakEnabled() && "speechSynthesis" in window) {
     try {
       speakWord(currentQuiz.answer.term);
     } catch {
