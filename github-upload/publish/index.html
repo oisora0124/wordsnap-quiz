@@ -6647,7 +6647,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.90</span>
+        <span class="app-footer-version">バージョン 1.0.91</span>
       </footer>
     </main>
 
@@ -6782,7 +6782,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.90";
+  const APP_REV = "1.0.91";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -22973,6 +22973,21 @@ function firstMeaning(text) {
   return t.replace(/\s+/g, "").trim();
 }
 
+// 日本語で始まる行の末尾に、意味として取り込まれずに捨てられる英単語があるかを返す。
+// firstMeaning() は最初の英字の位置で切るため、「走る run」の run はどこにも残らない。
+// 見出し語の保留が無いときは既に「読み取れなかった行」として報告しているので、
+// 保留があるときだけ黙って消えるのは一貫していない。この判定で両方を同じ扱いにする。
+//
+// 「走る（英: run）」のような補足表記まで拾うと、これまで取り込めていた行が
+// 読み取れない扱いになる。英字のあとが英単語だけで終わる行に限る（括弧・記号を含むものは対象外）。
+function droppedEnglishTail(line) {
+  const latin = String(line || "").search(/[A-Za-z]/);
+  if (latin <= 0) return "";
+  const tail = String(line).slice(latin).trim();
+  if (tail.length < 2) return "";
+  return /^[A-Za-z][A-Za-z' -]*$/.test(tail) ? tail : "";
+}
+
 function looksLikeHeadword(line) {
   if (/[,，;；.。]/.test(line)) return false; // synonym list / full sentence
   if (IPA_CHARS.test(line)) return false; // phonetic transcription
@@ -23064,14 +23079,24 @@ function parseVocabulary(text, deckId = null) {
         else if (outcome === "dup-saved") dupSavedCount++;
         else if (outcome === "dup-input") dupInputCount++;
         else if (outcome === "dup-trash") dupTrashCount++;
-        pendingTerm = null;
-        pendingTermLine = null;
+        // 直前に見出し語だけの行があった場合、その語はここで訳と対応する見込みが無くなる。
+        // 黙って捨てると（例:「beautiful」「apple りんご」）beautiful がどこにも残らず、
+        // 消えたことに気づけない。読み取れなかった行として記録してから進む。
+        releasePendingTerm();
       }
       continue;
     }
 
     // Japanese-led line: a gloss belonging to the pending headword
     if (hasJp && jpIndex === 0) {
+      // 「走る run」のように英単語が捨てられる行は、保留中の見出し語があっても訳として
+      // 取り込まない。取り込むと run がどこにも残らないまま「beautiful / 走る」という
+      // 誤った候補ができ、利用者は英単語が消えたことに気づけない。
+      // 保留が無い場合と同じく、読み取れなかった行として報告して直してもらう。
+      if (droppedEnglishTail(line)) {
+        unreadableLines.push(lineNo);
+        continue;
+      }
       if (pendingTerm) {
         const meaning = firstMeaning(line);
         const outcome = meaning ? resolve(pendingTerm, meaning) : "invalid";
@@ -23112,6 +23137,9 @@ function parseVocabulary(text, deckId = null) {
   }
   releasePendingTerm(); // 末尾に意味の対応しない見出し語が残っていれば記録
 
+  // 保留していた見出し語は行を戻って記録されるため、そのままだと「2行目・1行目」と
+  // 並ぶ。利用者は上から直すので、行番号は昇順にしてから返す。
+  unreadableLines.sort((a, b) => a - b);
   return { candidates: parsed, newCount, dupSavedCount, dupInputCount, dupTrashCount, unreadableLines };
 }
 
