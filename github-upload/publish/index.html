@@ -5707,7 +5707,7 @@ accurate 正確な"
             <!-- 日本語は改行がそのまま半角空白として描画されるため、文中で折り返さない。 -->
             <p class="ocr-notice ocr-recommend">
               <strong>読み取りの精度を優先するなら「外部AIで抽出」をおすすめします。</strong>
-              <span>端末内OCRは無料で安全ですが、手書き・小さい文字・2段組・影や反射のある写真では読み違いが増えます。外部AIは行の対応や訳の切り出しも含めて安定しやすく、取り込み後の手直しがぐっと減ります。利用には各サービスのAPIキー（下の「外部AI設定」で登録・無料枠あり）が必要で、</span><strong>画像は選んだサービスへ送信されます</strong><span>。個人情報が写った写真には使わないでください。</span>
+              <span>端末内OCRは無料で安全ですが、手書き・小さい文字・2段組・影や反射のある写真では読み違いが増えます。外部AIは行の対応や訳の切り出しも含めて安定しやすく、取り込み後の手直しがぐっと減ります。利用には各サービスのAPIキー（設定タブの「🔑 外部AI設定」で登録・無料枠あり。下のボタンから開けます）が必要で、</span><strong>画像は選んだサービスへ送信されます</strong><span>。個人情報が写った写真には使わないでください。</span>
             </p>
             <div class="import-grid">
               <label class="drop-zone" for="imageInput">
@@ -5777,24 +5777,11 @@ accurate 正確な"
               <p class="ocr-local-note">端末内OCRは画像をアップロードしません。高精度では通常画像と照明むら補正画像を比較するため、時間とメモリを多く使います。</p>
             </div>
 
-            <details class="ai-settings">
-              <summary>外部AI設定（任意・各サービスの利用条件を確認）</summary>
-              <div class="ai-settings-body">
-                <p class="ai-hint">
-                  <strong>設定は任意です。</strong>キーがなくてもアプリは使えます。入れると、写真からの読み取りと、例文モード（空所補充）の問題作りにAIを使えます。
-                </p>
-                <p class="ai-hint">
-                  キーは<strong>この端末のブラウザにだけ</strong>保存され、配布用のHTMLには含まれません。他の人に渡ることはないので、複数人で使うときは各自で取得してください。
-                </p>
-                <p class="ai-hint">
-                  写真から読み取るとき、<strong>画像は選んだサービスへ送信されます</strong>。個人情報が写った画像は使わないでください。Geminiの無料枠では、送信内容がGoogleの製品改善に使われる場合があります。
-                </p>
-                <p class="ai-hint">
-                  無料枠には回数の上限があり、条件は変更されることがあります。複数登録した場合は上から順に使います。
-                </p>
-                <div id="aiKeyFields" class="ai-key-fields"></div>
-              </div>
-            </details>
+            <p class="ocr-local-note">
+              外部AIで読み取るにはAPIキーが必要です。キーは写真の読み取りと例文モードの
+              両方で使うため、設定タブにまとめてあります。
+              <button id="openAiSettingsFromOcr" class="ghost mini" type="button">外部AI設定を開く</button>
+            </p>
           </div>
         </details>
       </section>
@@ -6520,6 +6507,30 @@ accurate 正確な"
             </div>
           </details>
 
+          <!-- APIキーは「写真から読み取る（OCR）」と「例文モード」の2機能で共用し、
+               同期のトグルも同じ箱に入る。取り込むタブのOCR欄に埋めていた頃の名残で
+               見つけにくかったため、設定タブの独立セクションへ移した。
+               入力欄は #aiKeyFields の1つだけを保つ（2箇所に置くと同じ保存先を書く
+               UIが二重になり、片方が古い表示のまま残る）。 -->
+          <details class="settings-section" id="aiSettingsSection" data-settings-section="ai-keys">
+            <summary>🔑 外部AI設定（任意・各サービスの利用条件を確認）</summary>
+            <div class="settings-body ai-settings-body">
+              <p class="ai-hint">
+                <strong>設定は任意です。</strong>キーがなくてもアプリは使えます。入れると、写真からの読み取りと、例文モード（空所補充）の問題作りにAIを使えます。
+              </p>
+              <p class="ai-hint">
+                キーは<strong>この端末のブラウザにだけ</strong>保存され、配布用のHTMLには含まれません。他の人に渡ることはないので、複数人で使うときは各自で取得してください。
+              </p>
+              <p class="ai-hint">
+                写真から読み取るとき、<strong>画像は選んだサービスへ送信されます</strong>。個人情報が写った画像は使わないでください。Geminiの無料枠では、送信内容がGoogleの製品改善に使われる場合があります。
+              </p>
+              <p class="ai-hint">
+                無料枠には回数の上限があり、条件は変更されることがあります。複数登録した場合は上から順に使います。
+              </p>
+              <div id="aiKeyFields" class="ai-key-fields"></div>
+            </div>
+          </details>
+
           <details class="settings-section" data-settings-section="learning-log">
             <summary>⏬ 単語情報の先読み（任意）</summary>
             <div class="settings-section-body">
@@ -6611,7 +6622,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.86</span>
+        <span class="app-footer-version">バージョン 1.0.87</span>
       </footer>
     </main>
 
@@ -6746,7 +6757,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.86";
+  const APP_REV = "1.0.87";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -16816,6 +16827,8 @@ const elements = {
   ocrLayoutSelect: document.querySelector("#ocrLayoutSelect"),
   aiOcrButton: document.querySelector("#aiOcrButton"),
   aiKeyFields: document.querySelector("#aiKeyFields"),
+  aiSettingsSection: document.querySelector("#aiSettingsSection"),
+  openAiSettingsFromOcr: document.querySelector("#openAiSettingsFromOcr"),
   stepTabs: [...document.querySelectorAll("[data-step-tab]")],
   stepPanels: [...document.querySelectorAll("[data-step-panel]")],
   sampleChips: document.querySelector(".sample-chips"),
@@ -18240,6 +18253,29 @@ elements.v2AnnounceOpenButton?.addEventListener("click", () => {
   if (elements.syncV2Section) elements.syncV2Section.open = true;
   elements.syncV2Section?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 });
+// 取り込むタブのOCR欄から、設定タブの外部AI設定へ飛ぶ。入力欄は設定タブに1つだけ置く
+// ため（同じ保存先を書くUIを二重にしない）、OCRからはここへ案内する。
+// 同期セクションへ飛ぶ既存の導線と同じ作り。
+elements.openAiSettingsFromOcr?.addEventListener("click", () => {
+  // options.scroll はナビ位置へスクロールする。ここでは目的のセクションまで送りたいので
+  // 指定せず、タブを切り替えてから自分でスクロールする（両方指定すると競合して届かない）。
+  setActiveStep("settings");
+  if (elements.aiSettingsSection) elements.aiSettingsSection.open = true;
+  // setActiveStep はパネルの hidden を同期的に外し、getBoundingClientRect は
+  // その場でレイアウトを確定させるので、フレームを待たずに正しい位置が取れる。
+  // requestAnimationFrame は「タブが裏にある／画面が隠れている」と発火しないため、
+  // 待つ作りにすると環境によってスクロールしないことがある。
+  // scrollIntoView はスクロール容器の判定が環境で揺れるので、位置を自分で出して
+  // window をスクロールする（このページの実際のスクロール容器は html）。
+  const section = elements.aiSettingsSection;
+  if (!section) return;
+  const top = section.getBoundingClientRect().top + window.scrollY;
+  window.scrollTo({
+    top: Math.max(0, top - 12),
+    behavior: prefersReducedMotion() ? "auto" : "smooth",
+  });
+});
+
 elements.v2AnnounceBackdrop?.addEventListener("click", (event) => {
   if (event.target === elements.v2AnnounceBackdrop) dismissV2Announce();
 });
@@ -28749,9 +28785,8 @@ function renderContextGenSettings() {
       "AIが使えないときは辞書API（dictionaryapi.dev）に切り替わります。無料枠の1分あたりの上限に当たった語は、その回だけ辞書の例文で出題し、あとで作り直します。";
   } else {
     hint.textContent =
-      // 外部AI設定は「取り込む」タブの中にあり、この案内が出る設定タブには無い。
-      // 「上の」と書くと同じ画面を探してしまうので、実際の場所を書く。
-      "APIキーが未設定のため、いまは辞書API（キー不要）の例文を使います。手順1「取り込む」→「写真から読み取る」の中の「外部AI設定」で無料のAPIキーを入れると、AIが例文と誤答をまとめて作り、誤答が正解になっていないかも確認するので、問題の質が上がります。";
+      // 外部AI設定はこの案内と同じ設定タブ内（すぐ下のセクション）にある。
+      "APIキーが未設定のため、いまは辞書API（キー不要）の例文を使います。下の「🔑 外部AI設定」で無料のAPIキーを入れると、AIが例文と誤答をまとめて作り、誤答が正解になっていないかも確認するので、問題の質が上がります。";
   }
 }
 
