@@ -123,6 +123,20 @@ for (const hash of hashes) {
 assertHeadersIntact(headersAfter, "更新後");
 if (headersAfter !== headersBefore) writeFileSync(headersPath, headersAfter);
 
+// Service Worker にアプリの版を埋め直す。
+// ブラウザはこのファイルの中身が変わったときだけ Service Worker を入れ直すため、
+// 版を埋めないとリリースしても端末のキャッシュが更新されず、通信が失敗した回に
+// 古い本体が表示される。版上げのたびに手で直すと必ず忘れるので、ここで揃える
+// （ズレは scripts/check-release.mjs が落とす）。
+const appVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+const swPath = new URL("../publish/wordsnap-sw.js", import.meta.url);
+const swBefore = readFileSync(swPath, "utf8");
+const swAfter = swBefore.replace(/const APP_REV = "[^"]*";/, `const APP_REV = "${appVersion}";`);
+if (!swAfter.includes(`const APP_REV = "${appVersion}";`)) {
+  throw new Error("Service Worker に版を埋め込めませんでした（APP_REV の宣言が見つかりません）。");
+}
+if (swAfter !== swBefore) writeFileSync(swPath, swAfter);
+
 copyFileSync(sourcePath, targetPath);
 if (readFileSync(sourcePath, "utf8") !== readFileSync(targetPath, "utf8")) {
   throw new Error("公開用HTMLとルートHTMLの同期に失敗しました。");

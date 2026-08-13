@@ -554,8 +554,20 @@ for (const icon of manifest.icons) {
     `manifest icon height does not match its declaration: ${icon.src}`);
 }
 
-assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v\d+["']/, "versioned cache name is missing");
-assert.match(worker, /const\s+CACHE_NAME\s*=\s*["']wordsnap-v7["']/, "service worker cache version must be v7");
+// キャッシュ名は「世代（v7）＋アプリの版」。世代はキャッシュの持ち方を変えたときに上げ、
+// 版の部分はリリースごとに変わる。版を含めないと、リリースしてもこのファイルの中身が
+// 変わらず Service Worker が入れ直されないため、端末に古い本体が残り続ける。
+assert.match(worker, /const\s+APP_REV\s*=\s*["'][^"']+["']/, "service worker must embed the app version");
+assert.equal(
+  worker.match(/const\s+APP_REV\s*=\s*["']([^"']+)["']/)?.[1],
+  packageVersion,
+  "service worker APP_REV must match package.json so each release reinstalls it",
+);
+assert.match(
+  worker,
+  /const\s+CACHE_NAME\s*=\s*`wordsnap-v7-\$\{APP_REV\}`/,
+  "service worker cache name must be v7 plus the app version",
+);
 assert.match(
   worker,
   /cache\s*\.add\(CORE_PRECACHE_URL\)[\s\S]*?\.then\(\(\)\s*=>\s*Promise\.allSettled/,
