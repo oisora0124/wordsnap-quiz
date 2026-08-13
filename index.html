@@ -6606,7 +6606,7 @@ accurate 正確な"
             <div class="settings-section-body">
               <p class="settings-desc">
                 欲しい機能・不具合・気づいたことを開発者に送れます。内容は<strong>開発者だけが確認します</strong>。
-                あなたの単語データや同期キーは送信しません。連絡先の入力は任意です。
+                あなたの単語データや同期キーは送信しません。連絡先は送らないため、個別の返信はできません。
               </p>
               <form id="feedbackForm" class="fb-form" novalidate>
                 <label class="fb-field">
@@ -6622,10 +6622,6 @@ accurate 正確な"
                   <textarea id="feedbackMessage" maxlength="2000" required aria-describedby="feedbackCharCount feedbackSecretNote feedbackStatus" placeholder="例：発音の音声がほしい／この単語の意味が違う気がする など"></textarea>
                   <span id="feedbackCharCount" class="fb-charcount">0 / 2000</span>
                   <span id="feedbackSecretNote" class="settings-desc">APIキーや引き継ぎコードは書かないでください。送信時に自動で伏せ字にしますが、貼らないのが確実です。</span>
-                </label>
-                <label class="fb-field">
-                  連絡先（任意・返信が必要なときだけ）
-                  <input id="feedbackContact" type="text" maxlength="200" placeholder="メールアドレスなど（空欄でOK）" autocomplete="off" />
                 </label>
                 <div class="settings-row">
                   <button id="feedbackSubmit" type="button">送信する</button>
@@ -6651,7 +6647,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.88</span>
+        <span class="app-footer-version">バージョン 1.0.89</span>
       </footer>
     </main>
 
@@ -6786,7 +6782,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.88";
+  const APP_REV = "1.0.89";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -16975,7 +16971,6 @@ const elements = {
   feedbackCategory: document.querySelector("#feedbackCategory"),
   feedbackMessage: document.querySelector("#feedbackMessage"),
   feedbackCharCount: document.querySelector("#feedbackCharCount"),
-  feedbackContact: document.querySelector("#feedbackContact"),
   feedbackSubmit: document.querySelector("#feedbackSubmit"),
   feedbackStatus: document.querySelector("#feedbackStatus"),
   telemetryOptoutToggle: document.querySelector("#telemetryOptoutToggle"),
@@ -17980,7 +17975,7 @@ function scheduleAutoNextIfNeeded() {
 
 // ---------- ご要望・フィードバック送信 ----------
 // 書き込み専用API /api/feedback へ送るだけ。読み取り経路は持たない。
-// 送るのは 種類・本文・任意の連絡先のみで、単語データや同期キーは一切含めない。
+// 送るのは 種類・本文のみで、連絡先・単語データ・同期キーは一切含めない。
 function updateFeedbackCharCount() {
   if (!elements.feedbackMessage || !elements.feedbackCharCount) return;
   const len = elements.feedbackMessage.value.length;
@@ -18030,7 +18025,6 @@ async function submitFeedback() {
   const payload = {
     category: elements.feedbackCategory?.value || "other",
     message: redactOwnSecretsForFeedback(message),
-    contact: redactOwnSecretsForFeedback((elements.feedbackContact?.value || "").trim()),
     appVersion: "web",
   };
   const button = elements.feedbackSubmit;
@@ -18086,7 +18080,7 @@ function initFeedbackForm() {
   });
   updateFeedbackCharCount();
   elements.feedbackSubmit?.addEventListener("click", submitFeedback);
-  // 連絡先入力欄で Enter を押したときのフォーム送信（ページ再読込）を防ぎ、送信処理へ回す。
+  // フォーム内で Enter を押したときの送信（ページ再読込）を防ぎ、送信処理へ回す。
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     submitFeedback();
