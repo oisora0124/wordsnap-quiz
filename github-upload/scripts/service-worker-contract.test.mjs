@@ -31,7 +31,12 @@ const source = readFileSync(SW_PATH, "utf8");
 
 const ORIGIN = "https://wordbank.pages.dev";
 const SCOPE = `${ORIGIN}/`;
-const CACHE_NAME = source.match(/const CACHE_NAME = "([^"]+)"/)[1];
+// キャッシュ名は `wordsnap-v7-${APP_REV}` のテンプレートリテラル。実物と同じ値を
+// 組み立てて使う（固定文字列で書くと、実物が変わってもテストだけ通り続ける）。
+const APP_REV = source.match(/const APP_REV = "([^"]+)";/)[1];
+const CACHE_NAME = source
+  .match(/const CACHE_NAME = `([^`]+)`;/)[1]
+  .replace("${APP_REV}", APP_REV);
 
 // ---- 実物に形を寄せたスタブ ----
 // スタブが実物と形が違うと「壊れているのに通るテスト」になる。
@@ -478,4 +483,39 @@ test("precache は本体だけを必須にし、存在しないファイルを�
     "存在しないファイルを precache している（本体を二重に持つ）",
   );
   assert.ok(cache.addKeys.includes("./"), "本体を precache していない");
+});
+
+// ---- リリースごとの入れ替わり（1.0.90） -------------------------------------
+// ブラウザは「wordsnap-sw.js の中身が変わったとき」だけ Service Worker を入れ直す。
+// 以前はキャッシュ名が手動の固定値だったため、リリースしてもこのファイルが変わらず、
+// 端末には古い本体（1.0.77）が残り続けた。HTMLは network-first なので普段は最新が
+// 出るが、通信が一瞬でも失敗するとフォールバックでその古い本体が表示される。
+
+test("キャッシュ名にアプリの版が入る（リリースのたびに入れ直される）", () => {
+  assert.match(
+    source,
+    /const\s+APP_REV\s*=\s*["'][^"']+["']/,
+    "版を埋め込んでいないと、リリースしてもファイルの中身が変わらない",
+  );
+  assert.match(
+    source,
+    /const\s+CACHE_NAME\s*=\s*`wordsnap-v7-\$\{APP_REV\}`/,
+    "キャッシュ名に版が入っていないと、activate で前の版のキャッシュが消えない",
+  );
+});
+
+test("Service Worker の版は package.json と一致する", () => {
+  const pkg = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  const swRev = source.match(/const\s+APP_REV\s*=\s*["']([^"']+)["']/)?.[1];
+  assert.equal(swRev, pkg.version, "ズレていると、その版だけ入れ替えが起きない");
+});
+
+test("activate は今の版以外のキャッシュを消す（古い本体を残さない）", () => {
+  assert.match(
+    source,
+    /keys\.filter\(\(key\) => key !== CACHE_NAME\)\.map\(\(key\) => caches\.delete\(key\)\)/,
+    "版が変わったときに前の版のキャッシュを消していない",
+  );
 });
