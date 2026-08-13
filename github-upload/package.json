@@ -1,6 +1,6 @@
 {
   "name": "wordsnap-quiz",
-  "version": "1.0.88",
+  "version": "1.0.89",
   "private": true,
   "type": "module",
   "description": "WordBank — 英単語クイズ。Cloudflare Pages Functions + D1 でサーバー保存。",
