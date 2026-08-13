@@ -6647,7 +6647,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.91</span>
+        <span class="app-footer-version">バージョン 1.0.92</span>
       </footer>
     </main>
 
@@ -6782,7 +6782,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.91";
+  const APP_REV = "1.0.92";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7240,26 +7240,77 @@ window.Cefr = Cefr;
     <script>
 // 英→日翻訳。まずGoogle翻訳の非公式エンドポイント(gtx)を試し、
 // 失敗したらMyMemoryにフォールバックする。両方失敗してもnullを返すだけで例外は投げない。
+// 使い道は単語の詳細（類義語・例文・定義の和訳）だけで、失敗しても和訳が出ないだけ。
+// 単語データ・クイズ・SRS・同期には影響しない。
+//
+// gtx を先に使うのは、複数件を1回にまとめられるため（translateBatch）。MyMemory には
+// その手が使えず1件ずつになるので、gtx をやめると呼び出し回数が数倍になり、
+// 無料枠を先に使い切って「翻訳が出ない」頻度がかえって上がる。
+// 非公開エンドポイントである点は承知のうえで、落ちたときに待たされないよう遮断器を置く。
 const Translate = (() => {
   const cache = new Map(); // 原文(trim) -> 訳文 or null(失敗)
   const BATCH_MARKER = "⁣"; // 訳文の分割に使う不可視セパレータ
 
-  async function getText(url) {
+  const TRANSLATE_TIMEOUT_MS = 8000;
+  // 続けてこの回数「相手が落ちている」応答が返ったら、そのセッションの間は呼ぶのをやめる。
+  const DOWN_LIMIT = 2;
+
+  // 相手が落ちているとき、呼び出しのたびにタイムアウト（8秒）を待たないための遮断器。
+  // gtx は非公開エンドポイントなので、ある日まとめて応答しなくなることがある。そのとき
+  // 単語の詳細を開くたびに毎回8秒待たされてからMyMemoryへ回る、という状態になっていた。
+  //
+  // 遮断はメモリにだけ持つ。保存すると復旧しても切り離したままになるため、
+  // 再読み込みで必ず元に戻す（＝相手の復旧に自動で追随する）。
+  function createBreaker(limit) {
+    let streak = 0;
+    let tripped = false;
+    return {
+      isTripped: () => tripped,
+      fail() {
+        streak += 1;
+        if (streak >= limit) tripped = true;
+      },
+      succeed() {
+        streak = 0;
+      },
+    };
+  }
+
+  const gtxBreaker = createBreaker(DOWN_LIMIT);
+  const myMemoryBreaker = createBreaker(DOWN_LIMIT);
+
+  // 「相手が落ちている(down)」と「応答は来たが中身が使えない」を分けて返す。
+  // まとめて失敗として数えると、たまたま訳せない語が続いただけで相手を切り離してしまう。
+  // down とみなすのは、通信不可・タイムアウト・429（上限）・5xx（相手側の障害）だけ。
+  async function getTextResult(url) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+    const timer = setTimeout(() => controller.abort(), TRANSLATE_TIMEOUT_MS);
     try {
       const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) return null;
-      return await res.text();
+      if (!res.ok) return { down: res.status === 429 || res.status >= 500, text: null };
+      return { down: false, text: await res.text() };
     } catch {
-      return null;
+      return { down: true, text: null }; // 通信不可・タイムアウト
     } finally {
       clearTimeout(timer);
     }
   }
 
+  // 遮断器を通して取得する。落ちている間は呼ばずに即 null を返す。
+  async function getTextVia(breaker, url) {
+    if (breaker.isTripped()) return null;
+    const { down, text } = await getTextResult(url);
+    if (down) {
+      breaker.fail();
+      return null;
+    }
+    breaker.succeed();
+    return text;
+  }
+
   async function viaGtx(text) {
-    const raw = await getText(
+    const raw = await getTextVia(
+      gtxBreaker,
       `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ja&dt=t&q=${encodeURIComponent(text)}`,
     );
     if (!raw) return null;
@@ -7274,7 +7325,8 @@ const Translate = (() => {
   }
 
   async function viaMyMemory(text) {
-    const raw = await getText(
+    const raw = await getTextVia(
+      myMemoryBreaker,
       `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ja`,
     );
     if (!raw) return null;
