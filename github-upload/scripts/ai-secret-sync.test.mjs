@@ -582,6 +582,9 @@ function renderSettings({ syncOn, v2Active, vaultKey = true, available = true })
     { id: "gemini", name: "Gemini", keyUrl: "https://example.com/k", placeholder: "AIza…" },
     { id: "groq", name: "Groq", keyUrl: "https://example.com/g", placeholder: "gsk_…" },
   ];
+  // このテストが凍結したいのは同期まわりの「文言」なので、キーの有効性表示は
+  // 呼ばれても何もしないスタブにする（表示そのものは別テストで検証する）。
+  app.ctx.renderAiKeyStatuses = () => {};
   vm.runInNewContext(extractFunction("renderAiKeyFields"), app.ctx);
   app.ctx.renderAiKeyFields();
   return html;
