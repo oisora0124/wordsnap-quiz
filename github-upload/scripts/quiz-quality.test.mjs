@@ -127,6 +127,7 @@ function buildSandbox() {
     extractFunction("stripNoise"),
     extractFunction("cleanTermText"),
     extractFunction("firstMeaning"),
+    extractFunction("droppedEnglishTail"),
     extractFunction("looksLikeHeadword"),
     extractFunction("validPair"),
     extractFunction("parseVocabulary"),
@@ -2153,4 +2154,109 @@ test("同じ語を除いても、選択肢は必要数そろう", () => {
     { id: "d1", term: "revenue", meaning: "収益", deckId: "toeic", pos: { tag: "n" } },
   ];
   assert.equal(sandbox.pickDistractors(pool, answer, 3).length, 3, "誤答が3つそろわない");
+});
+
+// ---- 取り込みパースの誤結合（1.0.91） ---------------------------------------
+// firstMeaning() は最初の英字の位置で切るため、「走る run」の run はどこにも残らない。
+// 保留中の見出し語があると、その行が訳として取り込まれ「beautiful / 走る」という
+// 誤った候補ができ、run が消えたことを利用者に知らせる手段が無かった。
+// 同じ行が単独で現れたときは以前から「読み取れなかった行」として報告しており、
+// 保留の有無で挙動が変わるのは一貫していなかった。
+
+test("取り込み: 日本語のあとに英単語が続く行で、英単語が黙って消えない", () => {
+  const q = buildSandbox();
+  const result = q.parseVocabulary("beautiful\n走る run", null);
+  assert.deepEqual(
+    Array.from(result.candidates).map((c) => `${c.term}/${c.meaning}`),
+    [],
+    "run を捨てたうえで beautiful/走る という誤った候補を作ってはいけない",
+  );
+  assert.deepEqual(
+    Array.from(result.unreadableLines),
+    [1, 2],
+    "両方の行を報告して、利用者が直せるようにする",
+  );
+});
+
+test("取り込み: 同じ形の行は、見出し語の保留があってもなくても同じ扱いになる", () => {
+  const q = buildSandbox();
+  const alone = q.parseVocabulary("走る run", null);
+  const pending = q.parseVocabulary("beautiful\n走る run", null);
+  assert.equal(alone.candidates.length, 0);
+  assert.ok(Array.from(alone.unreadableLines).includes(1));
+  assert.ok(
+    Array.from(pending.unreadableLines).includes(2),
+    "保留があるときだけ静かに取り込むのは一貫していない",
+  );
+});
+
+test("取り込み: 読み取れなかった行は昇順で返す（上から直せるように）", () => {
+  const q = buildSandbox();
+  const result = q.parseVocabulary("beautiful\n走る run", null);
+  const lines = Array.from(result.unreadableLines);
+  assert.deepEqual(lines, [...lines].sort((a, b) => a - b));
+});
+
+test("取り込み: これまで読めていた形式は変わらない（後方互換）", () => {
+  const q = buildSandbox();
+  for (const [text, expected] of [
+    ["run 走る", ["run/走る"]],           // 1行形式
+    ["run\n走る", ["run/走る"]],          // 見出し語＋次行に訳
+    ["run\n走る\n駆ける", ["run/走る"]],  // 複数行の訳
+  ]) {
+    const result = q.parseVocabulary(text, null);
+    assert.deepEqual(
+      Array.from(result.candidates).map((c) => `${c.term}/${c.meaning}`),
+      expected,
+      `入力: ${JSON.stringify(text)}`,
+    );
+  }
+});
+
+test("取り込み: 訳に添えた括弧つきの英語は、これまでどおり取り込む", () => {
+  const q = buildSandbox();
+  // 「走る（英: run）」は補足表記。ここまで読み取れない扱いにすると、
+  // これまで取り込めていた行が急に弾かれる。
+  const result = q.parseVocabulary("run\n走る（英: run）", null);
+  assert.equal(result.candidates.length, 1, "補足表記の行まで弾いてはいけない");
+  assert.equal(result.candidates[0].term, "run");
+  assert.deepEqual(Array.from(result.unreadableLines), []);
+});
+
+test("取り込み: 単独の英字1文字は対象にしない（記号や誤字で毎回警告を出さない）", () => {
+  const q = buildSandbox();
+  // 「走る a」のような1文字は、捨てられる英単語ではなく入力の揺れとみなす。
+  // ここを拾うと、正常な取り込みでも警告が出て邪魔になる。
+  const result = q.parseVocabulary("run\n走る a", null);
+  assert.equal(result.candidates.length, 1, "従来どおり訳として取り込む");
+  assert.equal(result.candidates[0].meaning, "走る");
+  assert.deepEqual(Array.from(result.unreadableLines), []);
+});
+
+test("取り込み: 英語の例文が続く行を、誤った候補にしない", () => {
+  const q = buildSandbox();
+  const result = q.parseVocabulary("run 走る\n彼は毎朝走る。 He runs every morning.", null);
+  assert.equal(result.candidates.length, 1, "例文行から候補を作ってはいけない");
+  assert.equal(result.candidates[0].term, "run");
+  // この行が報告されること自体は修正前からの挙動（英文が続く行は形式が崩れていると見なす）。
+  // 大事なのは「黙って取り込まない」ことなので、報告される側に倒れているのは問題ない。
+  assert.ok(!Array.from(result.unreadableLines).includes(1), "1行目は正しく読めている");
+});
+
+
+test("取り込み: 見出し語だけの行は、次に正常な行が来ても黙って捨てない", () => {
+  const q = buildSandbox();
+  // 「beautiful」は訳と対応しないまま終わる。次の行が完全な組だと、以前はここで
+  // 保留を静かに破棄しており、beautiful が消えたことを知る手段が無かった。
+  const result = q.parseVocabulary("beautiful\napple りんご", null);
+  assert.deepEqual(
+    Array.from(result.candidates).map((c) => `${c.term}/${c.meaning}`),
+    ["apple/りんご"],
+    "正常な行はこれまでどおり取り込む",
+  );
+  assert.deepEqual(
+    Array.from(result.unreadableLines),
+    [1],
+    "訳の付かなかった見出し語の行を報告する",
+  );
 });
