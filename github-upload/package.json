@@ -1,12 +1,12 @@
 {
   "name": "wordsnap-quiz",
-  "version": "1.0.87",
+  "version": "1.0.88",
   "private": true,
   "type": "module",
   "description": "WordBank — 英単語クイズ。Cloudflare Pages Functions + D1 でサーバー保存。",
   "scripts": {
     "sync:html": "node scripts/sync-html.mjs",
-    "test": "node --test scripts/api-contract.test.mjs scripts/rate-limit-key.test.mjs scripts/feedback-contract.test.mjs scripts/feedback-mail.test.mjs scripts/telemetry-contract.test.mjs scripts/quiz-quality.test.mjs scripts/reverse-quiz.test.mjs scripts/context-quiz.test.mjs scripts/mobile-input.test.mjs scripts/word-merge.test.mjs scripts/sync-auth-v2-contract.test.mjs scripts/sync-auth-v2-client-contract.test.mjs scripts/sync-v2-recovery-barrier.test.mjs scripts/sync-v2-recovery-ux.test.mjs scripts/sync-v2-identity-claim.test.mjs scripts/sync-identity-bootstrap.test.mjs scripts/v2-announce.test.mjs scripts/ai-secret-envelope.test.mjs scripts/ai-secret-sync.test.mjs scripts/a11y-dialog.test.mjs scripts/bulk-move-deck.test.mjs scripts/a11y-audit.test.mjs scripts/service-worker-contract.test.mjs scripts/csp-hashes.test.mjs scripts/schema-drift.test.mjs scripts/scale-guard.test.mjs scripts/d1-integration.test.mjs && node scripts/a11y-audit.mjs && node scripts/check-release.mjs",
+    "test": "node --test scripts/api-contract.test.mjs scripts/rate-limit-key.test.mjs scripts/feedback-contract.test.mjs scripts/feedback-mail.test.mjs scripts/telemetry-contract.test.mjs scripts/quiz-quality.test.mjs scripts/reverse-quiz.test.mjs scripts/context-quiz.test.mjs scripts/mobile-input.test.mjs scripts/word-merge.test.mjs scripts/sync-auth-v2-contract.test.mjs scripts/sync-auth-v2-client-contract.test.mjs scripts/sync-v2-recovery-barrier.test.mjs scripts/sync-v2-recovery-ux.test.mjs scripts/sync-v2-identity-claim.test.mjs scripts/sync-identity-bootstrap.test.mjs scripts/v2-announce.test.mjs scripts/ai-secret-envelope.test.mjs scripts/ai-secret-sync.test.mjs scripts/ai-key-check.test.mjs scripts/a11y-dialog.test.mjs scripts/bulk-move-deck.test.mjs scripts/a11y-audit.test.mjs scripts/service-worker-contract.test.mjs scripts/csp-hashes.test.mjs scripts/schema-drift.test.mjs scripts/scale-guard.test.mjs scripts/d1-integration.test.mjs && node scripts/a11y-audit.mjs && node scripts/check-release.mjs",
     "test:a11y": "node --test scripts/a11y-dialog.test.mjs scripts/a11y-audit.test.mjs && node scripts/a11y-audit.mjs",
     "test:api": "node --test scripts/d1-integration.test.mjs scripts/schema-drift.test.mjs scripts/api-contract.test.mjs scripts/rate-limit-key.test.mjs scripts/feedback-contract.test.mjs scripts/telemetry-contract.test.mjs scripts/sync-auth-v2-contract.test.mjs",
     "test:sw": "node --test scripts/service-worker-contract.test.mjs",

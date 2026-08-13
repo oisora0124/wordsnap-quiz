@@ -1887,6 +1887,35 @@ button.ghost.danger:hover {
   white-space: nowrap;
 }
 
+/* APIキーが実際に使えるかの表示。色だけで区別せず、記号と文言でも分かるようにする
+   （色覚特性や、色が見えにくい環境でも判別できるように）。 */
+.ai-key-status {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.ai-key-status.is-checking {
+  color: var(--accent);
+}
+
+.ai-key-status.is-valid {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.ai-key-status.is-invalid {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.ai-key-status.is-limited,
+.ai-key-status.is-error {
+  color: var(--warning);
+}
+
 .ai-key {
   flex: 1;
   width: 100%;
@@ -6622,7 +6651,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.87</span>
+        <span class="app-footer-version">バージョン 1.0.88</span>
       </footer>
     </main>
 
@@ -6757,7 +6786,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.87";
+  const APP_REV = "1.0.88";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -24114,6 +24143,110 @@ function setAiKey(id, value, options = {}) {
   }
 }
 
+// ---------- APIキーの有効性チェック ----------
+// 各サービスの「モデル一覧」APIを叩いて、キーが受け付けられるかだけを見る。
+// 生成は呼ばないので、無料枠の生成回数を消費しない。
+// 結果はキーの指紋に紐づけてメモリにだけ持つ。キーを変えれば指紋が変わって
+// 自動的に「未確認」へ戻り、判定結果を保存もしない（失効したキーを
+// 「有効」と表示し続けないため、再読み込み後も未確認から始める）。
+const aiKeyCheckResults = new Map(); // 指紋 -> { status, message }
+const aiKeyCheckInflight = new Map(); // 同じキーの二重確認を防ぐ
+const AI_KEY_CHECK_TIMEOUT_MS = 15 * 1000;
+
+function interpretAiKeyCheckResponse(status) {
+  if (status >= 200 && status < 300) return { status: "valid", message: "" };
+  // 400/401/403 はキーそのものが受け付けられていない（形式違い・無効・権限なし）。
+  if (status === 400 || status === 401 || status === 403) {
+    return { status: "invalid", message: "キーが受け付けられませんでした" };
+  }
+  // 429 は認証を通ったうえでの上限。無効と出すと「キーが違う」と誤解させる。
+  if (status === 429) return { status: "limited", message: "いまは無料枠の上限に達しています" };
+  return { status: "error", message: `確認できませんでした（HTTP ${status}）` };
+}
+
+async function requestAiKeyCheck(providerId, key, signal) {
+  if (providerId === "gemini") {
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+      method: "GET",
+      headers: { "x-goog-api-key": key },
+      signal,
+    });
+    return interpretAiKeyCheckResponse(res.status);
+  }
+  if (providerId === "groq") {
+    const res = await fetch("https://api.groq.com/openai/v1/models", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${key}` },
+      signal,
+    });
+    return interpretAiKeyCheckResponse(res.status);
+  }
+  return { status: "error", message: "このサービスは確認に対応していません" };
+}
+
+async function checkAiKey(providerId) {
+  const key = getAiKey(providerId);
+  if (!key) {
+    renderAiKeyStatuses();
+    return { status: "none", message: "" };
+  }
+  const fingerprint = shortKeyFingerprint(key);
+  const running = aiKeyCheckInflight.get(fingerprint);
+  if (running) return running;
+
+  aiKeyCheckResults.set(fingerprint, { status: "checking", message: "" });
+  renderAiKeyStatuses();
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AI_KEY_CHECK_TIMEOUT_MS);
+  const task = (async () => {
+    let result;
+    try {
+      result = await requestAiKeyCheck(providerId, key, controller.signal);
+    } catch (error) {
+      // 通信できなかっただけの回を「無効」と出さない（キーは正しいかもしれない）
+      result = {
+        status: "error",
+        message: error?.name === "AbortError" ? "確認がタイムアウトしました" : "通信できませんでした",
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+    aiKeyCheckResults.set(fingerprint, result);
+    renderAiKeyStatuses();
+    return result;
+  })();
+
+  aiKeyCheckInflight.set(fingerprint, task);
+  try {
+    return await task;
+  } finally {
+    aiKeyCheckInflight.delete(fingerprint);
+  }
+}
+
+function aiKeyStatusView(key, result) {
+  if (!key) return { text: "未設定", cls: "is-none" };
+  if (!result) return { text: "未確認（「確認」で調べます）", cls: "is-none" };
+  if (result.status === "checking") return { text: "確認中…", cls: "is-checking" };
+  if (result.status === "valid") return { text: "✓ 有効", cls: "is-valid" };
+  if (result.status === "limited") return { text: `△ ${result.message}（キー自体は有効）`, cls: "is-limited" };
+  if (result.status === "invalid") return { text: `✗ 無効：${result.message}`, cls: "is-invalid" };
+  return { text: `⚠ ${result.message || "確認できませんでした"}`, cls: "is-error" };
+}
+
+// 入力欄を作り直すと入力中の値やフォーカスを壊すため、状態表示だけを差し替える。
+function renderAiKeyStatuses() {
+  if (!elements.aiKeyFields) return;
+  for (const el of elements.aiKeyFields.querySelectorAll(".ai-key-status")) {
+    const id = el.dataset.status;
+    const key = getAiKey(id);
+    const view = aiKeyStatusView(key, key ? aiKeyCheckResults.get(shortKeyFingerprint(key)) : null);
+    el.textContent = view.text;
+    el.className = `ai-key-status ${view.cls}`;
+  }
+}
+
 function setAiKeysPersisted(on) {
   localStorage.setItem(AI_PERSIST_KEY, on ? "1" : "0");
   for (const provider of AI_PROVIDERS) {
@@ -32097,8 +32230,10 @@ function renderAiKeyFields() {
         <div class="ai-key-row">
           <input class="ai-key" type="password" autocomplete="off" data-provider="${provider.id}" placeholder="${provider.placeholder}" />
           <button type="button" class="ghost mini ai-paste" data-paste="${provider.id}">貼り付け</button>
+          <button type="button" class="ghost mini ai-check" data-check="${provider.id}">確認</button>
           <button type="button" class="ghost mini danger ai-clear" data-clear="${provider.id}">クリア</button>
         </div>
+        <span class="ai-key-status is-none" data-status="${provider.id}" role="status" aria-live="polite"></span>
       </label>`,
   ).join("");
   // トグル値ではなく、現在の部屋とvault keyで実際に封筒を作れるかを表示へ反映する。
@@ -32157,7 +32292,30 @@ function renderAiKeyFields() {
 
   for (const input of elements.aiKeyFields.querySelectorAll(".ai-key")) {
     input.value = getAiKey(input.dataset.provider);
-    input.addEventListener("input", () => setAiKey(input.dataset.provider, input.value));
+    input.addEventListener("input", () => {
+      setAiKey(input.dataset.provider, input.value);
+      // キーが変われば指紋も変わり、前の判定は参照されなくなる（＝未確認へ戻る）。
+      // 1文字ごとに問い合わせると無駄な通信になるので、ここでは表示だけ更新する。
+      renderAiKeyStatuses();
+    });
+    // 入力を終えた（欄から離れた）タイミングで一度だけ自動確認する。
+    // 未入力・確認済みのキーでは何も起きない（checkAiKey側で握る）。
+    input.addEventListener("change", () => {
+      if (getAiKey(input.dataset.provider)) void checkAiKey(input.dataset.provider);
+    });
+  }
+
+  for (const button of elements.aiKeyFields.querySelectorAll(".ai-check")) {
+    button.addEventListener("click", () => {
+      const id = button.dataset.check;
+      if (!getAiKey(id)) {
+        setStatus("先にAPIキーを入力してください。");
+        return;
+      }
+      // 押し直しは再確認として扱う（失効や枠の回復を確かめられるように）
+      aiKeyCheckResults.delete(shortKeyFingerprint(getAiKey(id)));
+      void checkAiKey(id);
+    });
   }
 
   for (const button of elements.aiKeyFields.querySelectorAll(".ai-paste")) {
@@ -32172,7 +32330,8 @@ function renderAiKeyFields() {
         }
         field.value = text;
         setAiKey(id, text);
-        setStatus("APIキーを貼り付けました。");
+        setStatus("APIキーを貼り付けました。有効か確認しています…");
+        void checkAiKey(id); // 貼り付けは明示的な操作なので、そのまま確認まで進める
       } catch {
         setStatus("貼り付けできませんでした。欄に直接入力してください。");
         field.focus();
@@ -32186,9 +32345,12 @@ function renderAiKeyFields() {
       const field = elements.aiKeyFields.querySelector(`.ai-key[data-provider="${id}"]`);
       field.value = "";
       setAiKey(id, "");
+      renderAiKeyStatuses(); // 「有効」の表示を残さない
       setStatus("APIキーを削除しました。");
     });
   }
+
+  renderAiKeyStatuses();
 }
 
 elements.aiOcrButton.addEventListener("click", async () => {
