@@ -1115,3 +1115,60 @@ test("辞書の失敗: 一時失敗を retryAt へつなぐ配線が ensureConte
     "辞書呼び出しの一部が一時失敗を拾わない経路のまま残っている",
   );
 });
+
+// ============================================================================
+// 7. AIの自己検証で「空所に入る」とされた語を誤答にしない（1.0.93）
+//    fit は「空所に入れて自然な文になる語」。誤答にすると正解が2つある問題になる。
+//    後段の applyContextValidation も fit を除外するが、そちらは fit が候補全体を
+//    覆えた回にしか走らない。覆えなかった回にここを素通りさせると、空所に入る語が
+//    誤答として焼き付く。
+// ============================================================================
+
+test("AI検証: fit に挙がった語は誤答に採用しない（正解が2つある問題を作らない）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const item = {
+    en: EN,
+    // AIが「celebrate も空所に入る」と自己申告した応答
+    distractors: ["abolition", "celebrate", "purchase"],
+    fit: ["abolish", "celebrate"],
+    integratedChoices: ["abolish", "abolition", "celebrate", "purchase"],
+    src: "ai",
+  };
+  assert.equal(
+    b.contextDistractorAdmissible(ANSWER, item, "celebrate"),
+    false,
+    "空所に入ると申告された語を誤答にしてはいけない",
+  );
+  const labels = b.buildContextChoices(ANSWER, item).map((c) => c.label.toLowerCase());
+  assert.ok(!labels.includes("celebrate"), "選択肢にも入ってはいけない");
+});
+
+test("AI検証: fit に入っていない語は、これまでどおり採用する", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const item = {
+    en: EN,
+    distractors: ["abolition", "celebrate", "purchase"],
+    fit: ["abolish"], // 正解だけが入る＝通常の応答
+    integratedChoices: ["abolish", "abolition", "celebrate", "purchase"],
+    src: "ai",
+  };
+  const labels = b.buildContextChoices(ANSWER, item).map((c) => c.label.toLowerCase());
+  assert.ok(labels.includes("celebrate") && labels.includes("purchase"), "AI経路が機能しなくなる");
+});
+
+test("AI検証: fit が候補を覆えなかった回でも、空所に入る語は弾く", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  // integratedChoices が候補を覆っていない＝choiceValidation は "local-only" になる回。
+  // この経路では後段の fit 除外が走らないので、ここで弾けないと焼き付く。
+  const item = {
+    en: EN,
+    distractors: ["celebrate"],
+    fit: ["abolish", "celebrate"],
+    integratedChoices: ["abolish", "celebrate"],
+    src: "ai",
+  };
+  assert.equal(b.contextDistractorAdmissible(ANSWER, item, "celebrate"), false);
+});

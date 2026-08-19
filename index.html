@@ -6647,7 +6647,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.92</span>
+        <span class="app-footer-version">バージョン 1.0.93</span>
       </footer>
     </main>
 
@@ -6782,7 +6782,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.92";
+  const APP_REV = "1.0.93";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23145,7 +23145,13 @@ function parseVocabulary(text, deckId = null) {
       // 取り込まない。取り込むと run がどこにも残らないまま「beautiful / 走る」という
       // 誤った候補ができ、利用者は英単語が消えたことに気づけない。
       // 保留が無い場合と同じく、読み取れなかった行として報告して直してもらう。
-      if (droppedEnglishTail(line)) {
+      const droppedTail = droppedEnglishTail(line);
+      // 末尾の英語が保留中の見出し語と同じなら、見出し語の繰り返し（辞書やOCRの
+      // 出力でよくある「run / 走る run」の形）。消える英単語ではないので、
+      // これまでどおり訳として取り込む。
+      const echoesPendingTerm =
+        Boolean(pendingTerm) && normalizeTerm(droppedTail) === normalizeTerm(pendingTerm);
+      if (droppedTail && !echoesPendingTerm) {
         unreadableLines.push(lineNo);
         continue;
       }
@@ -28836,7 +28842,15 @@ function contextDistractorHasBasis(answer, term) {
 // 「この語はAIが検証済み」と言えるかをここで見る。fit が無い応答は検証なしとみなす。
 function aiSelfCheckedTerms(item) {
   if (!Array.isArray(item?.fit) || !Array.isArray(item?.integratedChoices)) return new Set();
-  const terms = item.integratedChoices.map((term) => String(term || "").trim().toLowerCase());
+  // fit は「空所に入れて自然な文になる語」。誤答にすると正解が2つある問題になる。
+  // AIが検証したという事実だけで通してはいけないので、fit に挙がった語は必ず外す。
+  // 後段の applyContextValidation も fit を除外するが、そちらは fit が候補全体を
+  // 覆えた回にしか走らない。覆えなかった回にここを素通りさせると、空所に入る語が
+  // 誤答として焼き付く。
+  const fits = new Set(item.fit.map((term) => String(term || "").trim().toLowerCase()));
+  const terms = item.integratedChoices
+    .map((term) => String(term || "").trim().toLowerCase())
+    .filter((term) => term && !fits.has(term));
   return new Set(terms);
 }
 
