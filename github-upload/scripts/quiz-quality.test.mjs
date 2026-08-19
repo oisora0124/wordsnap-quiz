@@ -2260,3 +2260,26 @@ test("取り込み: 見出し語だけの行は、次に正常な行が来ても
     "訳の付かなかった見出し語の行を報告する",
   );
 });
+
+test("取り込み: 末尾の英語が見出し語の繰り返しなら、これまでどおり取り込む（1.0.93）", () => {
+  const q = buildSandbox();
+  // 辞書やOCRの出力でよくある「run / 走る run」の形。2行目末尾の run は
+  // 消える英単語ではなく見出し語の繰り返しなので、訳として取り込んでよい。
+  for (const text of ["run\n走る run", "run\n走る RUN"]) {
+    const result = q.parseVocabulary(text, null);
+    assert.deepEqual(
+      Array.from(result.candidates).map((c) => `${c.term}/${c.meaning}`),
+      ["run/走る"],
+      `入力: ${JSON.stringify(text)}`,
+    );
+    assert.deepEqual(Array.from(result.unreadableLines), []);
+  }
+});
+
+test("取り込み: 見出し語と違う英単語なら、繰り返しとみなさず報告する", () => {
+  const q = buildSandbox();
+  // 「beautiful」に対する「走る run」は繰り返しではない。run が消えるので報告する。
+  const result = q.parseVocabulary("beautiful\n走る run", null);
+  assert.deepEqual(Array.from(result.candidates), []);
+  assert.deepEqual(Array.from(result.unreadableLines), [1, 2]);
+});
