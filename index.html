@@ -2910,6 +2910,15 @@ textarea:focus-visible {
   font-weight: 700;
 }
 
+/* 古い版が表示されたときの直し方。版表示のすぐ隣に出して、気づいた場所で解決できるようにする。 */
+.app-footer-note {
+  flex-basis: 100%;
+  margin-top: 2px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 @media (max-width: 480px) {
   .restore-history-item {
     grid-template-columns: 1fr;
@@ -6376,6 +6385,7 @@ accurate 正確な"
                 <li data-sync-identity-ui="v2-native" hidden><strong>引き継ぎコードを知っている人はデータを読み書きできます</strong>。コードはURLには含まれませんが、他人に教えたり公開の場に貼ったりしないでください。</li>
                 <li><strong>外部辞書への通信：</strong>保存一覧で未判定のCEFR・品詞を補う際は英単語だけをDatamuseへ送ります。「詳しく」で辞書情報を開いた際は英単語をDatamuse・dictionaryapi.devへ、取得した英文の和訳をGoogle翻訳・MyMemoryへ送る場合があります。個人キー・成績・単語帳全体はこれらのサービスへ送りません。</li>
                 <li><strong>例文問題の外部通信：</strong>「出さない」では新しい例文を作るための通信はしません。「一部」「全部」または「例文で解く」で新規生成が必要な場合は、開始前の確認後に対象の単語と意味を辞書APIへ、APIキー設定時は選択したAIサービスへ直接送ります。APIキーはWordBankのサーバーへは送りません。</li>
+                <li><strong>古いバージョンが表示されるとき：</strong>アプリを一度終了して開き直してください（スマホならタスク一覧からスワイプで終了、ブラウザならタブを閉じて開き直す）。オフライン用に保存した古い本体が残っていると、通信が一瞬途切れた回にそれが表示されることがあります。開き直せば最新版に入れ替わり、古い保存分は自動で削除されます。単語データや学習の記録には影響しません。</li>
                 <li data-sync-identity-ui="legacy">全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこの個人キーで保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
                 <li data-sync-identity-ui="legacy">万一、個人キーが他人に知られてしまったら：①「JSONを書き出す」で単語データを保存 → ②この端末のブラウザデータ（サイトデータ）を消してから、個人キーの付いていない新しいリンクで開き直す（新しい個人キーが自動発行されます）→ ③「JSONを読み込む」で単語を戻す、の順で新しいキーに引っ越せます。</li>
                 <li data-sync-identity-ui="v2-native" hidden>全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこのV2保存先で保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
@@ -6647,7 +6657,10 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.93</span>
+        <span class="app-footer-version">バージョン 1.0.94</span>
+        <span class="app-footer-note">
+          ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
+        </span>
       </footer>
     </main>
 
@@ -6782,7 +6795,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.93";
+  const APP_REV = "1.0.94";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -34404,6 +34417,34 @@ function initStorageWarning() {
 }
 
 // PWA: Service Worker を登録してオフラインでも起動できるようにする。
+// 起動時に、いまの版と違うアプリキャッシュを削除する。
+//
+// Service Worker の install は「アプリ本体を取得してキャッシュできたとき」だけ成功する
+// 作りにしてある（取れないまま skipWaiting すると、動作中の旧キャッシュまで消えて
+// オフライン起動が壊れるため）。裏を返すと、保存容量が足りない等で install が失敗すると
+// 新しいSWは有効化されず、古い本体がキャッシュに残り続ける。HTMLは network-first なので
+// 普段は最新が出るが、通信が一瞬でも途切れるとフォールバックでその古い本体が表示される。
+// （リリースを重ねても 1.0.77 が時々出る、という事故がこれだった。）
+//
+// いま動いているこのページは必ず最新版なので、ページ側から古いキャッシュを消せる。
+// 消せば空き容量も戻るため、次の install が通りやすくなる＝自己修復になる。
+// 版はフッターの表示から読む（package.json・APP_REV との一致は check-release.mjs が強制）。
+async function purgeStaleAppCaches() {
+  if (typeof caches === "undefined") return;
+  try {
+    const shown = document.querySelector(".app-footer-version")?.textContent || "";
+    const rev = shown.match(/(\d+\.\d+\.\d+)/)?.[1];
+    if (!rev) return; // 版が読めないときは何もしない（現行キャッシュを誤って消さない）
+    const current = `wordsnap-v7-${rev}`;
+    const keys = await caches.keys();
+    for (const key of keys) {
+      if (key.startsWith("wordsnap-") && key !== current) await caches.delete(key);
+    }
+  } catch {
+    // 掃除は補助。失敗してもアプリの動作には影響しない
+  }
+}
+
 // https か localhost のときだけ。file:// や LAN の http（〜.local:8787等）では黙ってスキップする。
 function initServiceWorker() {
   try {
@@ -34413,6 +34454,8 @@ function initServiceWorker() {
     navigator.serviceWorker.register("wordsnap-sw.js").catch(() => {
       // 登録に失敗してもアプリ本体はそのまま動く
     });
+    // 登録と並行して、いまの版と違うアプリキャッシュを片付ける（下の関数の説明を参照）
+    void purgeStaleAppCaches();
   } catch {
     // Service Worker は任意機能。ここで落ちても初期化を止めない
   }

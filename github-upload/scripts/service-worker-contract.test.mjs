@@ -519,3 +519,92 @@ test("activate は今の版以外のキャッシュを消す（古い本体を�
     "版が変わったときに前の版のキャッシュを消していない",
   );
 });
+
+// ---- 古いアプリキャッシュの自己修復（1.0.94） -------------------------------
+// install は「アプリ本体を取得してキャッシュできたとき」だけ成功する作りなので、
+// 保存容量が足りない等で失敗すると新しいSWが有効化されず、古い本体が残り続ける。
+// HTMLは network-first なので普段は最新が出るが、通信が一瞬でも途切れると
+// フォールバックでその古い本体が表示される（1.0.77 が時々出る事故）。
+// いま動いているページは必ず最新なので、ページ側から古いキャッシュを消して自己修復する。
+
+const appHtml = readFileSync(new URL("../publish/index.html", import.meta.url), "utf8");
+
+function extractPurgeFunction() {
+  const start = appHtml.indexOf("async function purgeStaleAppCaches(");
+  if (start < 0) throw new Error("purgeStaleAppCaches not found");
+  const brace = appHtml.indexOf("{", start);
+  let depth = 0;
+  for (let i = brace; i < appHtml.length; i += 1) {
+    if (appHtml[i] === "{") depth += 1;
+    else if (appHtml[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return appHtml.slice(start, i + 1);
+    }
+  }
+  throw new Error("unbalanced braces");
+}
+
+function buildPurgeSandbox({ shownVersion, existing }) {
+  const deleted = [];
+  const sandbox = {
+    caches: {
+      keys: async () => existing.slice(),
+      delete: async (key) => {
+        deleted.push(key);
+        return true;
+      },
+    },
+    document: {
+      querySelector: () => (shownVersion === null ? null : { textContent: shownVersion }),
+    },
+  };
+  new Script(`${extractPurgeFunction()}\nglobalThis.__p = purgeStaleAppCaches;`, {
+    filename: "sw-purge-check.js",
+  }).runInNewContext(sandbox);
+  return { run: sandbox.__p, deleted };
+}
+
+test("自己修復: いまの版と違うアプリキャッシュだけを消す", async () => {
+  const { run, deleted } = buildPurgeSandbox({
+    shownVersion: "バージョン 1.0.94",
+    existing: ["wordsnap-v7", "wordsnap-v7-1.0.77", "wordsnap-v7-1.0.94", "other-cache"],
+  });
+  await run();
+  assert.deepEqual(
+    deleted.sort(),
+    ["wordsnap-v7", "wordsnap-v7-1.0.77"],
+    "古い版だけを消し、いまの版と無関係のキャッシュは触らない",
+  );
+});
+
+test("自己修復: 版が読めないときは何も消さない（現行キャッシュを誤って消さない）", async () => {
+  const { run, deleted } = buildPurgeSandbox({
+    shownVersion: "バージョン 不明",
+    existing: ["wordsnap-v7-1.0.94"],
+  });
+  await run();
+  assert.deepEqual(deleted, []);
+});
+
+test("自己修復: フッターが無い環境でも落ちない", async () => {
+  const { run, deleted } = buildPurgeSandbox({ shownVersion: null, existing: ["wordsnap-v7-1.0.77"] });
+  await assert.doesNotReject(() => run());
+  assert.deepEqual(deleted, []);
+});
+
+test("自己修復: 起動時に呼ばれる配線が残っている", () => {
+  assert.match(
+    appHtml,
+    /navigator\.serviceWorker\.register\("wordsnap-sw\.js"\)[\s\S]{0,200}purgeStaleAppCaches\(\)/,
+    "登録と一緒に掃除を呼んでいない＝古いキャッシュが残り続ける",
+  );
+});
+
+test("案内: 古い版が出たときの直し方が画面に書いてある", () => {
+  assert.match(
+    appHtml,
+    /ここが古い版のときは、アプリを一度終了して開き直す/,
+    "版表示の隣に直し方が無い（気づいた場所で解決できない）",
+  );
+  assert.match(appHtml, /古いバージョンが表示されるとき/, "設定にも説明が無い");
+});
