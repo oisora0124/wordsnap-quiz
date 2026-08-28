@@ -3,7 +3,7 @@
 // どちらも本番の足を引っ張る。両方向を固定入力で押さえる。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -139,4 +139,81 @@ test("公開版 index.html に違反が無い", () => {
   const found = JSON.parse(out || "[]");
   assert.deepEqual(found, [], `違反: ${JSON.stringify(found, null, 2)}`);
   assert.equal(code, 0, "違反ゼロなら終了コードは0であるべき");
+});
+
+// ---- 学習の記録パネルのPC表示（1.0.95） -------------------------------------
+// PC幅ではパネルが1080pxあるのにカレンダーは380pxしか使わず、左右に大きな空白が
+// できていた。成績も下へ流れるため、カレンダーと同時に見られなかった。
+// 広い画面のときだけ左右2段組にする。スマホ（1段組）は変えない。
+
+const streakHtml = readFileSync(new URL("../publish/index.html", import.meta.url), "utf8");
+
+function extractMediaBlock(condition) {
+  const start = streakHtml.indexOf(`@media (${condition}) {`);
+  if (start < 0) return "";
+  let depth = 0;
+  for (let i = streakHtml.indexOf("{", start); i < streakHtml.length; i += 1) {
+    if (streakHtml[i] === "{") depth += 1;
+    else if (streakHtml[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return streakHtml.slice(start, i + 1);
+    }
+  }
+  return "";
+}
+
+test("PC表示: 学習の記録は広い画面でだけ2段組にする", () => {
+  const block = extractMediaBlock("min-width: 900px");
+  assert.ok(block, "@media (min-width: 900px) のまとまりが見つからない");
+  assert.match(
+    block,
+    /\.streak-panel\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/,
+    "パネルを2列にしていない",
+  );
+  assert.match(block, /\.stats-block\s*\{[^}]*grid-column:\s*2/, "成績を右列に置いていない");
+});
+
+test("PC表示: 2段組の指定はメディアクエリの中だけにある（スマホを巻き込まない）", () => {
+  // 1段組のままにしたいので、メディアクエリの外に 2列指定があってはいけない。
+  const block = extractMediaBlock("min-width: 900px");
+  const outside = streakHtml.replace(block, "");
+  assert.doesNotMatch(
+    outside,
+    /\.streak-panel\s*\{[^}]*grid-template-columns/,
+    "メディアクエリの外で .streak-panel に列指定がある＝スマホでも2段組になる",
+  );
+});
+
+test("PC表示: 成績カードは列幅の下限で並べる（最後の行が欠けない）", () => {
+  const block = extractMediaBlock("min-width: 900px");
+  assert.match(
+    block,
+    /\.stats-grid\s*\{[^}]*repeat\(auto-fit, minmax\(200px, 1fr\)\)/,
+    "3列固定のままだと5枚で 1+3+1 になり最後の行が欠ける",
+  );
+});
+
+test("CSSの波括弧が対応している（セレクタの途中に割り込んでいない）", () => {
+  const css = streakHtml.slice(streakHtml.indexOf("<style>") + 7, streakHtml.indexOf("</style>"));
+  let depth = 0;
+  for (const ch of css) {
+    if (ch === "{") depth += 1;
+    else if (ch === "}") depth -= 1;
+    assert.ok(depth >= 0, "閉じ括弧が多い");
+  }
+  assert.equal(depth, 0, "波括弧の対応が崩れている＝どこかのルールが壊れている");
+});
+
+test("CSS: セレクタの並びの途中に @規則 が割り込んでいない", () => {
+  // 波括弧の対応だけでは、`.a,` の直後に `@media {...}` を差し込む壊し方を検出できない
+  // （括弧は釣り合ったまま、セレクタの並びが壊れて後続のルールが丸ごと無効になる）。
+  // 実際にこの壊し方をして、追加したスタイルが一切効かない状態を作ってしまったので、
+  // その形を直接見る。カンマの次に来てよいのはセレクタだけで、@ は来ない。
+  const css = streakHtml.slice(streakHtml.indexOf("<style>") + 7, streakHtml.indexOf("</style>"));
+  const broken = /,\s*(?:\/\*[\s\S]*?\*\/\s*)*@/.exec(css);
+  assert.equal(
+    broken,
+    null,
+    broken ? `セレクタの並びに @規則 が割り込んでいる: ${css.slice(Math.max(0, broken.index - 60), broken.index + 60)}` : "",
+  );
 });
