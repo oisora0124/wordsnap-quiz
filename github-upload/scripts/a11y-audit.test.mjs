@@ -217,3 +217,56 @@ test("CSS: セレクタの並びの途中に @規則 が割り込んでいない
     broken ? `セレクタの並びに @規則 が割り込んでいる: ${css.slice(Math.max(0, broken.index - 60), broken.index + 60)}` : "",
   );
 });
+
+// ---------------------------------------------------------------------------
+// CEFRの説明（1.0.96）
+// A1〜C2は成績タブ・保存した単語の絞り込み・やさしい順の3か所に出るが、
+// 記号だけでは何を意味するか分からない。レベル表を出す成績タブに説明を置き、
+// 単語一覧のバッジはツールチップで同じ内容を出す。
+// ---------------------------------------------------------------------------
+
+test("CEFR: 6段階すべてに日本語の説明がある", () => {
+  const start = streakHtml.indexOf("const CEFR_LEVEL_GUIDE = {");
+  assert.ok(start > 0, "レベルの説明表が見つからない");
+  const table = streakHtml.slice(start, streakHtml.indexOf("};", start));
+  for (const level of ["A1", "A2", "B1", "B2", "C1", "C2"]) {
+    assert.match(table, new RegExp(`${level}:\\s*\\{\\s*title:\\s*"[^"]+",\\s*detail:\\s*"[^"]+"`),
+      `${level} の説明が無い`);
+  }
+});
+
+test("CEFR: 説明は成績タブのレベル別カードのすぐ下に、全幅で出す", () => {
+  // レベル別カードが出ていない（＝A1〜C2が画面に無い）ときは説明も出さない。
+  assert.match(streakHtml, /function cefrGuideCard\(\)\s*\{\s*if \(statsCefrWords\(\)\.length === 0\) return "";/,
+    "レベル別カードが無いときにも説明が出てしまう");
+  assert.match(streakHtml, /statsCefrCard\(\),\s*\n\s*cefrGuideCard\(\),/,
+    "レベル別カードの直後に置いていない");
+  // 説明は横に長い文章なので、200px幅のカード列に押し込めず全幅にする。
+  assert.match(streakHtml, /\.stats-card-wide\s*\{\s*grid-column:\s*1 \/ -1;/, "全幅にしていない");
+  assert.match(streakHtml, /<summary>CEFR（A1〜C2）とは<\/summary>/, "説明の見出しが無い");
+});
+
+test("CEFR: 推定値であることを説明に明記する（公式のレベル表ではない）", () => {
+  const start = streakHtml.indexOf("function cefrGuideMarkup()");
+  const body = streakHtml.slice(start, streakHtml.indexOf("\n}", start));
+  assert.match(body, /出現頻度からの推定/, "推定である旨が書かれていない");
+  assert.match(body, /復習の間隔には影響しません/, "SRSに影響しないことが書かれていない");
+});
+
+test("CEFR: 英検の級は断定せず、1対1でないことを添える", () => {
+  // 英検の各級のCEFR算出範囲は重なっていて、レベルと級は1対1に対応しない。
+  // 「A2＝準2級の範囲」と言い切ると誤解を招くので、見当をつける目安として書く。
+  const start = streakHtml.indexOf("const CEFR_LEVEL_GUIDE = {");
+  const table = streakHtml.slice(start, streakHtml.indexOf("};", start));
+  assert.doesNotMatch(table, /英検[^"]*級の範囲/, "級を断定している");
+  assert.match(table, /英検でいえば準1級あたり/, "目安としての書き方になっていない");
+  const guide = streakHtml.indexOf("function cefrGuideMarkup()");
+  const body = streakHtml.slice(guide, streakHtml.indexOf("\n}", guide));
+  assert.match(body, /1対1では対応しません/, "1対1でない旨の注記が無い");
+});
+
+test("CEFR: 単語一覧のバッジのツールチップにも同じ説明を出す", () => {
+  const start = streakHtml.indexOf("function cefrTitle(");
+  const body = streakHtml.slice(start, streakHtml.indexOf("\n}", start));
+  assert.match(body, /cefrGuideText\(level\)/, "バッジのツールチップに説明を添えていない");
+});
