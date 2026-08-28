@@ -1057,6 +1057,41 @@ h2 {
 .stats-cefr-mastered { background: var(--success); }
 .stats-cefr-learning { background: var(--accent); }
 
+.stats-card-wide {
+  grid-column: 1 / -1;
+}
+
+.stats-cefr-guide {
+  margin-top: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.stats-cefr-guide > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.stats-cefr-guide p {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+.stats-cefr-guide-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.stats-cefr-guide-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  line-height: 1.5;
+}
+
 .stats-chart {
   max-height: 64px;
 }
@@ -6706,7 +6741,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.95</span>
+        <span class="app-footer-version">バージョン 1.0.96</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -6844,7 +6879,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.95";
+  const APP_REV = "1.0.96";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -22889,6 +22924,25 @@ function cefrMatches(word, level) {
 // SRSの復習スケジュール（今日の復習・苦手だけ）には一切影響させない。
 const CEFR_ORDER = ["A1", "A2", "B1", "B2", "C1", "C2"];
 
+// 各レベルの意味。A1〜C2という記号だけでは「自分がどのあたりなのか」が分からないため、
+// 画面（成績タブの説明・バッジのツールチップ）で必ずこの日本語を添える。
+// 英検との対応は日本英語検定協会が公表しているCEFR対照（3級=A1・準2級=A2・2級=B1・
+// 準1級=B2・1級=C1）に合わせる。C2に対応する級は無いのでその旨だけ書く。
+const CEFR_LEVEL_GUIDE = {
+  A1: { title: "入門", detail: "身の回りのごく基本的な語。英検5〜3級の範囲。" },
+  A2: { title: "初級", detail: "日常のありふれた事柄を扱える。英検準2級の範囲。" },
+  B1: { title: "中級", detail: "身近な話題なら自力でやりとりできる。英検2級の範囲。" },
+  B2: { title: "中上級", detail: "抽象的な話題や専門的な議論にもついていける。英検準1級の範囲。" },
+  C1: { title: "上級", detail: "幅広い話題を含みまで理解して使える。英検1級の範囲。" },
+  C2: { title: "最上級", detail: "母語話者に近く、読んだ・聞いたものをほぼ全て理解できる。対応する英検の級は無い。" },
+};
+
+// バッジやツールチップに添える1行説明（未知のレベルなら空文字）。
+function cefrGuideText(level) {
+  const guide = CEFR_LEVEL_GUIDE[level];
+  return guide ? `${guide.title}：${guide.detail}` : "";
+}
+
 // レベル文字列→順位。未判定/不明は最後（=CEFR_ORDER.length）に回す純粋関数。単体テスト対象。
 function cefrRankOfLevel(level) {
   const index = CEFR_ORDER.indexOf(level);
@@ -28472,12 +28526,29 @@ function isDerivedFormOf(answer, candidate) {
   if (isInflectionOf(t, c)) return false; // 活用形は派生形として扱わない
   if (isUnsafeComparativeDistractor(t, c)) return false;
   // move のように名詞用法もある語では movement と同じ位置に入ることがある。
-  // 名詞化を誤答に使うのは、登録品詞から元語が動詞・形容詞だと分かる場合だけに絞る。
-  const posTag = String(answer?.pos?.tag || "").toLowerCase();
+  // 代表の品詞（訳から導出した1つ）だけを見ると move は "v" なので素通りしてしまうため、
+  // 取り得る品詞すべてを見て、名詞にならない動詞・形容詞のときだけ名詞化を誤答に使う。
+  const tags = posTagsFor(t, typeof answer === "object" ? answer : null);
   return (
-    (posTag === "v" || posTag === "adj") &&
+    !tags.includes("n") &&
+    (tags.includes("v") || tags.includes("adj")) &&
     hasDerivationalSuffix(t, c, DERIVATIONAL_SUFFIXES)
   );
+}
+
+// 登録済みの単語のうち、訳が出題語の訳と近すぎる語（＝同義語）は空所補充の誤答にできない。
+// 意味が同じ語はそのまま空所に入るので、正解が2つある問題になってしまう。
+// AI生成の誤答はAIの自己申告（fit）しか通っておらず、AIは自分が作った誤答を
+// 「入らない」と答えがちなので、手元のデータで機械的に確かめられるのはここだけ。
+function contextDistractorIsSynonym(answer, candidate) {
+  const key = String(candidate || "").trim().toLowerCase();
+  const meaning = answer?.meaning;
+  if (!key || !meaning) return false;
+  const registered = (appState.words || []).find(
+    (word) => String(word.term || "").trim().toLowerCase() === key,
+  );
+  if (!registered || registered.id === answer?.id) return false;
+  return meaningsTooClose(meaning, registered.meaning);
 }
 
 // AI生成・Datamuse・登録語補充のどの経路から来ても、選択肢へ入れる直前に通す共通安全判定。
@@ -28489,14 +28560,20 @@ function isContextDistractorSafe(answer, item, candidate) {
   if (!answerTerm || !/^[A-Za-z][A-Za-z'’-]*$/.test(candidateTerm) || c === answerTerm) return false;
   if (isInflectionOf(answerTerm, c)) return false;
   if (isUnsafeComparativeDistractor(answerTerm, c)) return false;
+  if (contextDistractorIsSynonym(answer, candidateTerm)) return false;
   const nounDerivedFromAnswer = hasDerivationalSuffix(answerTerm, c, DERIVATIONAL_SUFFIXES);
   const answerDerivedFromCandidate = hasDerivationalSuffix(c, answerTerm, DERIVATIONAL_SUFFIXES);
-  const posTag = String(answer?.pos?.tag || "").toLowerCase();
   // 名詞化の組を許すのは「v/adj の出題語 → 名詞化した誤答」の正方向だけ。
   // 出題語が名詞・品詞不明、または名詞化語から元語への逆方向は両方成立し得るため除外する。
+  // さらに、出題語が名詞としても使える語（support, demand, attempt など）は、例文が
+  // 名詞の用法で書かれていると名詞化した誤答も空所に入ってしまう。代表の品詞（訳から
+  // 導出した1つ）だけを見ると素通りするので、取り得る品詞すべてで判定する。
+  const answerTags = posTagsFor(answerTerm, typeof answer === "object" ? answer : null);
+  const answerIsOnlyVerbOrAdj =
+    !answerTags.includes("n") && (answerTags.includes("v") || answerTags.includes("adj"));
   if (
     (nounDerivedFromAnswer || answerDerivedFromCandidate) &&
-    !(nounDerivedFromAnswer && (posTag === "v" || posTag === "adj"))
+    !(nounDerivedFromAnswer && answerIsOnlyVerbOrAdj)
   ) {
     return false;
   }
@@ -28921,7 +28998,11 @@ function aiSelfCheckedTerms(item) {
 //       明示的に要求しているので、品詞の重なりだけで捨てるとAIの誤答が全て消える）
 //   (2) 品詞が1つも重ならない、または出題語の派生形（＝空所へ文法的に入らないと言える）
 function contextDistractorAdmissible(answer, item, term) {
-  if (item?.choiceValidation === "ai") return true;
+  // choiceValidation === "ai" は「その回にAIへ渡した4語を検証できた」という記録であって、
+  // 「この問題ではどんな語でも誤答にしてよい」という意味ではない。以前はここで無条件に
+  // 通していたため、AIの誤答が全て fit（＝空所に入る）と判定されて消えた回に、
+  // 下の登録語からの補充が一切の検査を受けずに選択肢へ入り、空所に入る語が誤答として
+  // 並ぶことがあった。検証済みかどうかは必ず語ごとに見る。
   if (aiSelfCheckedTerms(item).has(String(term || "").trim().toLowerCase())) return true;
   return contextDistractorHasBasis(answer, term);
 }
@@ -28930,7 +29011,6 @@ function contextDistractorAdmissible(answer, item, term) {
 // 選ぶ段階で同じ基準を使っているので通常はここで落ちない。将来 pool の作り方が変わっても
 // 根拠のない誤答が混ざらないよう、最後の砦として残す。
 function contextChoicesHaveBasis(answer, item, choices) {
-  if (item?.choiceValidation === "ai") return true;
   return choices
     .filter((choice) => choice.id !== answer.id)
     .every((choice) => contextDistractorAdmissible(answer, item, choice.label));
@@ -30557,6 +30637,38 @@ function statsCefrCard() {
   );
 }
 
+// CEFRの説明。A1〜C2はこの画面・保存した単語の絞り込み・やさしい順の3か所に出てくるが、
+// 記号だけでは「自分がどのあたりなのか」が分からないため、レベル表を出す成績タブに置く。
+// 既定は閉じた状態にして、普段の見え方を変えない。
+// レベル別カードが出ている（＝A1〜C2が画面に出ている）ときだけ説明も出す。
+// 説明は横に長い文章なので、カードの列に収めず全幅で置く。
+function cefrGuideCard() {
+  if (!statsCefrCard()) return "";
+  return `<div class="stats-card stats-card-wide">${cefrGuideMarkup()}</div>`;
+}
+
+function cefrGuideMarkup() {
+  const rows = CEFR_ORDER.map((level) => {
+    const guide = CEFR_LEVEL_GUIDE[level];
+    return (
+      `<div class="stats-cefr-guide-row">` +
+      `<span class="cefr-badge cefr-${escapeHtml(level)}">${escapeHtml(level)}</span>` +
+      `<span><strong>${escapeHtml(guide.title)}</strong>　${escapeHtml(guide.detail)}</span>` +
+      `</div>`
+    );
+  }).join("");
+  return (
+    `<details class="stats-cefr-guide">` +
+    `<summary>CEFR（A1〜C2）とは</summary>` +
+    `<p>ヨーロッパで作られた語学力の共通ものさしで、A1がいちばんやさしく、C2がいちばん難しい6段階です。` +
+    `WordBankでは<strong>単語ごとの難しさ</strong>の目安として使い、やさしい順の出題や絞り込みに利用します。</p>` +
+    `<div class="stats-cefr-guide-list">${rows}</div>` +
+    `<p class="stats-caption">レベルは公式のCEFR単語表ではなく、<strong>英語全体での出現頻度からの推定</strong>です` +
+    `（よく使われる語ほどやさしい側になります）。学習の予定＝復習の間隔には影響しません。</p>` +
+    `</details>`
+  );
+}
+
 // A) 定着の内訳（習得 / 復習中 / 未着手）を積み上げバーで示す。
 function statsMasteryCard() {
   const b = learningBuckets(appState.words || []);
@@ -30845,6 +30957,7 @@ function renderStatsCharts(byDay) {
     statsMasteryCard(),
     statsDeckProgressCard(),
     statsCefrCard(),
+    cefrGuideCard(),
     statsAccuracyCard(activity),
     statsFormatCard(),
     statsSpeedCard(),
@@ -31200,9 +31313,12 @@ function cefrTitle(result) {
   if (result == null) return "CEFRレベルを判定中";
   const level = safeCefrLevel(result.level);
   if (!level) return "CEFRレベル不明";
-  return result.estimated
+  // A1〜C2という記号だけでは意味が伝わらないので、ツールチップには必ず日本語の説明を添える。
+  const guide = cefrGuideText(level);
+  const head = result.estimated
     ? `CEFRレベル ${level}（出現頻度からの推定です）`
     : `CEFRレベル ${level}`;
+  return guide ? `${head}\n${guide}` : head;
 }
 
 // バッジの表示文字は確定値も推定値も同じ（例: "C2"）。推定である旨は

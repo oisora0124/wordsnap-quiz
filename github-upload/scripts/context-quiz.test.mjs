@@ -803,6 +803,7 @@ function buildContextChoicesSandbox() {
     "hasDerivationalSuffix", "wordsShareGroup", "regularInflectionForms", "isInflectionOf",
     "regularComparativeDegree", "comparativeFormDegree", "isUnsafeComparativeDistractor",
     "isAmbiguousDerivationPair", "builtinPosTags", "posTagsFor",
+    "contextDistractorIsSynonym",
     "isContextDistractorSafe", "contextDistractorHasBasis", "aiSelfCheckedTerms",
     "contextDistractorAdmissible", "contextChoicesHaveBasis", "buildContextChoices",
   ];
@@ -816,6 +817,8 @@ function buildContextChoicesSandbox() {
       " setWords: (w) => { appState.words = w; }," +
       " getNote: () => contextFallbackNote," +
       " contextDistractorAdmissible," +
+      " isContextDistractorSafe," +
+      " contextChoicesHaveBasis," +
       " buildContextChoices };",
   ];
   const sandbox = {};
@@ -1171,4 +1174,137 @@ test("AI検証: fit が候補を覆えなかった回でも、空所に入る語
     src: "ai",
   };
   assert.equal(b.contextDistractorAdmissible(ANSWER, item, "celebrate"), false);
+});
+
+// ============================================================================
+// 8. 「正解が2つある」空所補充を作らない（1.0.96）
+//    1.0.93 で fit の扱いを直したあとも、次の3つの抜け道が残っていた。
+//      (1) choiceValidation === "ai" のとき、全ての語を無検査で誤答にできた
+//      (2) 出題語の訳と同じ訳の登録語（＝同義語）を誤答にできた
+//      (3) 名詞としても使える動詞（move など）の名詞化を誤答にできた
+// ============================================================================
+
+// (1) choiceValidation === "ai" は「その回にAIへ渡した4語を検証できた」記録であって、
+//     「この問題ではどんな語でも誤答にしてよい」ではない。AIの誤答が全て fit と
+//     判定されて消えると、登録語からの補充が無検査で選択肢に入っていた。
+// 補充元を「abolish と同じ動詞」だけにして、根拠のある語が1つも無い状況を作る。
+// 直すと空所補充にならず（＝通常出題へ落ちる）、抜け道が残っていると4択が埋まる。
+const VERBS_ONLY = [
+  ["celebrate", "祝う"], ["purchase", "購入する"], ["obtain", "得る"], ["examine", "調べる"],
+  ["postpone", "延期する"], ["accomplish", "成し遂げる"],
+].map(([term, meaning], i) => ({
+  id: "vb" + i, term, meaning, pos: null,
+  stats: { correct: 0, wrong: 0 }, history: [],
+  learning: { status: "review", srsStage: 1, nextReviewAt: 0, blockedUntil: 0, correctStreak: 0 },
+}));
+
+const AI_VALIDATED_EMPTY = {
+  en: EN,
+  // AIの誤答3つが全て「空所に入る」と自己判定され、除外後に何も残らなかった回
+  distractors: [],
+  choicesFinal: true,
+  choiceValidation: "ai",
+  fit: ["abolish", "abolition", "celebrate", "purchase"],
+  integratedChoices: ["abolish", "abolition", "celebrate", "purchase"],
+  src: "ai",
+};
+
+test("正解が2つ: AI検証済みの問題でも、登録語からの補充は根拠を検査する", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...VERBS_ONLY]);
+  const labels = b.buildContextChoices(ANSWER, AI_VALIDATED_EMPTY).map((c) => c.label.toLowerCase());
+  for (const verb of VERBS_ONLY.map((w) => w.term)) {
+    assert.ok(!labels.includes(verb), `根拠のない同品詞の語(${verb})が無検査で選択肢に入っている`);
+  }
+});
+
+test("正解が2つ: 最後の砦も、AI検証済みという理由だけでは素通りさせない", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...VERBS_ONLY]);
+  // AIが検証したのは integratedChoices の4語だけ。そこに無い celebrate を
+  // 「AI検証済みの問題だから」という理由で通してはいけない。
+  assert.equal(
+    b.contextChoicesHaveBasis(ANSWER, AI_VALIDATED_EMPTY, [
+      { id: "A", label: "abolish" },
+      { id: "vb0", label: "celebrate" },
+    ]),
+    false,
+    "4択全体の検査がAI検証済みの問題で無効になっている",
+  );
+});
+
+test("正解が2つ: AI検証済みでも、AIが作った誤答はこれまでどおり使える（後方互換）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  const item = {
+    en: EN,
+    distractors: ["celebrate", "purchase"],
+    choicesFinal: true,
+    choiceValidation: "ai",
+    fit: ["abolish"],
+    integratedChoices: ["abolish", "celebrate", "purchase"],
+    src: "ai",
+  };
+  const labels = b.buildContextChoices(ANSWER, item).map((c) => c.label.toLowerCase());
+  assert.ok(
+    labels.includes("celebrate") && labels.includes("purchase"),
+    "AIが自己検証した誤答まで落とすと、空所補充がほとんど出題できなくなる",
+  );
+});
+
+// (2) 訳が同じ登録語は、そのまま空所に入るので誤答にできない。
+//     AIは自分が作った誤答を「入らない」と答えがちなので、fit だけでは防げない。
+const SYNONYM = {
+  id: "S", term: "terminate", meaning: "廃止する", pos: { tag: "v" },
+  stats: { correct: 0, wrong: 0 }, history: [],
+  learning: { status: "review", srsStage: 1, nextReviewAt: 0, blockedUntil: 0, correctStreak: 0 },
+};
+
+test("正解が2つ: 訳が同じ登録語は、AIが誤答に選んでも採用しない", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, SYNONYM, ...REAL_VOCAB]);
+  const item = {
+    en: EN,
+    distractors: ["terminate", "abolition"],
+    fit: ["abolish"], // AIは terminate を「空所に入らない」と申告している
+    integratedChoices: ["abolish", "terminate", "abolition"],
+    src: "ai",
+  };
+  const labels = b.buildContextChoices(ANSWER, item).map((c) => c.label.toLowerCase());
+  assert.ok(!labels.includes("terminate"), "「廃止する」が2つ並ぶ問題になる");
+});
+
+test("正解が2つ: 訳が違う登録語はこれまでどおり誤答にできる（絞りすぎていない）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, SYNONYM, ...REAL_VOCAB]);
+  assert.equal(
+    b.isContextDistractorSafe(ANSWER, { en: EN }, "celebrate"),
+    true,
+    "訳が違う語まで落とすと誤答が枯れる",
+  );
+});
+
+// (3) move / movement。move は動詞だが名詞でもあるため、例文が名詞の用法で
+//     書かれていると movement も空所に入る。代表の品詞（訳から導いた1つ）だけを
+//     見ると "v" なので素通りしていた。
+test("正解が2つ: 名詞としても使える動詞の名詞化は誤答にしない", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([]);
+  const move = { id: "M", term: "move", meaning: "動かす", pos: { tag: "v" } };
+  assert.equal(
+    b.isContextDistractorSafe(move, { en: "They will move the desk tomorrow." }, "movement"),
+    false,
+    "move は名詞にもなるので、movement も空所に入り得る",
+  );
+});
+
+test("正解が2つ: 名詞にならない動詞の名詞化は、これまでどおり誤答にできる", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([]);
+  const improve = { id: "I", term: "improve", meaning: "改善する", pos: { tag: "v" } };
+  assert.equal(
+    b.isContextDistractorSafe(improve, { en: "They will improve the system." }, "improvement"),
+    true,
+    "派生形の誤答をすべて失うと、空所補充の質が落ちる",
+  );
 });
