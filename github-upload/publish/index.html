@@ -22926,14 +22926,15 @@ const CEFR_ORDER = ["A1", "A2", "B1", "B2", "C1", "C2"];
 
 // 各レベルの意味。A1〜C2という記号だけでは「自分がどのあたりなのか」が分からないため、
 // 画面（成績タブの説明・バッジのツールチップ）で必ずこの日本語を添える。
-// 英検との対応は日本英語検定協会が公表しているCEFR対照（3級=A1・準2級=A2・2級=B1・
-// 準1級=B2・1級=C1）に合わせる。C2に対応する級は無いのでその旨だけ書く。
+// 英検の級は見当をつけるための添え物として書く。実際には各級のCEFR算出範囲は
+// 重なっていて1対1では対応しないので、断定せず「あたり」と書き、
+// 対応しない旨の注記を説明の最後に必ず添える（cefrGuideMarkup）。
 const CEFR_LEVEL_GUIDE = {
-  A1: { title: "入門", detail: "身の回りのごく基本的な語。英検5〜3級の範囲。" },
-  A2: { title: "初級", detail: "日常のありふれた事柄を扱える。英検準2級の範囲。" },
-  B1: { title: "中級", detail: "身近な話題なら自力でやりとりできる。英検2級の範囲。" },
-  B2: { title: "中上級", detail: "抽象的な話題や専門的な議論にもついていける。英検準1級の範囲。" },
-  C1: { title: "上級", detail: "幅広い話題を含みまで理解して使える。英検1級の範囲。" },
+  A1: { title: "入門", detail: "身の回りのごく基本的な語。英検でいえば5級〜3級あたり。" },
+  A2: { title: "初級", detail: "日常のありふれた事柄を扱える。英検でいえば準2級あたり。" },
+  B1: { title: "中級", detail: "身近な話題なら自力でやりとりできる。英検でいえば2級あたり。" },
+  B2: { title: "中上級", detail: "抽象的な話題や専門的な議論にもついていける。英検でいえば準1級あたり。" },
+  C1: { title: "上級", detail: "幅広い話題を、言外の含みまで理解して使える。英検でいえば1級あたり。" },
   C2: { title: "最上級", detail: "母語話者に近く、読んだ・聞いたものをほぼ全て理解できる。対応する英検の級は無い。" },
 };
 
@@ -28544,9 +28545,7 @@ function contextDistractorIsSynonym(answer, candidate) {
   const key = String(candidate || "").trim().toLowerCase();
   const meaning = answer?.meaning;
   if (!key || !meaning) return false;
-  const registered = (appState.words || []).find(
-    (word) => String(word.term || "").trim().toLowerCase() === key,
-  );
+  const registered = findWordByTerm(key);
   if (!registered || registered.id === answer?.id) return false;
   return meaningsTooClose(meaning, registered.meaning);
 }
@@ -28944,17 +28943,40 @@ let contextFallbackNote = "";
 //   (1) 出題語の派生形（名詞化など）＝品詞が違うので文法的に入らない
 //   (2) 品詞が分かっている登録語で、その品詞が出題語と違う
 // どちらでもない語は「意味は違うが空所には入り得る」可能性が残り、消去の根拠にならない。
+// term から登録語を引く索引。空所補充の候補選別は1問あたり語彙全体を走査し、
+// その1語ごとに登録語を引くため、線形探索のままだと語数の2乗に比例して遅くなる
+// （1万語では1問あたり4秒近くかかっていた）。
+// 語彙が入れ替わったとき（削除・同期・読み込み＝配列ごと差し替え）と、
+// その場に追加されたとき（push＝要素数の変化）の両方で作り直す。
+// 語の term を書き換える経路は無いので、この2つで十分。
+let wordTermIndex = null;
+let wordTermIndexSource = null;
+let wordTermIndexSize = -1;
+
+function findWordByTerm(term) {
+  const key = String(term || "").trim().toLowerCase();
+  if (!key) return null;
+  const words = appState.words || [];
+  if (wordTermIndexSource !== words || wordTermIndexSize !== words.length) {
+    wordTermIndex = new Map();
+    for (const word of words) {
+      const k = String(word.term || "").trim().toLowerCase();
+      // find() と同じく、同じ綴りが複数あれば先に登録された方を返す。
+      if (k && !wordTermIndex.has(k)) wordTermIndex.set(k, word);
+    }
+    wordTermIndexSource = words;
+    wordTermIndexSize = words.length;
+  }
+  return wordTermIndex.get(key) || null;
+}
+
 // その語が取り得る品詞をすべて集める。同梱表と解決済みデータの「和集合」を返す。
 // どちらかを優先すると片方しか知らない品詞を取りこぼす（例: 同梱表で動詞のattemptは
 // 名詞でも使えるが、表を優先するとDatamuseが返した ["v","n"] を捨ててしまい、
 // 「品詞が違うから空所に入らない」と誤判定する）。
 function posTagsFor(term, word = null) {
   const builtin = builtinPosTags(term);
-  const source =
-    word ||
-    (appState.words || []).find(
-      (w) => String(w.term || "").trim().toLowerCase() === String(term || "").trim().toLowerCase(),
-    );
+  const source = word || findWordByTerm(term);
   const saved = Array.isArray(source?.pos?.tags)
     ? source.pos.tags
     : source?.pos?.tag
@@ -30599,11 +30621,18 @@ function statsDeckProgressCard() {
   );
 }
 
-function statsCefrCard() {
+// レベル別カードを出す条件。説明カード側でも同じ条件を使うので、
+// カードを2度組み立てずに済むようここへ切り出す。
+function statsCefrWords() {
   const words = (appState.words || []).filter((word) =>
     CEFR_ORDER.includes(word.cefr?.level),
   );
-  if (words.length < 10) return "";
+  return words.length < 10 ? [] : words;
+}
+
+function statsCefrCard() {
+  const words = statsCefrWords();
+  if (words.length === 0) return "";
   const levels = CEFR_ORDER.map((level) => {
     const levelWords = words.filter((word) => word.cefr.level === level);
     const mastered = levelWords.filter(
@@ -30643,7 +30672,7 @@ function statsCefrCard() {
 // レベル別カードが出ている（＝A1〜C2が画面に出ている）ときだけ説明も出す。
 // 説明は横に長い文章なので、カードの列に収めず全幅で置く。
 function cefrGuideCard() {
-  if (!statsCefrCard()) return "";
+  if (statsCefrWords().length === 0) return "";
   return `<div class="stats-card stats-card-wide">${cefrGuideMarkup()}</div>`;
 }
 
@@ -30663,6 +30692,8 @@ function cefrGuideMarkup() {
     `<p>ヨーロッパで作られた語学力の共通ものさしで、A1がいちばんやさしく、C2がいちばん難しい6段階です。` +
     `WordBankでは<strong>単語ごとの難しさ</strong>の目安として使い、やさしい順の出題や絞り込みに利用します。</p>` +
     `<div class="stats-cefr-guide-list">${rows}</div>` +
+    `<p class="stats-caption">英検の級は見当をつけるための目安です。実際には級ごとのCEFRの範囲は重なっていて、` +
+    `1対1では対応しません。</p>` +
     `<p class="stats-caption">レベルは公式のCEFR単語表ではなく、<strong>英語全体での出現頻度からの推定</strong>です` +
     `（よく使われる語ほどやさしい側になります）。学習の予定＝復習の間隔には影響しません。</p>` +
     `</details>`

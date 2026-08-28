@@ -237,7 +237,7 @@ test("CEFR: 6段階すべてに日本語の説明がある", () => {
 
 test("CEFR: 説明は成績タブのレベル別カードのすぐ下に、全幅で出す", () => {
   // レベル別カードが出ていない（＝A1〜C2が画面に無い）ときは説明も出さない。
-  assert.match(streakHtml, /function cefrGuideCard\(\)\s*\{\s*[\s\S]{0,120}?if \(!statsCefrCard\(\)\) return "";/,
+  assert.match(streakHtml, /function cefrGuideCard\(\)\s*\{\s*if \(statsCefrWords\(\)\.length === 0\) return "";/,
     "レベル別カードが無いときにも説明が出てしまう");
   assert.match(streakHtml, /statsCefrCard\(\),\s*\n\s*cefrGuideCard\(\),/,
     "レベル別カードの直後に置いていない");
@@ -251,6 +251,18 @@ test("CEFR: 推定値であることを説明に明記する（公式のレベ�
   const body = streakHtml.slice(start, streakHtml.indexOf("\n}", start));
   assert.match(body, /出現頻度からの推定/, "推定である旨が書かれていない");
   assert.match(body, /復習の間隔には影響しません/, "SRSに影響しないことが書かれていない");
+});
+
+test("CEFR: 英検の級は断定せず、1対1でないことを添える", () => {
+  // 英検の各級のCEFR算出範囲は重なっていて、レベルと級は1対1に対応しない。
+  // 「A2＝準2級の範囲」と言い切ると誤解を招くので、見当をつける目安として書く。
+  const start = streakHtml.indexOf("const CEFR_LEVEL_GUIDE = {");
+  const table = streakHtml.slice(start, streakHtml.indexOf("};", start));
+  assert.doesNotMatch(table, /英検[^"]*級の範囲/, "級を断定している");
+  assert.match(table, /英検でいえば準1級あたり/, "目安としての書き方になっていない");
+  const guide = streakHtml.indexOf("function cefrGuideMarkup()");
+  const body = streakHtml.slice(guide, streakHtml.indexOf("\n}", guide));
+  assert.match(body, /1対1では対応しません/, "1対1でない旨の注記が無い");
 });
 
 test("CEFR: 単語一覧のバッジのツールチップにも同じ説明を出す", () => {

@@ -802,7 +802,7 @@ function buildContextChoicesSandbox() {
     "pickDistractors", "termWordRegex", "sentenceContainsTerm", "derivationStem",
     "hasDerivationalSuffix", "wordsShareGroup", "regularInflectionForms", "isInflectionOf",
     "regularComparativeDegree", "comparativeFormDegree", "isUnsafeComparativeDistractor",
-    "isAmbiguousDerivationPair", "builtinPosTags", "posTagsFor",
+    "isAmbiguousDerivationPair", "builtinPosTags", "findWordByTerm", "posTagsFor",
     "contextDistractorIsSynonym",
     "isContextDistractorSafe", "contextDistractorHasBasis", "aiSelfCheckedTerms",
     "contextDistractorAdmissible", "contextChoicesHaveBasis", "buildContextChoices",
@@ -810,6 +810,7 @@ function buildContextChoicesSandbox() {
   const pieces = [
     ...consts.map((n) => extractConst(n)),
     "let contextFallbackNote = '';",
+    "let wordTermIndex = null; let wordTermIndexSource = null; let wordTermIndexSize = -1;",
     "const appState = { words: [] };",
     "function quizSelectedDeckWords() { return appState.words; }",
     ...fns.map((n) => extractFunction(n)),
@@ -818,6 +819,8 @@ function buildContextChoicesSandbox() {
       " getNote: () => contextFallbackNote," +
       " contextDistractorAdmissible," +
       " isContextDistractorSafe," +
+      " findWordByTerm," +
+      " addWord: (w) => { appState.words.push(w); }," +
       " contextChoicesHaveBasis," +
       " buildContextChoices };",
   ];
@@ -1307,4 +1310,99 @@ test("正解が2つ: 名詞にならない動詞の名詞化は、これまで�
     true,
     "派生形の誤答をすべて失うと、空所補充の質が落ちる",
   );
+});
+
+// ============================================================================
+// 9. 登録語の索引（1.0.96）
+//    候補選別は1問あたり語彙全体を走査し、その1語ごとに登録語を引く。
+//    線形探索のままだと語数の2乗に比例し、1万語で1問4秒近くかかっていた。
+//    索引はキャッシュするので、語彙が変わったら必ず作り直す必要がある。
+// ============================================================================
+
+test("索引: 綴りから登録語を引ける（大文字小文字・前後の空白を無視する）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  assert.equal(b.findWordByTerm("Abolish")?.id, "A");
+  assert.equal(b.findWordByTerm("  celebrate  ")?.id, REAL_VOCAB[1].id);
+  assert.equal(b.findWordByTerm("notregistered"), null);
+  assert.equal(b.findWordByTerm(""), null);
+});
+
+test("索引: 同じ綴りが2つあれば、先に登録された方を返す（find と同じ）", () => {
+  const b = buildContextChoicesSandbox();
+  const first = { ...ANSWER, id: "first" };
+  const second = { ...ANSWER, id: "second", meaning: "取りやめる" };
+  b.setWords([first, second]);
+  assert.equal(b.findWordByTerm("abolish")?.id, "first");
+});
+
+test("索引: 単語を追加したら作り直す（その場の push を取りこぼさない）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER]);
+  assert.equal(b.findWordByTerm("celebrate"), null, "まだ登録されていない");
+  b.addWord(REAL_VOCAB[1]); // appState.words.push（配列は同じまま）
+  assert.equal(b.findWordByTerm("celebrate")?.id, REAL_VOCAB[1].id, "追加した語を引けない＝索引が古い");
+});
+
+test("索引: 単語帳を入れ替えたら作り直す（削除・同期・読み込み）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  assert.equal(b.findWordByTerm("celebrate")?.id, REAL_VOCAB[1].id);
+  b.setWords([ANSWER]); // 配列ごと差し替え。要素数も変わる
+  assert.equal(b.findWordByTerm("celebrate"), null, "消した語を引けてしまう＝索引が古い");
+});
+
+test("索引: 語数が同じまま入れ替えても作り直す（同期でまるごと差し替わる回）", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, REAL_VOCAB[1]]);
+  assert.ok(b.findWordByTerm("celebrate"));
+  b.setWords([ANSWER, REAL_VOCAB[2]]); // 2語のまま中身だけ変わる
+  assert.equal(b.findWordByTerm("celebrate"), null, "要素数だけを見ていると取りこぼす");
+  assert.ok(b.findWordByTerm(REAL_VOCAB[2].term));
+});
+
+test("索引: 同義語の判定が索引経由でも従来どおり働く", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, SYNONYM, ...REAL_VOCAB]);
+  assert.equal(b.isContextDistractorSafe(ANSWER, { en: EN }, "terminate"), false);
+  assert.equal(b.isContextDistractorSafe(ANSWER, { en: EN }, "celebrate"), true);
+});
+
+// ============================================================================
+// 10. 旧キャッシュとの互換（1.0.96 / Codexレビューへの回答）
+//     「AI検証済みなら全て通す」を外したことで、既に端末に焼き付いている記録の
+//     扱いが変わらないかを確認する。例文キャッシュは「1語1回」で作り直さないので、
+//     ここが変わると既存利用者の手元だけ出題できなくなる。
+// ============================================================================
+
+test("旧キャッシュ: 辞書由来の記録（fitなし）は従来どおり出題できる", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...REAL_VOCAB]);
+  // fit も integratedChoices も choiceValidation も持たない、AI導入前の形の記録。
+  const choices = b.buildContextChoices(ANSWER, { en: EN, distractors: ["abolition"], src: "dict" });
+  assert.ok(choices.length >= 2, "AI導入前の記録が出題できなくなっている");
+  assert.ok(choices.some((c) => c.label.toLowerCase() === "abolition"));
+});
+
+test("旧キャッシュ: choiceValidation が \"ai\" になるのは fit と候補一覧が揃った回だけ", () => {
+  // 「fit を持たない ai 記録」が生まれない条件をコード側で固定する。
+  // ここが緩むと、検査を受けていない記録に ai の印だけが付いてしまう。
+  const start = html.indexOf("const integratedFitCoversCandidates =");
+  assert.ok(start > 0, "判定が見つからない");
+  const body = html.slice(start, start + 400);
+  assert.match(body, /Array\.isArray\(item\.fit\) && integratedChoicesCoverCandidates/,
+    "fit が配列であることを条件にしていない");
+  assert.match(body, /choiceValidation: integratedFitCoversCandidates \? "ai" : "local-only"/,
+    "この判定以外から ai が付いている");
+});
+
+test("旧キャッシュ: 壊れた ai 記録（fitなし）でも無検査で誤答にしない", () => {
+  const b = buildContextChoicesSandbox();
+  b.setWords([ANSWER, ...VERBS_ONLY]);
+  // 手で書き換えた・別実装が書いた等で ai の印だけがある記録。印を信用してはいけない。
+  const broken = { en: EN, distractors: [], choicesFinal: true, choiceValidation: "ai", src: "ai" };
+  const labels = b.buildContextChoices(ANSWER, broken).map((c) => c.label.toLowerCase());
+  for (const verb of VERBS_ONLY.map((w) => w.term)) {
+    assert.ok(!labels.includes(verb), `印だけを見て ${verb} を無検査で通している`);
+  }
 });

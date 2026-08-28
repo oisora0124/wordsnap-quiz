@@ -78,6 +78,8 @@ function buildSandbox() {
     extractConst("DERIVATIONAL_SUFFIXES"),
     extractFunction("builtinPosTag"),
     extractFunction("builtinPosTags"),
+    "let wordTermIndex = null; let wordTermIndexSource = null; let wordTermIndexSize = -1;",
+    extractFunction("findWordByTerm"),
     extractFunction("posTagsFor"),
     extractFunction("derivationStem"),
     extractFunction("hasDerivationalSuffix"),
