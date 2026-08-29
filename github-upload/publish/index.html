@@ -720,8 +720,13 @@ h2 {
 
    左右を等分にはしない。カレンダーは7列の正方形なので広げても情報は増えず、
    逆に日セルだけが大きくなって余白が目立つ。カレンダーはスマホと同じ幅に留め、
-   残りを全て成績に渡す。カードが増えるほど横に並び、見出しも省略されなくなる。 */
-@media (min-width: 900px) {
+   残りを全て成績に渡す。カードが増えるほど横に並び、見出しも省略されなくなる。
+
+   2段組にするのは 1000px から。900px で分けると、カレンダー400pxを引いた残りが
+   400px ほどしかなく、成績が1枚ずつの縦並びになってしまう。1段組のままなら同じ幅で
+   3枚並ぶので、分けたことでかえって見にくくなる。カレンダー(400) + 隙間(24) +
+   成績2列(240×2+10) が収まる幅から2段組にする。 */
+@media (min-width: 1000px) {
   .streak-panel {
     grid-template-columns: minmax(0, 400px) minmax(0, 1fr);
     column-gap: 24px;
@@ -754,10 +759,46 @@ h2 {
     border-top: 0;
   }
 
-  /* 3列固定だと、成績の列幅では1枚200pxしか取れず「学習量の推…」のように見出しが
-     省略される。列幅の下限だけ決めて、入るだけ並べる。 */
+  /* 成績カードは高さがまちまち（単語帳の冊数、CEFR判定済みの語数、苦手語の有無で変わる）。
+     格子に並べると、行の高さが「その行で一番背の高いカード」に決まるため、短いカードの
+     下に大きな空白が空く。実データでは 150px×2枚ぶんの穴と、レベル別の行に2枚ぶんの
+     空きが出ていた。
+     段組（multi-column）にすると上から詰むので穴が消える。段はDOMの順に上から埋まるので、
+     見た目の順と読み上げ順もずれない。実データで成績の高さは 905px → 704px になった。 */
   .streak-panel .stats-grid {
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    display: block;
+    /* 列幅の下限は240px。「学習量の推移」「レベル別（CEFR）」の見出しが省略されない幅。
+       最大3列にするのは、これ以上細かく割ると1枚が縦に長くなりグラフが潰れるため。 */
+    columns: 3 240px;
+    column-gap: 10px;
+  }
+
+  .streak-panel .stats-grid > * {
+    /* カードが段をまたいで割れないようにする（グラフや凡例が分断されると読めない） */
+    break-inside: avoid;
+    margin: 0 0 10px;
+  }
+
+  /* 並びの先頭にある「いま何をすればよいか」の3枚（復帰・確信度・今日の復習）は、
+     段組では column-span で全幅にする（grid-column は段組では効かない）。
+     この3枚は出たり出なかったりするが、どれも先頭側に固まっているので、
+     まとめて全幅にすれば「上に横長の帯が数枚、その下に段組」という形が保たれ、
+     どの組み合わせでも段の中に穴ができない。
+     「今日の復習」だけを全幅にすると、復帰・確信度が出た回にその2枚が段組へ入り、
+     3列のうち1枚ぶんが空く。 */
+  .streak-panel .stats-card.is-recovery,
+  .streak-panel .stats-card.is-confidence,
+  .streak-panel .stats-card.is-review {
+    column-span: all;
+  }
+
+  /* 一方、CEFRの説明は全幅にしない。column-span は置いた位置で段組を分断するため、
+     中ほどにある折りたたみ（<details>）を全幅にすると、開いた瞬間に成績全体が
+     269px 伸びて後続のカードが下へ飛ぶ（実測）。普通のカードとして流せば、
+     開いても段の中で吸収されて全体の高さは変わらない。
+     閉じているときの高さは 24px だけ損をするが、開いたときの跳ねのほうが目障り。 */
+  .streak-panel .stats-card-wide {
+    column-span: none;
   }
 }
 
@@ -6766,7 +6807,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.97</span>
+        <span class="app-footer-version">バージョン 1.0.98</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -6904,7 +6945,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.97";
+  const APP_REV = "1.0.98";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
