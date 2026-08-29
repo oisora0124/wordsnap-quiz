@@ -6853,7 +6853,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.99</span>
+        <span class="app-footer-version">バージョン 1.0.100</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -6991,7 +6991,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.99";
+  const APP_REV = "1.0.100";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -31121,8 +31121,13 @@ function refreshStatsIfVisible() {
 function statsFormatCard() {
   if (!reviewLogEnabled()) return "";
   const events = retainedReviewEvents().filter((e) => e.result !== "dont-know");
+  // 記録側（recordReviewEvent）が持つ promptMode を全て並べる。
+  // 出題の向き（1.0.79）で term-choice を記録するようになったのに、ここへ足すのを
+  // 忘れていたため、日→英で解いた回答が groups.find で落ちて1件も出ていなかった。
+  // 記録の形式が増えたらここも増やす。
   const groups = [
-    { key: "meaning-choice", label: "意味を選ぶ", total: 0, correct: 0 },
+    { key: "meaning-choice", label: "意味を選ぶ（英→日）", total: 0, correct: 0 },
+    { key: "term-choice", label: "単語を選ぶ（日→英）", total: 0, correct: 0 },
     { key: "context-choice", label: "例文の空所", total: 0, correct: 0 },
     { key: "flashcard", label: "フラッシュカード", total: 0, correct: 0 },
   ];
@@ -31132,9 +31137,12 @@ function statsFormatCard() {
     g.total += 1;
     if (e.result === "correct") g.correct += 1;
   }
-  // どちらの形式にも最低5件たまるまでは出さない（少数で誤解を与えないため）。
+  // 5件に満たない形式は出さない（少数の正答率は当てにならないため）。
+  // 1つでも5件たまった形式があれば、その形式だけを出す。
   const shown = groups.filter((g) => g.total >= 5);
   if (shown.length === 0) return "";
+  // 解いたのに出ていない形式があるなら、消えたのではなく件数待ちだと分かるようにする。
+  const waiting = groups.filter((g) => g.total > 0 && g.total < 5);
   const rows = shown
     .map((g) => {
       const pct = Math.round((g.correct / g.total) * 100);
@@ -31152,7 +31160,11 @@ function statsFormatCard() {
     `<div class="stats-card">` +
     statsCardHeader("出題形式別の正答率", `${shown.length}形式`) +
     `<div class="stats-fmt">${rows}</div>` +
-    `<p class="stats-caption">「学習の記録」がオンの間の集計。形式ごとの得意・苦手が分かります。</p>` +
+    `<p class="stats-caption">「学習の記録」がオンの間の集計。形式ごとの得意・苦手が分かります。` +
+    (waiting.length
+      ? `${escapeHtml(waiting.map((g) => g.label).join("・"))}は5回たまると出ます。`
+      : "") +
+    `</p>` +
     `</div>`
   );
 }
