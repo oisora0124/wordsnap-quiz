@@ -227,21 +227,45 @@ test("PC表示: 広い画面では学習の記録だけ本文の幅を超えて�
 // 1.0.95 で入れたPC用の指定は、同じセレクタの基本ルールがCSSの後ろにあったため
 // 後ろ勝ちで打ち消され、まったく効いていなかった（成績は3列200px固定のままだった）。
 // 波括弧の対応も @規則の割り込みも正常なので、既存の検査では気づけなかった。
-test("CSS: メディアクエリの指定が、後ろの同じセレクタに打ち消されていない", () => {
+//
+// ルールの手前にはコメントが付いているので、先にコメントを落としてから読む。
+// 落とさないとセレクタにコメントが混ざり、後続ルールとの突き合わせが必ず外れて
+// 何も検出しない検査になってしまう（Codexの指摘）。
+function cssWithoutComments() {
   const css = streakHtml.slice(streakHtml.indexOf("<style>") + 7, streakHtml.indexOf("</style>"));
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+// メディアクエリの中の各ルールを { セレクタ1つ, 宣言したプロパティ } に分解する。
+// `.a, .b { ... }` は .a と .b の2件として扱う。
+function mediaRuleDeclarations(block) {
+  const out = [];
+  for (const rule of block.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const props = [...rule[2].matchAll(/(^|;)\s*([a-z-]+)\s*:/g)].map((m) => m[2]);
+    if (props.length === 0) continue;
+    for (const selector of rule[1].split(",").map((s) => s.trim()).filter(Boolean)) {
+      if (selector.startsWith("@")) continue;
+      out.push({ selector, props });
+    }
+  }
+  return out;
+}
+
+test("CSS: メディアクエリの指定が、後ろの同じセレクタに打ち消されていない", () => {
+  const css = cssWithoutComments();
   const problems = [];
   for (const condition of ["min-width: 900px", "min-width: 1240px"]) {
-    const block = extractMediaBlock(condition);
-    if (!block) continue;
+    const raw = extractMediaBlock(condition);
+    assert.ok(raw, `@media (${condition}) が見つからない`);
+    const block = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+    const declarations = mediaRuleDeclarations(block);
+    assert.ok(declarations.length > 0, `@media (${condition}) からルールを読み取れていない`);
     const after = css.slice(css.indexOf(block) + block.length);
-    // メディアクエリ内の各ルールから (セレクタ, プロパティ) を集める
-    for (const m of block.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const selector = m[1].trim();
-      if (!selector || selector.startsWith("@")) continue;
-      const props = [...m[2].matchAll(/([a-z-]+)\s*:/g)].map((x) => x[1]);
+    assert.ok(css.includes(block), `@media (${condition}) の位置を特定できていない`);
+    for (const { selector, props } of declarations) {
       // 同じセレクタ「だけ」の後続ルール（＝同じ強さ）を探す。より詳しいセレクタは負けない。
       const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      for (const later of after.matchAll(new RegExp(`(^|\\}|,)\\s*${escaped}\\s*\\{([^{}]*)\\}`, "g"))) {
+      for (const later of after.matchAll(new RegExp(`(^|\\}|,|;)\\s*${escaped}\\s*\\{([^{}]*)\\}`, "g"))) {
         for (const prop of props) {
           if (new RegExp(`(^|;)\\s*${prop}\\s*:`).test(later[2])) {
             problems.push(`${condition} の ${selector} { ${prop} } が後ろの同名ルールに打ち消される`);
@@ -251,6 +275,31 @@ test("CSS: メディアクエリの指定が、後ろの同じセレクタに打
     }
   }
   assert.deepEqual(problems, [], problems.join(" / "));
+});
+
+// 上の検査そのものが機能しているかを、既知の壊れ方で確かめる。
+// 正規表現でCSSを読んでいるので、黙って何も検出しない状態になっていても
+// 本番のCSSが正しい限りテストは緑のままになってしまう。
+test("CSS: 打ち消しの検査は、実際に打ち消されている形を見つけられる", () => {
+  const block = `
+  /* 手前のコメント。ここに波括弧は無い */
+  .streak-panel .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+  .foo, .bar {
+    margin-top: 0;
+  }
+`.replace(/\/\*[\s\S]*?\*\//g, "");
+  const declarations = mediaRuleDeclarations(block);
+  assert.deepEqual(
+    declarations.map((d) => d.selector),
+    [".streak-panel .stats-grid", ".foo", ".bar"],
+    "セレクタを取り出せていない（コメントが混ざると突き合わせが必ず外れる）",
+  );
+  assert.deepEqual(declarations[1].props, ["margin-top"]);
+  // 後ろに同じセレクタ・同じプロパティのルールがあれば打ち消される
+  const later = "\n.foo {\n  margin-top: 14px;\n}\n";
+  assert.match(later, new RegExp(`(^|\\}|,|;|\\n)\\s*\\.foo\\s*\\{([^{}]*)\\}`));
 });
 
 test("CSSの波括弧が対応している（セレクタの途中に割り込んでいない）", () => {
