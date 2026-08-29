@@ -165,12 +165,28 @@ function extractMediaBlock(condition) {
 test("PC表示: 学習の記録は広い画面でだけ2段組にする", () => {
   const block = extractMediaBlock("min-width: 900px");
   assert.ok(block, "@media (min-width: 900px) のまとまりが見つからない");
+  // カレンダーは7列の正方形なので広げても情報が増えない。幅は成績側に回す。
   assert.match(
     block,
-    /\.streak-panel\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/,
-    "パネルを2列にしていない",
+    /\.streak-panel\s*\{[^}]*grid-template-columns:\s*minmax\(0, 400px\) minmax\(0, 1fr\)/,
+    "カレンダーの列幅を抑えて成績へ回していない",
   );
-  assert.match(block, /\.stats-block\s*\{[^}]*grid-column:\s*2/, "成績を右列に置いていない");
+  assert.match(block, /\.streak-panel \.stats-block\s*\{[^}]*grid-column:\s*2/, "成績を右列に置いていない");
+});
+
+test("PC表示: カレンダー一式は1つのまとまりで置く（行が引き伸ばされない）", () => {
+  // バラバラの要素を左列に並べると、背の高い成績に合わせて各行が引き伸ばされ、
+  // カレンダーの間に大きな空白ができる。まとまりにして1行へ置く。
+  assert.match(streakHtml, /<div class="streak-cal-block">/, "カレンダー一式がまとまりになっていない");
+  assert.match(
+    streakHtml,
+    /\.streak-cal-block\s*\{[^}]*display:\s*grid;[^}]*gap:\s*12px/,
+    "まとまりの中の積み方がパネル本体と違う＝1段組の見え方が変わる",
+  );
+  const block = extractMediaBlock("min-width: 900px");
+  assert.match(block, /\.streak-cal-block\s*\{[^}]*grid-row:\s*3/, "成績と同じ行に置いていない");
+  assert.match(block, /\.streak-panel \.stats-block\s*\{[^}]*grid-row:\s*3/, "成績と同じ行に置いていない");
+  assert.doesNotMatch(block, /grid-row:\s*3 \/ span/, "行をまたがせると左列の行が引き伸ばされる");
 });
 
 test("PC表示: 2段組の指定はメディアクエリの中だけにある（スマホを巻き込まない）", () => {
@@ -184,13 +200,106 @@ test("PC表示: 2段組の指定はメディアクエリの中だけにある（
   );
 });
 
-test("PC表示: 成績カードは列幅の下限で並べる（最後の行が欠けない）", () => {
+test("PC表示: 成績カードは列幅の下限で並べる（見出しが省略されない）", () => {
   const block = extractMediaBlock("min-width: 900px");
   assert.match(
     block,
-    /\.stats-grid\s*\{[^}]*repeat\(auto-fit, minmax\(200px, 1fr\)\)/,
-    "3列固定のままだと5枚で 1+3+1 になり最後の行が欠ける",
+    /\.streak-panel \.stats-grid\s*\{[^}]*repeat\(auto-fit, minmax\(240px, 1fr\)\)/,
+    "3列固定だと1枚200pxしか取れず「学習量の推…」のように見出しが省略される",
   );
+});
+
+test("PC表示: 広い画面では学習の記録だけ本文の幅を超えて広げる", () => {
+  const block = extractMediaBlock("min-width: 1240px");
+  assert.ok(block, "@media (min-width: 1240px) のまとまりが見つからない");
+  assert.match(block, /\.streak-panel\s*\{[^}]*width:\s*min\(1400px, calc\(100vw - 40px\)\)/,
+    "パネルを広げていない");
+  // 本文（.shell）ごと広げると取り込み欄や単語一覧の行が長くなりすぎる。
+  assert.doesNotMatch(block, /\.shell\s*\{/, "本文全体を広げてはいけない");
+  // はみ出した分を左右へ均等に戻さないと、右にずれて横スクロールが出る。
+  const rule = block.slice(block.indexOf(".streak-panel"));
+  for (const side of ["margin-left", "margin-right"]) {
+    assert.match(rule, new RegExp(`${side}:\\s*calc\\(\\(100% - min\\(1400px, 100vw - 40px\\)\\) / 2\\)`),
+      `${side} で戻していない`);
+  }
+});
+
+// 1.0.95 で入れたPC用の指定は、同じセレクタの基本ルールがCSSの後ろにあったため
+// 後ろ勝ちで打ち消され、まったく効いていなかった（成績は3列200px固定のままだった）。
+// 波括弧の対応も @規則の割り込みも正常なので、既存の検査では気づけなかった。
+//
+// ルールの手前にはコメントが付いているので、先にコメントを落としてから読む。
+// 落とさないとセレクタにコメントが混ざり、後続ルールとの突き合わせが必ず外れて
+// 何も検出しない検査になってしまう（Codexの指摘）。
+function cssWithoutComments() {
+  const css = streakHtml.slice(streakHtml.indexOf("<style>") + 7, streakHtml.indexOf("</style>"));
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+// メディアクエリの中の各ルールを { セレクタ1つ, 宣言したプロパティ } に分解する。
+// `.a, .b { ... }` は .a と .b の2件として扱う。
+function mediaRuleDeclarations(block) {
+  const out = [];
+  for (const rule of block.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const props = [...rule[2].matchAll(/(^|;)\s*([a-z-]+)\s*:/g)].map((m) => m[2]);
+    if (props.length === 0) continue;
+    for (const selector of rule[1].split(",").map((s) => s.trim()).filter(Boolean)) {
+      if (selector.startsWith("@")) continue;
+      out.push({ selector, props });
+    }
+  }
+  return out;
+}
+
+test("CSS: メディアクエリの指定が、後ろの同じセレクタに打ち消されていない", () => {
+  const css = cssWithoutComments();
+  const problems = [];
+  for (const condition of ["min-width: 900px", "min-width: 1240px"]) {
+    const raw = extractMediaBlock(condition);
+    assert.ok(raw, `@media (${condition}) が見つからない`);
+    const block = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+    const declarations = mediaRuleDeclarations(block);
+    assert.ok(declarations.length > 0, `@media (${condition}) からルールを読み取れていない`);
+    const after = css.slice(css.indexOf(block) + block.length);
+    assert.ok(css.includes(block), `@media (${condition}) の位置を特定できていない`);
+    for (const { selector, props } of declarations) {
+      // 同じセレクタ「だけ」の後続ルール（＝同じ強さ）を探す。より詳しいセレクタは負けない。
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      for (const later of after.matchAll(new RegExp(`(^|\\}|,|;)\\s*${escaped}\\s*\\{([^{}]*)\\}`, "g"))) {
+        for (const prop of props) {
+          if (new RegExp(`(^|;)\\s*${prop}\\s*:`).test(later[2])) {
+            problems.push(`${condition} の ${selector} { ${prop} } が後ろの同名ルールに打ち消される`);
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual(problems, [], problems.join(" / "));
+});
+
+// 上の検査そのものが機能しているかを、既知の壊れ方で確かめる。
+// 正規表現でCSSを読んでいるので、黙って何も検出しない状態になっていても
+// 本番のCSSが正しい限りテストは緑のままになってしまう。
+test("CSS: 打ち消しの検査は、実際に打ち消されている形を見つけられる", () => {
+  const block = `
+  /* 手前のコメント。ここに波括弧は無い */
+  .streak-panel .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+  .foo, .bar {
+    margin-top: 0;
+  }
+`.replace(/\/\*[\s\S]*?\*\//g, "");
+  const declarations = mediaRuleDeclarations(block);
+  assert.deepEqual(
+    declarations.map((d) => d.selector),
+    [".streak-panel .stats-grid", ".foo", ".bar"],
+    "セレクタを取り出せていない（コメントが混ざると突き合わせが必ず外れる）",
+  );
+  assert.deepEqual(declarations[1].props, ["margin-top"]);
+  // 後ろに同じセレクタ・同じプロパティのルールがあれば打ち消される
+  const later = "\n.foo {\n  margin-top: 14px;\n}\n";
+  assert.match(later, new RegExp(`(^|\\}|,|;|\\n)\\s*\\.foo\\s*\\{([^{}]*)\\}`));
 });
 
 test("CSSの波括弧が対応している（セレクタの途中に割り込んでいない）", () => {
