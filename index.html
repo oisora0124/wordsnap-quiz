@@ -611,6 +611,14 @@ h2 {
   box-shadow: var(--shadow-sm);
 }
 
+/* カレンダー一式のまとまり。パネル本体と同じ 12px で縦に積むので、
+   1段組（スマホ）の見え方はまとめる前と変わらない。 */
+.streak-cal-block {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
 .streak-panel-head {
   display: flex;
   gap: 10px;
@@ -708,10 +716,14 @@ h2 {
 /* PC幅では、パネルの横幅に対してカレンダーが 380px しか使わず、左右に大きな空白が
    できていた。成績も下へ流れてしまい、カレンダーと同時に見られない。
    広い画面のときだけ左右2段組にして「カレンダー」と「成績」を並べる。
-   スマホ（1段組）の見え方は変えない。 */
+   スマホ（1段組）の見え方は変えない。
+
+   左右を等分にはしない。カレンダーは7列の正方形なので広げても情報は増えず、
+   逆に日セルだけが大きくなって余白が目立つ。カレンダーはスマホと同じ幅に留め、
+   残りを全て成績に渡す。カードが増えるほど横に並び、見出しも省略されなくなる。 */
 @media (min-width: 900px) {
   .streak-panel {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 400px) minmax(0, 1fr);
     column-gap: 24px;
     align-items: start;
   }
@@ -722,35 +734,43 @@ h2 {
     grid-column: 1 / -1;
   }
 
-  /* 左列：カレンダー一式 */
-  .streak-subhead,
-  .streak-cal-nav,
-  .streak-cal-weekdays,
-  .streak-cal,
-  .streak-day-detail,
-  .streak-note {
+  /* 左列＝カレンダー、右列＝成績。同じ行に置いて上端をそろえる。 */
+  .streak-cal-block {
     grid-column: 1;
+    grid-row: 3;
   }
 
-  /* 右列：成績。カレンダーと同じ高さから始める */
-  .stats-block {
+  /* .stats-block / .stats-grid の基本ルールはこのブロックより後ろに書かれているので、
+     同じ強さ（クラス1つ）だと後ろ勝ちで打ち消される。実際 1.0.95 では margin-top と
+     列指定がこれで効いておらず、成績が3列200px固定のまま見出しが省略されていた。
+     パネルの中に限った指定であることをセレクタで示し、順序に左右されないようにする。 */
+  .streak-panel .stats-block {
     grid-column: 2;
-    grid-row: 3 / span 6;
+    grid-row: 3;
+    /* 1段組では区切り線で「ここから成績」と示すが、横に並ぶ2段組では列そのものが
+       区切りになる。線が右列の上だけに浮いて見えるので消す。 */
     margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
   }
 
-  /* 列に収まる範囲でカレンダーを大きくする（日付と回数が読み取りやすくなる） */
-  .streak-cal,
-  .streak-cal-weekdays,
-  .streak-cal-nav {
-    max-width: 520px;
-    margin-left: 0;
-    margin-right: auto;
+  /* 3列固定だと、成績の列幅では1枚200pxしか取れず「学習量の推…」のように見出しが
+     省略される。列幅の下限だけ決めて、入るだけ並べる。 */
+  .streak-panel .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   }
+}
 
-  /* 3列固定だと5枚で 1+3+1 になり最後の行が欠ける。列幅の下限だけ決めて詰める。 */
-  .stats-grid {
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+/* 本文は読みやすさのため 1080px で止めているが、このパネルだけは例外にする。
+   成績はカードを横に並べるほど見やすくなる一方、本文の幅を全体で広げると
+   取り込み欄や単語一覧の行が長くなりすぎて読みにくい。
+   数字を並べて眺めるためのこのパネルに限って、画面の幅を使う。 */
+@media (min-width: 1240px) {
+  .streak-panel {
+    /* 100% は本文の幅（1080px）。それを超えた分を左右に均等にはみ出させる。 */
+    width: min(1400px, calc(100vw - 40px));
+    margin-left: calc((100% - min(1400px, 100vw - 40px)) / 2);
+    margin-right: calc((100% - min(1400px, 100vw - 40px)) / 2);
   }
 }
 
@@ -5622,20 +5642,25 @@ body.tutorial-open {
           <button id="streakPanelClose" class="ghost mini" type="button">閉じる</button>
         </div>
         <div id="streakSummary" class="streak-summary"></div>
-        <h3 class="streak-subhead">学習カレンダー</h3>
-        <div class="streak-cal-nav" role="group" aria-label="表示する月を移動">
-          <button id="streakPrevMonth" class="ghost mini" type="button" aria-label="前の月へ" aria-keyshortcuts="ArrowLeft">‹</button>
-          <span id="streakMonthLabel" class="streak-month-label" aria-live="polite"></span>
-          <button id="streakNextMonth" class="ghost mini" type="button" aria-label="次の月へ" aria-keyshortcuts="ArrowRight">›</button>
+        <!-- カレンダー一式を1つのまとまりにしておく。PC幅で「カレンダー｜成績」の2段組に
+             するとき、バラバラの要素を同じ列へ置くと、成績が高いぶんだけ左列の各行が
+             引き伸ばされて大きな空白ができる。まとまりにすれば列の中で普通に積める。 -->
+        <div class="streak-cal-block">
+          <h3 class="streak-subhead">学習カレンダー</h3>
+          <div class="streak-cal-nav" role="group" aria-label="表示する月を移動">
+            <button id="streakPrevMonth" class="ghost mini" type="button" aria-label="前の月へ" aria-keyshortcuts="ArrowLeft">‹</button>
+            <span id="streakMonthLabel" class="streak-month-label" aria-live="polite"></span>
+            <button id="streakNextMonth" class="ghost mini" type="button" aria-label="次の月へ" aria-keyshortcuts="ArrowRight">›</button>
+          </div>
+          <div class="streak-cal-weekdays" aria-hidden="true">
+            <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
+          </div>
+          <div id="streakCalendar" class="streak-cal"></div>
+          <div id="streakDayDetail" class="streak-day-detail" role="status"></div>
+          <p class="streak-note">
+            学習の記録は単語ごとに直近50回まで保存されます。それより前の古い履歴は表示されないことがあります。
+          </p>
         </div>
-        <div class="streak-cal-weekdays" aria-hidden="true">
-          <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
-        </div>
-        <div id="streakCalendar" class="streak-cal"></div>
-        <div id="streakDayDetail" class="streak-day-detail" role="status"></div>
-        <p class="streak-note">
-          学習の記録は単語ごとに直近50回まで保存されます。それより前の古い履歴は表示されないことがあります。
-        </p>
         <!-- 成績（統計）: 既存データだけから描く読み取り専用の可視化。renderStatsCharts() が中身を差し込む。 -->
         <div id="statsBlock" class="stats-block" hidden>
           <div class="stats-head">
@@ -6741,7 +6766,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.96</span>
+        <span class="app-footer-version">バージョン 1.0.97</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -6879,7 +6904,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.96";
+  const APP_REV = "1.0.97";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
