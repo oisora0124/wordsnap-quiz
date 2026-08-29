@@ -1271,6 +1271,52 @@ h2 {
   font-size: 0.72rem;
   margin-top: -2px;
 }
+/* 回答速度の分布を単語帳で絞るための折りたたみ。カードの幅（PCで約307px、
+   スマホで全幅）に収まるよう、名前は1行に省略して回数を右端に置く。 */
+.stats-deck-filter {
+  margin: 2px 0 6px;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.stats-deck-filter > summary {
+  cursor: pointer;
+}
+
+.stats-deck-options {
+  display: grid;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.stats-deck-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.stats-deck-option input {
+  margin: 0;
+}
+
+.stats-deck-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink);
+}
+
+.stats-deck-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-deck-options button {
+  justify-self: start;
+  margin-top: 2px;
+}
+
 /* 苦手カードの「復習」導線 */
 .stats-weak-action {
   margin-top: 2px;
@@ -6807,7 +6853,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.98</span>
+        <span class="app-footer-version">バージョン 1.0.99</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -6945,7 +6991,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.98";
+  const APP_REV = "1.0.99";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -18144,6 +18190,9 @@ function initReviewLogSettings() {
         elements.reviewLogToggle.checked = reviewLogEnabled();
       }
       updateReviewLogCount();
+      // 学習の記録を開いたままここを切り替えられる。描き直さないと、記録に基づく
+      // カード（回答速度の分布など）が消えた記録のまま残る。
+      refreshStatsIfVisible();
     });
   }
   elements.reviewLogExportButton?.addEventListener("click", () => {
@@ -18165,6 +18214,7 @@ function initReviewLogSettings() {
     try {
       localStorage.removeItem(REVIEW_EVENTS_KEY);
       updateReviewLogCount();
+      refreshStatsIfVisible();
       setStatus("この端末の学習イベントをすべて削除しました。");
     } catch {
       setStatus("学習イベントを削除できませんでした。");
@@ -30902,12 +30952,91 @@ function statsAccuracyCard(byDay) {
 }
 
 // C) 回答速度の分布（任意の学習イベントが記録されている場合のみ）。
+// 回答速度の分布を単語帳で絞り込む（複数選択可・空＝すべて）。
+// 一覧のCEFRフィルタと同じで、保存データには含めずこの画面を開いている間だけ保持する。
+// 折りたたみの開閉も覚えておく。カードを作り直したときに閉じてしまうと、
+// 続けて2冊目を選べない。
+let statsSpeedDeckIds = new Set();
+let statsSpeedFilterOpen = false;
+
+// 学習イベントは wordId しか持たない（記録の形式は変えていない）。
+// いまの単語帳を引いて紐づけるので、これまでに溜まった記録もそのまま絞り込める。
+// 単語帳を移した語は移動後の所属で数え、削除された語の記録はどの単語帳にも属さない。
+function reviewEventDeckIndex() {
+  const index = new Map();
+  for (const word of appState.words || []) {
+    if (word?.id) index.set(word.id, word.deckId || null);
+  }
+  return index;
+}
+
+// 選択中の単語帳のうち、いま実在するものだけを返す（消された単語帳を選んだままにしない）。
+function statsSpeedSelectedDecks(decks) {
+  const alive = new Set(decks.map((deck) => deck.id));
+  const kept = new Set([...statsSpeedDeckIds].filter((id) => alive.has(id)));
+  // 覚えている側からも落とす。残したままだと、同期で同じidの単語帳が戻ってきたときに
+  // 選んだ覚えのない絞り込みが復活する。
+  if (kept.size !== statsSpeedDeckIds.size) statsSpeedDeckIds = kept;
+  return kept;
+}
+
+function statsSpeedDeckFilterMarkup(decks, selected, counts) {
+  const options = decks
+    .map((deck) => {
+      const name = deck.name || "名称未設定";
+      const count = counts.get(deck.id) || 0;
+      return (
+        `<label class="stats-deck-option">` +
+        `<input type="checkbox" data-speed-deck="${escapeHtml(deck.id)}"${selected.has(deck.id) ? " checked" : ""} />` +
+        `<span class="stats-deck-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>` +
+        `<span class="stats-deck-count">${escapeHtml(count)}回</span>` +
+        `</label>`
+      );
+    })
+    .join("");
+  const summary = selected.size === 0 ? "すべての単語帳" : `${selected.size}冊を選択中`;
+  return (
+    `<details class="stats-deck-filter"${statsSpeedFilterOpen ? " open" : ""}>` +
+    `<summary>単語帳で絞る：${escapeHtml(summary)}</summary>` +
+    `<div class="stats-deck-options" role="group" aria-label="回答速度の分布に含める単語帳">${options}` +
+    `<button id="statsSpeedDeckClear" class="ghost mini" type="button"${selected.size === 0 ? " disabled" : ""}>すべてに戻す</button>` +
+    `</div></details>`
+  );
+}
+
 function statsSpeedCard() {
   if (!reviewLogEnabled()) return "";
-  const events = retainedReviewEvents().filter(
+  const all = retainedReviewEvents().filter(
     (e) => Number.isFinite(e?.responseTimeMs) && e.result !== "dont-know",
   );
-  if (events.length < 5) return "";
+  // 全体で5回に満たないうちは、どう絞っても意味のある形にならないので出さない（従来どおり）。
+  if (all.length < 5) return "";
+  const decks = (appState.decks || []).filter((deck) => deck?.id);
+  // 単語帳が1冊しかなければ絞り込む先が無いので、絞り込みは出さない。
+  const canFilter = decks.length > 1;
+  const deckOf = canFilter ? reviewEventDeckIndex() : null;
+  const selected = canFilter ? statsSpeedSelectedDecks(decks) : new Set();
+  const counts = new Map();
+  if (canFilter) {
+    for (const e of all) {
+      const id = deckOf.get(e.wordId);
+      if (id) counts.set(id, (counts.get(id) || 0) + 1);
+    }
+  }
+  const filter = canFilter ? statsSpeedDeckFilterMarkup(decks, selected, counts) : "";
+  const events = selected.size ? all.filter((e) => selected.has(deckOf.get(e.wordId))) : all;
+  // 絞った結果が少なすぎるときは、グラフの代わりに理由を出す。カードごと消すと
+  // 絞り込みも一緒に消えて、元に戻す手段が画面から無くなってしまう。
+  if (events.length < 5) {
+    return (
+      `<div class="stats-card" id="statsSpeedCard">` +
+      statsCardHeader("回答速度の分布", `${events.length}回`) +
+      filter +
+      `<p class="stats-caption">選んだ単語帳の記録が${events.length}回しかありません。` +
+      `5回以上たまると分布を出します。</p>` +
+      `</div>`
+    );
+  }
   const buckets = [
     { label: "〜1秒", max: 1000, count: 0 },
     { label: "1-2秒", max: 2000, count: 0 },
@@ -30945,14 +31074,46 @@ function statsSpeedCard() {
   const srItems = buckets
     .map((bk) => `<li>${escapeHtml(`${bk.label}：${bk.count}回`)}</li>`)
     .join("");
+  const scope = selected.size ? `選んだ${selected.size}冊の` : "";
   return (
-    `<div class="stats-card">` +
+    `<div class="stats-card" id="statsSpeedCard">` +
     statsCardHeader("回答速度の分布", `${events.length}回`) +
+    filter +
     `<svg class="stats-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>` +
     `<ul class="sr-only">${srItems}</ul>` +
-    `<p class="stats-caption">正答・誤答を含む直近${events.length}回。速く答えられるほど定着の目安。</p>` +
+    `<p class="stats-caption">${scope}正答・誤答を含む直近${events.length}回。速く答えられるほど定着の目安。</p>` +
     `</div>`
   );
+}
+
+// 絞り込みを変えたときは、このカードだけ作り直す。成績全体を描き直すと
+// 押したチェックボックスが消えて焦点が飛び、続けて選べなくなる。
+function refreshStatsSpeedCard(focusDeckId = "") {
+  const current = elements.statsGrid?.querySelector("#statsSpeedCard");
+  if (!current) return;
+  const html = statsSpeedCard();
+  // 学習の記録を切った・記録を全部消したなど、もう出せなくなった場合は消えた記録の
+  // まま残さない。カードが1枚も無くなるところまで面倒を見るため、全体を描き直す。
+  if (!html) {
+    renderStatsCharts();
+    return;
+  }
+  const holder = document.createElement("div");
+  holder.innerHTML = html;
+  const next = holder.firstElementChild;
+  if (!next) return;
+  current.replaceWith(next);
+  if (!focusDeckId) return;
+  const box = [...next.querySelectorAll("input[data-speed-deck]")].find(
+    (input) => input.dataset.speedDeck === focusDeckId,
+  );
+  box?.focus();
+}
+
+// 学習の記録を開いている間だけ、成績を描き直す。閉じているときに描くのは無駄なうえ、
+// 開いたときにどのみち描き直される。
+function refreshStatsIfVisible() {
+  if (elements.streakPanel?.hidden === false) renderStatsCharts();
 }
 
 // C2) 出題形式別の正答率（学習イベントの promptMode 別）。第二弾。
@@ -33365,6 +33526,37 @@ elements.streakBadge?.addEventListener("click", () => {
   toggleStreakPanel();
 });
 elements.streakPanelClose?.addEventListener("click", closeStreakPanel);
+
+// 回答速度の分布の単語帳フィルタ（カードは作り直されるため委譲で受ける）。
+elements.statsGrid?.addEventListener("change", (event) => {
+  const box = event.target?.closest?.("input[data-speed-deck]");
+  if (!box) return;
+  const deckId = box.dataset.speedDeck;
+  if (box.checked) statsSpeedDeckIds.add(deckId);
+  else statsSpeedDeckIds.delete(deckId);
+  statsSpeedFilterOpen = true;
+  refreshStatsSpeedCard(deckId);
+});
+elements.statsGrid?.addEventListener("click", (event) => {
+  if (!event.target?.closest?.("#statsSpeedDeckClear")) return;
+  statsSpeedDeckIds.clear();
+  statsSpeedFilterOpen = true;
+  refreshStatsSpeedCard();
+  // 押したボタンは戻したあと disabled になるので焦点を置けない。折りたたみの
+  // 見出しへ移して、キーボード操作でも位置を見失わないようにする。
+  elements.statsGrid?.querySelector("#statsSpeedCard .stats-deck-filter > summary")?.focus();
+});
+// toggle は上へ伝わらないので捕捉フェーズで受ける。開閉を覚えていないと、
+// カードを作り直したときに閉じてしまい、続けて2冊目を選べない。
+elements.statsGrid?.addEventListener(
+  "toggle",
+  (event) => {
+    const details = event.target;
+    if (details?.classList?.contains("stats-deck-filter")) statsSpeedFilterOpen = details.open;
+  },
+  true,
+);
+
 // 成績カードの復習導線（カードは再描画で作り直されるため委譲で受ける）。
 elements.statsGrid?.addEventListener("click", (event) => {
   const button = event.target.closest?.(
