@@ -6899,7 +6899,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.102</span>
+        <span class="app-footer-version">バージョン 1.0.103</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7037,7 +7037,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.102";
+  const APP_REV = "1.0.103";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -26795,8 +26795,7 @@ function difficultQuizWords(words = quizSelectedDeckWords()) {
   return words.filter((word) => word.stats.wrong > 0 && wordAccuracy(word) < 0.8);
 }
 
-function startDifficultQuiz() {
-  const words = difficultQuizWords();
+function startDifficultQuiz(words = difficultQuizWords()) {
   if (words.length === 0) {
     setStatus("この条件には苦手な単語がありません。");
     return;
@@ -30521,7 +30520,7 @@ function statsConfidenceCard() {
     headline +
     `<div class="stats-review-breakdown">` +
     `<span>確かめた <strong>${escapeHtml(checked)}回</strong></span>` +
-    `<span>まだ確かめていない <strong>${escapeHtml(pending)}語</strong></span>` +
+    `<span>意味4択で未確認 <strong>${escapeHtml(pending)}語</strong></span>` +
     `</div>` +
     `</div>` +
     action +
@@ -30969,8 +30968,12 @@ function statsAccuracyCard(byDay) {
   const barW = slot * 0.62;
   const chartH = H - 16; // 下部に日ラベルの余白
   // 正答率の高低で色を変える（80%以上=緑, 50%以上=標準, 未満=赤系）。
-  const colorFor = (rate) =>
-    rate >= 0.8 ? "--success" : rate >= 0.5 ? "--accent" : "--danger";
+  // 画面に出す%は四捨五入なので、判定も丸めた値で行う。生の値で判定すると
+  // 「80%と書いてあるのに緑でない」（79.6% など）が起きる。
+  const colorFor = (rate) => {
+    const pct = Math.round(rate * 100);
+    return pct >= 80 ? "--success" : pct >= 50 ? "--accent" : "--danger";
+  };
   const bars = cols
     .map((c, i) => {
       const cx = pad + slot * i + (slot - barW) / 2;
@@ -31124,8 +31127,9 @@ function statsDeckFilterMarkup() {
     `<p class="sr-only" id="statsFilterStatus" role="status" aria-live="polite"></p>` +
     // 行動のカードはクイズ側の「出題する単語帳」に従う。ここで絞ると数字と
     // 「復習を始める」ボタンの範囲がずれるため、意図的に対象外にしている。
-    `<p class="stats-filter-note">下の集計に効きます。「今日の復習」など次にやることのカードは、` +
-    `クイズの「出題する単語帳」に従います。</p>` +
+    `<p class="stats-filter-note">下の集計に効きます。ただし「今日の復習」など次にやることのカードは` +
+    `クイズの「出題する単語帳」に従い、「確実」と答えた単語は単語帳ごとに分けられないため` +
+    `常に全体です。</p>` +
     `</details>`
   );
 }
@@ -31232,7 +31236,7 @@ function refreshStatsIfVisible() {
 }
 
 // C2) 出題形式別の正答率（学習イベントの promptMode 別）。第二弾。
-// 「意味を選ぶ」「例文の空所」「フラッシュカード」を形式別に振り返る。
+// 英→日・日→英・例文の空所・フラッシュカードの4形式を、形式別に振り返る。
 // 集計する出題形式。recordReviewEvent が受け付ける promptMode と1対1で対応させる。
 // ここと記録側がずれると、その形式の回答は黙って消える（1.0.79→1.0.100 で実際に起きた）。
 // 「まだ出せない指標」の件数もこの一覧で数える。未知の形式まで数えると、
@@ -31291,18 +31295,34 @@ function statsFormatCard() {
 }
 
 // D) 苦手語ランキング（正誤履歴が3回以上ある語のうち、正答率の低い順）。
-function statsWeakCard() {
+// 苦手カードが扱う語。一覧・件数・実際に始める復習をこの1か所で決める。
+//
+// もともと一覧は「3回以上答えて正答率100%未満」、ボタンは difficultQuizWords()＝
+// 「誤答があり正答率80%未満」で、別々の集合を指していた。カードには
+// 「この苦手な語を復習する」と書いてあるのに、一覧に無い語が入り、一覧にある語が
+// 入らないことがあった。1つの定義にそろえる。
+//
+// 条件は両者の良いところを取る。
+//   - 3回以上答えた語に限る（1〜2回の結果で「苦手」と決めない）
+//   - 正答率80%未満（100%未満だと、95%の語まで苦手扱いになって復習が薄まる）
+// 正答率は画面に出すのと同じ history から数える（stats は履歴の上限で食い違いうる）。
+function statsWeakWords() {
   const rows = [];
   for (const word of statsScopedWords()) {
     const hist = word.history || [];
     if (hist.length < 3) continue;
     const correct = hist.reduce((n, h) => n + (h.correct ? 1 : 0), 0);
     const rate = correct / hist.length;
-    if (rate >= 1) continue; // 全問正解の語は苦手ではない
-    rows.push({ term: word.term || "", meaning: word.meaning || "", rate, attempts: hist.length });
+    if (rate >= 0.8) continue;
+    rows.push({ word, term: word.term || "", meaning: word.meaning || "", rate, attempts: hist.length });
   }
-  if (rows.length === 0) return "";
   rows.sort((a, b) => a.rate - b.rate || b.attempts - a.attempts);
+  return rows;
+}
+
+function statsWeakCard() {
+  const rows = statsWeakWords();
+  if (rows.length === 0) return "";
   // コンパクト方針: 1語=1行（語＋意味＋正答率）。%と重複する装飾バーは持たない。
   const top = rows.slice(0, 5);
   const items = top
@@ -31317,8 +31337,8 @@ function statsWeakCard() {
       );
     })
     .join("");
-  // 第二弾: 「苦手だけ解く」対象が実際にあるときだけ、その場から復習を始める導線を出す。
-  const difficultCount = difficultQuizWords().length;
+  // 一覧は上位5語だけ見せるが、復習は当てはまる語すべてを対象にする。
+  const difficultCount = rows.length;
   const action = difficultCount > 0
     ? `<div class="stats-weak-action">` +
       `<button type="button" class="secondary" id="statsWeakQuizButton">この苦手な語を復習する（${difficultCount}語）</button>` +
@@ -31329,7 +31349,8 @@ function statsWeakCard() {
     statsCardHeader("苦手な単語", `${top.length}語`) +
     `<ul class="stats-weak">${items}</ul>` +
     action +
-    `<p class="stats-caption">3回以上答えた語のうち正答率が低い順（最大5語）。</p>` +
+    `<p class="stats-caption">3回以上答えて正答率80%未満の語を、低い順に最大5語。` +
+    `ボタンは当てはまる${escapeHtml(difficultCount)}語すべてが対象です。</p>` +
     `</div>`
   );
 }
@@ -31350,15 +31371,25 @@ function statsPendingCard(built) {
   // 無い人にも出るように読めてしまう。
   if (!built.activity) add("学習量の推移", "直近30日にクイズを解くと、日ごとの回答数が出ます。");
   if (!built.accuracy) add("正答率の推移", "直近14日にクイズを解くと、日ごとの正答率が出ます。");
-  if (!built.deck) add("単語帳ごとの進捗", "単語帳を2冊以上つくると、冊ごとに比べられます。");
+  if (!built.deck) {
+    // 単語帳が1冊しかないのか、絞り込みで1冊になったのかで、やることが違う。
+    // どちらも「2冊以上つくると」と書くと、絞り込みを解けば見られることが伝わらない。
+    const allDecks = (appState.decks || []).filter((deck) => deck?.id).length;
+    add(
+      "単語帳ごとの進捗",
+      statsDeckIds.size > 0 && allDecks > 1
+        ? "絞り込みを解くと、単語帳どうしの進捗を比べられます。"
+        : "単語帳を2冊以上つくると、冊ごとに比べられます。",
+    );
+  }
   if (!built.cefr) {
     const judged = words.filter((word) => CEFR_ORDER.includes(word.cefr?.level)).length;
     add("単語の難しさ（CEFR）", `CEFRが判定できた単語が10語たまると出ます（いま${judged}語）。`);
   }
-  // 全問正解の語は苦手に入れない（statsWeakCard の rate >= 1 の除外）。
-  // 3回解けば必ず出ると書くと、間違えたことが無い人には嘘になる。
+  // 条件は statsWeakWords() が持つ「3回以上 かつ 正答率80%未満」。
+  // 「1回でも間違えると出ます」と書くと、5回中1回誤答（80%）の人には嘘になる。
   if (!built.weak) {
-    add("苦手な単語", "同じ単語を3回以上解いて、1回でも間違えると出ます。");
+    add("苦手な単語", "同じ単語を3回以上解いて、正答率が80%を下回ると出ます。");
   }
 
   // 学習イベントを使う2枚。設定がオフのときだけ理由が同じなのでまとめて書く。
@@ -33824,6 +33855,10 @@ elements.statsGrid?.addEventListener("click", (event) => {
       " #recoveryResumeProbeButton, #recoveryTodayButton, #recoveryDismissButton",
   );
   if (!button) return;
+  // いまの closeStreakPanel() は絞り込みを消さないが、対象はパネルを閉じる前に
+  // 決めておく。将来ここで絞り込みを解くようにしたときに、静かに別の語で
+  // 復習が始まるのを防ぐ。
+  const weakReviewWords = statsWeakWords().map((row) => row.word);
   closeStreakPanel();
   if (button.id === "statsTodayReviewButton") {
     startGeneralReview();
@@ -33857,7 +33892,9 @@ elements.statsGrid?.addEventListener("click", (event) => {
     return;
   }
   setActiveStep("quiz", { sound: false });
-  startDifficultQuiz();
+  // 成績から始めるときは、カードに並べた語（＝成績の絞り込みに従う）で始める。
+  // クイズ画面の「苦手だけ解く」は従来どおり出題範囲で動く。
+  startDifficultQuiz(weakReviewWords);
 });
 function moveStreakCalendarMonth(offset) {
   if (!streakCalMonth) return;
