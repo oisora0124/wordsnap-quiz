@@ -1271,6 +1271,29 @@ h2 {
   font-size: 0.72rem;
   margin-top: -2px;
 }
+/* 「まだ出せない指標」。条件がそろっていないカードの理由を並べる。
+   目立たせる必要はないので、他のカードより一段落とした見た目にする。 */
+.stats-pending-list {
+  display: grid;
+  gap: 6px;
+}
+
+.stats-pending-row {
+  display: grid;
+  gap: 1px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.stats-pending-name {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.stats-pending-why {
+  color: var(--muted);
+}
+
 /* 回答速度の分布を単語帳で絞るための折りたたみ。カードの幅（PCで約307px、
    スマホで全幅）に収まるよう、名前は1行に省略して回数を右端に置く。 */
 .stats-deck-filter {
@@ -6853,7 +6876,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.99</span>
+        <span class="app-footer-version">バージョン 1.0.101</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -6991,7 +7014,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.99";
+  const APP_REV = "1.0.101";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -30691,6 +30714,10 @@ function statsActivityCard(byDay) {
     `</svg>` +
     `<ul class="sr-only">${srItems}</ul>` +
     `<div class="stats-chart-legend"><span><i></i>回答数</span><span><i class="is-average"></i>7日平均</span></div>` +
+    // 縦は相対値なので、何回ぶんの高さなのかを書かないと別の期間や別の人と比べられない。
+    // 上端は棒（その日の回答数）と7日平均のうち大きい方。7日平均は30日より前の日も
+    // 含めて計算するので、「この30日で最も多い日」と言い切ると外れることがある。
+    `<p class="stats-caption">縦の上端は${escapeHtml(maxValue.toFixed(1).replace(/\.0$/, ""))}回（棒と7日平均のうち大きい方）。</p>` +
     `</div>`
   );
 }
@@ -30946,7 +30973,15 @@ function statsAccuracyCard(byDay) {
     `<svg class="stats-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">` +
     `${grid}<g>${bars}</g></svg>` +
     `<ul class="sr-only">${srItems}</ul>` +
-    `<p class="stats-caption">棒の高さ＝その日の正答率。点線は50%。日付の色は日曜・土曜、丸印は今日。</p>` +
+    // 色で正答率の高さを表しているのに、どの色が何%なのか画面に出ていなかった。
+    // 色だけに頼らないよう、%の数字も一緒に置く。
+    `<div class="stats-legend">` +
+    `<span><i style="background:var(--success)"></i>80%以上</span>` +
+    `<span><i style="background:var(--accent)"></i>50〜79%</span>` +
+    `<span><i style="background:var(--danger)"></i>50%未満</span>` +
+    `</div>` +
+    `<p class="stats-caption">棒の高さ＝その日の正答率（上端が100%、点線が50%）。` +
+    `日付の色は日曜・土曜、丸印は今日。</p>` +
     `</div>`
   );
 }
@@ -31081,7 +31116,8 @@ function statsSpeedCard() {
     filter +
     `<svg class="stats-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>` +
     `<ul class="sr-only">${srItems}</ul>` +
-    `<p class="stats-caption">${scope}正答・誤答を含む直近${events.length}回。速く答えられるほど定着の目安。</p>` +
+    `<p class="stats-caption">棒の高さ＝その区間の回数。${scope}正答・誤答を含む直近${events.length}回。` +
+    `速さは定着の参考です（単語の長さや出題形式にも左右されます）。</p>` +
     `</div>`
   );
 }
@@ -31121,8 +31157,13 @@ function refreshStatsIfVisible() {
 function statsFormatCard() {
   if (!reviewLogEnabled()) return "";
   const events = retainedReviewEvents().filter((e) => e.result !== "dont-know");
+  // 記録側（recordReviewEvent）が持つ promptMode を全て並べる。
+  // 出題の向き（1.0.79）で term-choice を記録するようになったのに、ここへ足すのを
+  // 忘れていたため、日→英で解いた回答が groups.find で落ちて1件も出ていなかった。
+  // 記録の形式が増えたらここも増やす。
   const groups = [
-    { key: "meaning-choice", label: "意味を選ぶ", total: 0, correct: 0 },
+    { key: "meaning-choice", label: "意味を選ぶ（英→日）", total: 0, correct: 0 },
+    { key: "term-choice", label: "単語を選ぶ（日→英）", total: 0, correct: 0 },
     { key: "context-choice", label: "例文の空所", total: 0, correct: 0 },
     { key: "flashcard", label: "フラッシュカード", total: 0, correct: 0 },
   ];
@@ -31132,9 +31173,12 @@ function statsFormatCard() {
     g.total += 1;
     if (e.result === "correct") g.correct += 1;
   }
-  // どちらの形式にも最低5件たまるまでは出さない（少数で誤解を与えないため）。
+  // 5件に満たない形式は出さない（少数の正答率は当てにならないため）。
+  // 1つでも5件たまった形式があれば、その形式だけを出す。
   const shown = groups.filter((g) => g.total >= 5);
   if (shown.length === 0) return "";
+  // 解いたのに出ていない形式があるなら、消えたのではなく件数待ちだと分かるようにする。
+  const waiting = groups.filter((g) => g.total > 0 && g.total < 5);
   const rows = shown
     .map((g) => {
       const pct = Math.round((g.correct / g.total) * 100);
@@ -31152,7 +31196,11 @@ function statsFormatCard() {
     `<div class="stats-card">` +
     statsCardHeader("出題形式別の正答率", `${shown.length}形式`) +
     `<div class="stats-fmt">${rows}</div>` +
-    `<p class="stats-caption">「学習の記録」がオンの間の集計。形式ごとの得意・苦手が分かります。</p>` +
+    `<p class="stats-caption">「学習の記録」がオンの間の集計。形式ごとの得意・苦手が分かります。` +
+    (waiting.length
+      ? `${escapeHtml(waiting.map((g) => g.label).join("・"))}は5回たまると出ます。`
+      : "") +
+    `</p>` +
     `</div>`
   );
 }
@@ -31201,32 +31249,118 @@ function statsWeakCard() {
   );
 }
 
+// まだ出せないカードの理由を1枚にまとめる。
+// カードは条件を満たさないと黙って消えるので、利用者からは「機能が無い」のか
+// 「データ待ち」なのか区別できなかった。カードごとに置き換えの札を出すと枚数が
+// 倍になるので、足りないものだけを最後に1枚並べる。
+//
+// built には各カードのHTMLが入る。空文字なら出ていない＝理由を書く対象。
+// 実際に描いた結果から作るので、条件の書き写し間違いで案内と食い違うことがない。
+function statsPendingCard(built) {
+  const words = appState.words || [];
+  const reasons = [];
+  const add = (name, why) => reasons.push({ name, why });
+
+  // 期間はカード側の実装に合わせて書く。「クイズを解くと」だけだと、古い回答しか
+  // 無い人にも出るように読めてしまう。
+  if (!built.activity) add("学習量の推移", "直近30日にクイズを解くと、日ごとの回答数が出ます。");
+  if (!built.accuracy) add("正答率の推移", "直近14日にクイズを解くと、日ごとの正答率が出ます。");
+  if (!built.deck) add("単語帳ごとの進捗", "単語帳を2冊以上つくると、冊ごとに比べられます。");
+  if (!built.cefr) {
+    const judged = words.filter((word) => CEFR_ORDER.includes(word.cefr?.level)).length;
+    add("レベル別（CEFR）", `CEFRが判定できた単語が10語たまると出ます（いま${judged}語）。`);
+  }
+  // 全問正解の語は苦手に入れない（statsWeakCard の rate >= 1 の除外）。
+  // 3回解けば必ず出ると書くと、間違えたことが無い人には嘘になる。
+  if (!built.weak) {
+    add("苦手な単語", "同じ単語を3回以上解いて、1回でも間違えると出ます。");
+  }
+
+  // 学習イベントを使う2枚。設定がオフのときだけ理由が同じなのでまとめて書く。
+  // オンのときは数え方が違う（形式別は形式ごとに5回、速度は回答時間が残った回だけ）。
+  // 総イベント数で「あと何回」と書くと、0回と言っているのにカードが出ない状態になる。
+  const missingLog = [];
+  if (!built.format) missingLog.push("出題形式別の正答率");
+  if (!built.speed) missingLog.push("回答速度の分布");
+  if (missingLog.length && !reviewLogEnabled()) {
+    add(missingLog.join("・"), "設定の「📈 学習の記録」をオンにすると集計を始めます。");
+  } else if (missingLog.length) {
+    const graded = retainedReviewEvents().filter((e) => e.result !== "dont-know");
+    if (!built.format) {
+      // 形式ごとに5回。いちばん進んでいる形式の件数を出す。
+      const perMode = new Map();
+      for (const e of graded) perMode.set(e.promptMode, (perMode.get(e.promptMode) || 0) + 1);
+      const best = Math.max(0, ...perMode.values());
+      add("出題形式別の正答率", `同じ出題形式で5回たまると出ます（いちばん多い形式でいま${best}回）。`);
+    }
+    if (!built.speed) {
+      const timed = graded.filter((e) => Number.isFinite(e?.responseTimeMs)).length;
+      add("回答速度の分布", `回答時間が残った記録が5回たまると出ます（いま${timed}回）。`);
+    }
+  }
+  if (reasons.length === 0) return "";
+  const rows = reasons
+    .map(
+      (r) =>
+        `<div class="stats-pending-row">` +
+        `<span class="stats-pending-name">${escapeHtml(r.name)}</span>` +
+        `<span class="stats-pending-why">${escapeHtml(r.why)}</span>` +
+        `</div>`,
+    )
+    .join("");
+  return (
+    `<div class="stats-card stats-card-wide">` +
+    statsCardHeader("まだ出せない指標", `${reasons.length}件`) +
+    `<div class="stats-pending-list">${rows}</div>` +
+    `<p class="stats-caption">条件がそろえば自動で並びます。いま消えているだけで、無くなったわけではありません。</p>` +
+    `</div>`
+  );
+}
+
 function renderStatsCharts(byDay) {
   const block = elements.statsBlock;
   const grid = elements.statsGrid;
   if (!block || !grid) return;
   const activity = byDay instanceof Map ? byDay : buildDailyActivity();
+  // 出ていないカードの理由を書くために、どれが空だったかを覚えておく。
+  const built = {
+    recovery: statsRecoveryCard(),
+    confidence: statsConfidenceCard(),
+    todayReview: statsTodayReviewCard(),
+    activity: statsActivityCard(activity),
+    mastery: statsMasteryCard(),
+    deck: statsDeckProgressCard(),
+    cefr: statsCefrCard(),
+    cefrGuide: cefrGuideCard(),
+    accuracy: statsAccuracyCard(activity),
+    format: statsFormatCard(),
+    speed: statsSpeedCard(),
+    weak: statsWeakCard(),
+  };
   const cards = [
     // 復帰カードは最上段。全件の数字より先に「まず20語」を見せる。
-    statsRecoveryCard(),
-    statsConfidenceCard(),
-    statsTodayReviewCard(),
-    statsActivityCard(activity),
-    statsMasteryCard(),
-    statsDeckProgressCard(),
-    statsCefrCard(),
-    cefrGuideCard(),
-    statsAccuracyCard(activity),
-    statsFormatCard(),
-    statsSpeedCard(),
-    statsWeakCard(),
+    built.recovery,
+    built.confidence,
+    built.todayReview,
+    built.activity,
+    built.mastery,
+    built.deck,
+    built.cefr,
+    built.cefrGuide,
+    built.accuracy,
+    built.format,
+    built.speed,
+    built.weak,
   ].filter(Boolean);
   if (cards.length === 0) {
     // まだ集計できるデータがない（単語ゼロ・履歴なし）ときはブロックごと隠す。
+    // ここで「まだ出せない指標」だけを出すと、始めたばかりの画面が 不足の一覧になる。
     block.hidden = true;
     grid.innerHTML = "";
     return;
   }
+  const pending = statsPendingCard(built);
+  if (pending) cards.push(pending);
   block.hidden = false;
   grid.innerHTML = cards.join("");
 }

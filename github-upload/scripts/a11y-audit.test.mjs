@@ -235,12 +235,12 @@ test("PC表示: 全幅にする案内カードは、実際に並びの先頭側�
   // CSSだけでは「先頭側に固まっている」ことを保証できないので、生成側の並びも見る。
   const start = streakHtml.indexOf("const cards = [");
   const list = streakHtml.slice(start, streakHtml.indexOf("].filter(Boolean)", start));
-  const order = [...list.matchAll(/stats(\w+)Card\(/g)].map((m) => m[1]);
-  const banners = ["Recovery", "Confidence", "TodayReview"];
+  const order = [...list.matchAll(/built\.(\w+)/g)].map((m) => m[1]);
+  const banners = ["recovery", "confidence", "todayReview"];
   // 3枚とも並びに居ることまで見る。1枚でも消えると「先頭に固まっている」は
   // 自動的に成り立ってしまい、この検査が意味を失う。
   for (const b of banners) {
-    assert.ok(order.includes(b), `案内カード stats${b}Card() が並びから消えている: ${order.join(" → ")}`);
+    assert.ok(order.includes(b), `案内カード ${b} が並びから消えている: ${order.join(" → ")}`);
   }
   const lastBanner = Math.max(...banners.map((b) => order.indexOf(b)));
   const firstOther = order.findIndex((name) => !banners.includes(name));
@@ -412,7 +412,7 @@ test("CEFR: 説明は成績タブのレベル別カードのすぐ下に、全�
   // レベル別カードが出ていない（＝A1〜C2が画面に無い）ときは説明も出さない。
   assert.match(streakHtml, /function cefrGuideCard\(\)\s*\{\s*if \(statsCefrWords\(\)\.length === 0\) return "";/,
     "レベル別カードが無いときにも説明が出てしまう");
-  assert.match(streakHtml, /statsCefrCard\(\),\s*\n\s*cefrGuideCard\(\),/,
+  assert.match(streakHtml, /built\.cefr,\s*\n\s*built\.cefrGuide,/,
     "レベル別カードの直後に置いていない");
   // 説明は横に長い文章なので、200px幅のカード列に押し込めず全幅にする。
   assert.match(streakHtml, /\.stats-card-wide\s*\{\s*grid-column:\s*1 \/ -1;/, "全幅にしていない");
