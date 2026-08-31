@@ -43,11 +43,34 @@ function extractFunction(name) {
   throw new Error(`unbalanced braces for ${name}`);
 }
 
+// `const NAME = [...];` を対応する括弧の末尾まで切り出す。
+function extractConst(name) {
+  const start = html.indexOf(`const ${name} `);
+  if (start < 0) throw new Error(`const ${name} not found`);
+  let depth = 0;
+  let seen = false;
+  for (let i = start; i < html.length; i += 1) {
+    const ch = html[i];
+    if (ch === "(" || ch === "[" || ch === "{") {
+      depth += 1;
+      seen = true;
+    } else if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+    } else if (ch === ";" && depth === 0 && seen) {
+      return html.slice(start, i + 1);
+    }
+  }
+  throw new Error(`could not terminate const ${name}`);
+}
+
 function buildSandbox(events, logEnabled = true) {
   const pieces = [
     `let __events = ${JSON.stringify(events)};`,
     `function reviewLogEnabled() { return ${logEnabled}; }`,
     "function retainedReviewEvents() { return __events; }",
+    // 絞り込みはパネル共通（statsScopedEvents）。ここでは絞らない状態を再現する。
+    "function statsScopedEvents() { return __events; }",
+    extractConst("STATS_FORMAT_MODES"),
     extractFunction("escapeHtml"),
     extractFunction("statsCardHeader"),
     extractFunction("statsFormatCard"),
@@ -76,8 +99,8 @@ test("記録できる形式と、集計する形式が一致している", () =>
   );
   assert.deepEqual([...recorded].sort(), [...RECORDED_MODES].sort(), "記録側の形式が変わっている");
 
-  const card = html.slice(html.indexOf("function statsFormatCard("));
-  const grouped = [...card.slice(0, card.indexOf("];")).matchAll(/key: "([a-z-]+)"/g)].map((m) => m[1]);
+  const table = extractConst("STATS_FORMAT_MODES");
+  const grouped = [...table.matchAll(/\["([a-z-]+)",/g)].map((m) => m[1]);
   assert.deepEqual(
     grouped.sort(),
     [...RECORDED_MODES].sort(),

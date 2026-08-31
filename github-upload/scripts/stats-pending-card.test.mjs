@@ -54,6 +54,10 @@ function buildSandbox({ built = {}, words = [], events = [], logEnabled = true }
     `const CEFR_ORDER = ["A1", "A2", "B1", "B2", "C1", "C2"];`,
     `function reviewLogEnabled() { return ${logEnabled}; }`,
     `function retainedReviewEvents() { return ${JSON.stringify(events)}; }`,
+    `function statsScopedEvents() { return ${JSON.stringify(events)}; }`,
+    `function statsScopedWords() { return ${JSON.stringify(words)}; }`,
+    "let statsDeckIds = new Set();",
+    `const STATS_FORMAT_MODES = [["meaning-choice","a"],["term-choice","b"],["context-choice","c"],["flashcard","d"]];`,
     extractFunction("escapeHtml"),
     extractFunction("statsCardHeader"),
     extractFunction("statsPendingCard"),
@@ -240,13 +244,13 @@ function buildPairSandbox(events) {
     `const CEFR_ORDER = ["A1", "A2", "B1", "B2", "C1", "C2"];`,
     "function reviewLogEnabled() { return true; }",
     `function retainedReviewEvents() { return ${JSON.stringify(events)}; }`,
-    "let statsSpeedDeckIds = new Set(); let statsSpeedFilterOpen = false;",
+    `function statsScopedEvents() { return ${JSON.stringify(events)}; }`,
+    `function statsScopedWords() { return ${JSON.stringify(words)}; }`,
+    "let statsDeckIds = new Set(); let statsFilterOpen = false;",
+    `const STATS_FORMAT_MODES = [["meaning-choice","意味を選ぶ（英→日）"],["term-choice","単語を選ぶ（日→英）"],["context-choice","例文の空所"],["flashcard","フラッシュカード"]];`,
     extractFunction("escapeHtml"),
     extractFunction("svgFill"),
     extractFunction("statsCardHeader"),
-    extractFunction("reviewEventDeckIndex"),
-    extractFunction("statsSpeedSelectedDecks"),
-    extractFunction("statsSpeedDeckFilterMarkup"),
     extractFunction("statsSpeedCard"),
     extractFunction("statsFormatCard"),
     extractFunction("statsPendingCard"),
@@ -300,4 +304,40 @@ test("突き合わせ: 回答時間の無い記録だけなら、速度は出な
   assert.equal(speed, "", "回答時間が無いので速度は出ない");
   const pending = x.pending({ activity: "x", accuracy: "x", deck: "x", cefr: "x", weak: "x", format: x.format(), speed });
   assert.match(pending, /回答時間が残った記録が5回たまると出ます（いま0回）/);
+});
+
+// ---------------------------------------------------------------------------
+// 単語の難しさ（CEFR）カードの表記（1.0.102 / Codexレビューの指摘④）
+// 「レベル別（CEFR）」だと自分の英語力の判定に読めてしまう。また、バーの長さは
+// レベル間の語数比較で、右の「習得/総数」とは別の軸なので、何を見ているのか書く。
+// ---------------------------------------------------------------------------
+
+test("CEFR: 見出しで「単語の難しさ」だと分かる", () => {
+  const card = html.slice(html.indexOf("function statsCefrCard("));
+  const body = card.slice(0, card.indexOf("\n}"));
+  assert.match(body, /statsCardHeader\("単語の難しさ（CEFR）"/, "自分の英語力の判定に読める見出し");
+  assert.doesNotMatch(body, /statsCardHeader\("レベル別（CEFR）"/);
+});
+
+test("CEFR: バーの長さと右の数字が別の軸であることを書く", () => {
+  const card = html.slice(html.indexOf("function statsCefrCard("));
+  const body = card.slice(0, card.indexOf("\n}"));
+  assert.match(body, /バーの長さ＝そのレベルの語数/, "バーが何を表すか書いていない");
+  assert.match(body, /あなたの英語力ではなく/, "誤読の打ち消しが無い");
+});
+
+test("CEFR: 案内の名前も見出しと合わせる", () => {
+  const pending = html.slice(html.indexOf("function statsPendingCard("));
+  const body = pending.slice(0, pending.indexOf("\n}"));
+  assert.match(body, /add\("単語の難しさ（CEFR）"/, "案内とカードの名前が食い違っている");
+});
+
+test("絞り込み中は「選んだ単語帳の中で数えている」と書く", () => {
+  // 「同じ単語を3回以上解くと出ます」のような全体基準の説明をそのまま出すと、
+  // 絞り込んでいることを忘れて全体の話だと読んでしまう（Codexの指摘）。
+  const pending = html.slice(html.indexOf("function statsPendingCard("));
+  const body = pending.slice(0, pending.indexOf("\n}"));
+  assert.match(body, /statsDeckIds\.size > 0/, "絞り込み中かどうかを見ていない");
+  assert.match(body, /選んだ単語帳の中で数えています/);
+  assert.match(body, /「すべてに戻す」/, "全体へ戻す方法が書かれていない");
 });
