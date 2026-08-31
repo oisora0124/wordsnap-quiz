@@ -1891,7 +1891,8 @@ test("確信度: 検証は意味4択だけ。例文やフラッシュカード�
 test("確信度: 較正の表示は未検証件数を隠さない", () => {
   const card = html.slice(html.indexOf("function statsConfidenceCard()"));
   const body = card.slice(0, card.indexOf("\n}\n"));
-  assert.ok(body.includes("まだ確かめていない"), "未検証の件数を併記する");
+  // 「まだ確かめていない」は未学習にも読めるので 1.0.103 で「意味4択で未確認」に改めた。
+  assert.ok(body.includes("意味4択で未確認"), "未検証の件数を併記する");
   assert.ok(body.includes("CONFIDENCE_MIN_SAMPLES"), "少数のときは割合を出さない");
   assert.ok(body.includes("データ不足"), "少数のときの表示がある");
 });

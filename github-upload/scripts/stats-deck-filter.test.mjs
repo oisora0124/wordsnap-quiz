@@ -192,7 +192,7 @@ test("集計のカードは、絞り込んだ母集団を使う", () => {
   for (const [name, marker] of [
     ["statsMasteryCard", /learningBuckets\(statsScopedWords\(\)\)/],
     ["statsCefrWords", /statsScopedWords\(\)/],
-    ["statsWeakCard", /for \(const word of statsScopedWords\(\)\)/],
+    ["statsWeakWords", /for \(const word of statsScopedWords\(\)\)/],
     ["statsDeckProgressCard", /statsScopedDecks\(\)/],
     ["statsFormatCard", /statsScopedEvents\(\)/],
     ["statsSpeedCard", /statsScopedEvents\(\)/],
@@ -337,4 +337,124 @@ test("出題形式の一覧は1か所にまとめる（記録側とのずれを1
   assert.match(html, /const STATS_FORMAT_MODES = \[/, "一覧が定数になっていない");
   const card = bodyOf("statsFormatCard");
   assert.match(card, /STATS_FORMAT_MODES\.map\(\(\[key, label\]\)/, "カードが一覧を使っていない");
+});
+
+// ---------------------------------------------------------------------------
+// 再レビュー（1.0.103）で挙がった、絞り込みと表示の食い違い
+// ---------------------------------------------------------------------------
+
+test("苦手カードは、一覧・件数・復習が1つの定義から出る", () => {
+  // もともと一覧は「3回以上・正答率100%未満」、ボタンは difficultQuizWords()＝
+  // 「誤答あり・80%未満」で、別々の集合を指していた。カードには「この苦手な語を
+  // 復習する」と書いてあるのに、一覧に無い語が入り、一覧にある語が入らなかった。
+  const rule = bodyOf("statsWeakWords");
+  assert.match(rule, /for \(const word of statsScopedWords\(\)\)/, "絞り込みに従っていない");
+  assert.match(rule, /if \(hist\.length < 3\) continue;/, "1〜2回の結果で苦手と決めている");
+  assert.match(rule, /if \(rate >= 0\.8\) continue;/, "正答率の閾値が一覧とボタンでずれている");
+
+  const card = bodyOf("statsWeakCard");
+  assert.match(card, /const rows = statsWeakWords\(\);/, "一覧が共通の定義から出ていない");
+  assert.match(card, /const difficultCount = rows\.length;/, "件数が一覧と別勘定");
+  // カードは上位5語だけ見せるが、復習は当てはまる語すべてが対象。
+  assert.match(card, /rows\.slice\(0, 5\)/);
+  assert.match(card, /ボタンは当てはまる\$\{escapeHtml\(difficultCount\)\}語すべてが対象/, "対象の広さを書いていない");
+
+  // 実際に始める語も同じ定義から。
+  const at = html.indexOf("const weakReviewWords = statsWeakWords().map((row) => row.word);");
+  assert.ok(at > 0, "復習の対象が共通の定義から出ていない");
+  assert.match(html.slice(at, at + 2600), /startDifficultQuiz\(weakReviewWords\)/, "別の語で復習を始めている");
+  // パネルを閉じる前に決める。将来 closeStreakPanel() が絞り込みを解くようにしたとき、
+  // 静かに別の語で復習が始まるのを防ぐ。
+  const closeAt = html.indexOf("closeStreakPanel();", html.indexOf("elements.statsGrid?.addEventListener(\"click\""));
+  assert.ok(closeAt > 0);
+  assert.ok(at < closeAt, "パネルを閉じたあとに対象を決めている");
+  // クイズ画面の「苦手だけ解く」は従来どおり出題範囲で動く。
+  assert.match(
+    bodyOf("difficultQuizWords"),
+    /words = quizSelectedDeckWords\(\)/,
+    "クイズ画面側の母集団まで変えている",
+  );
+});
+
+test("単語帳ごとの進捗は、1冊しか無いのか絞り込みで1冊なのかを書き分ける", () => {
+  // どちらも「2冊以上つくると」と書くと、絞り込みを解けば見られることが伝わらない。
+  const body = bodyOf("statsPendingCard");
+  assert.match(body, /statsDeckIds\.size > 0 && allDecks > 1/, "書き分けていない");
+  assert.match(body, /絞り込みを解くと、単語帳どうしの進捗を比べられます/);
+  assert.match(body, /単語帳を2冊以上つくると/);
+});
+
+test("絞り込みの説明は、効かないカードを2つとも挙げる", () => {
+  const markup = bodyOf("statsDeckFilterMarkup");
+  assert.match(markup, /「今日の復習」など次にやることのカード/, "行動カードに触れていない");
+  assert.match(markup, /「確実」と答えた単語は単語帳ごとに分けられない/, "確信度カードに触れていない");
+});
+
+test("正答率の色は、画面に出す%と同じ丸めで決める", () => {
+  // 生の値で判定すると「80%と書いてあるのに緑でない」（79.6%など）が起きる。
+  const body = bodyOf("statsAccuracyCard");
+  assert.match(body, /const pct = Math\.round\(rate \* 100\);\s*\n\s*return pct >= 80/, "丸める前に色を決めている");
+  assert.doesNotMatch(body, /rate >= 0\.8 \? "--success"/, "生の値での判定が残っている");
+});
+
+// ---------------------------------------------------------------------------
+// 苦手語の条件を、実データで境界まで動かして確かめる。
+// ここまでの検査はソースの形（正規表現）を見るものが中心で、閾値そのものを
+// 動かして確かめてはいなかった（Codexの指摘）。
+// ---------------------------------------------------------------------------
+
+function buildWeakSandbox(words) {
+  const pieces = [
+    `const appState = ${JSON.stringify({ decks: [{ id: "d1", name: "帳" }], words })};`,
+    "let statsDeckIds = new Set();",
+    extractFunction("statsScopedWords"),
+    extractFunction("statsWeakWords"),
+    "globalThis.__w = { rows: () => statsWeakWords().map((r) => `${r.term}:${Math.round(r.rate*100)}`) };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "stats-weak-check.js" }).runInNewContext(sandbox);
+  return sandbox.__w;
+}
+
+// n回中 correct回 正解した語。
+const attempts = (term, n, correct) => ({
+  id: term,
+  term,
+  meaning: "意味",
+  deckId: "d1",
+  history: Array.from({ length: n }, (_, i) => ({ correct: i < correct })),
+});
+
+test("苦手語: 3回に満たない語は入れない（少ない回数で苦手と決めない）", () => {
+  const w = buildWeakSandbox([
+    attempts("twice", 2, 0), // 2回とも誤答でも入らない
+    attempts("thrice", 3, 0),
+  ]);
+  assert.deepEqual(Array.from(w.rows()), ["thrice:0"]);
+});
+
+test("苦手語: 正答率80%ちょうどは入れない（未満だけ）", () => {
+  const w = buildWeakSandbox([
+    attempts("exactly80", 5, 4), // 80%
+    attempts("just_under", 10, 7), // 70%
+    attempts("perfect", 4, 4), // 100%
+  ]);
+  assert.deepEqual(Array.from(w.rows()), ["just_under:70"]);
+});
+
+test("苦手語: 正答率の低い順、同率なら回数の多い順", () => {
+  const w = buildWeakSandbox([
+    attempts("mid", 10, 5), // 50%
+    attempts("low", 10, 2), // 20%
+    attempts("mid_more", 20, 10), // 50%・回数が多い
+  ]);
+  assert.deepEqual(Array.from(w.rows()), ["low:20", "mid_more:50", "mid:50"]);
+});
+
+test("苦手語: 履歴が無い語は入れない（stats だけで判定しない）", () => {
+  const w = buildWeakSandbox([
+    { id: "a", term: "noHistory", meaning: "意味", deckId: "d1", stats: { correct: 0, wrong: 9 } },
+    attempts("hasHistory", 3, 1),
+  ]);
+  assert.deepEqual(Array.from(w.rows()), ["hasHistory:33"]);
 });
