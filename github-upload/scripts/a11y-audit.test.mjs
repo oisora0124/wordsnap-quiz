@@ -209,7 +209,7 @@ test("PC表示: 成績カードは段組で上から詰める（行の穴を作�
     /\.streak-panel \.stats-grid\s*\{[^}]*display:\s*block;[^}]*columns:\s*3 240px/,
     "段組にしていない（格子のままだと行の穴が残る）",
   );
-  // 240px は「学習量の推移」「レベル別（CEFR）」の見出しが省略されない幅。
+  // 240px は「学習量の推移」「単語の難しさ（CEFR）」の見出しが省略されない幅。
   assert.match(block, /\.streak-panel \.stats-grid > \*\s*\{[^}]*break-inside:\s*avoid/,
     "カードが段をまたいで割れる");
 });

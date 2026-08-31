@@ -767,7 +767,7 @@ h2 {
      見た目の順と読み上げ順もずれない。実データで成績の高さは 905px → 704px になった。 */
   .streak-panel .stats-grid {
     display: block;
-    /* 列幅の下限は240px。「学習量の推移」「レベル別（CEFR）」の見出しが省略されない幅。
+    /* 列幅の下限は240px。「学習量の推移」「単語の難しさ（CEFR）」の見出しが省略されない幅。
        最大3列にするのは、これ以上細かく割ると1枚が縦に長くなりグラフが潰れるため。 */
     columns: 3 240px;
     column-gap: 10px;
@@ -1271,6 +1271,22 @@ h2 {
   font-size: 0.72rem;
   margin-top: -2px;
 }
+/* 成績の単語帳フィルタ。カードの外（成績の見出しの直下）に置く。 */
+.stats-filter:empty {
+  display: none;
+}
+
+.stats-filter {
+  margin: -2px 0 2px;
+}
+
+.stats-filter-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
 /* 「まだ出せない指標」。条件がそろっていないカードの理由を並べる。
    目立たせる必要はないので、他のカードより一段落とした見た目にする。 */
 .stats-pending-list {
@@ -1310,6 +1326,9 @@ h2 {
   display: grid;
   gap: 5px;
   margin-top: 6px;
+  /* 単語帳が多い人でも、一覧が伸びて成績カードへ届かなくならないようにする */
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .stats-deck-option {
@@ -5777,6 +5796,10 @@ body.tutorial-open {
             <h3>成績</h3>
             <span class="stats-sub">この端末に保存された記録から集計</span>
           </div>
+          <!-- 単語帳の絞り込み。中身は renderStatsFilter() が差し込む。
+               カードの外に置くのは、選ぶたびにカードを描き直しても
+               チェックボックスの焦点と折りたたみの開閉が保たれるようにするため。 -->
+          <div id="statsFilter" class="stats-filter"></div>
           <div id="statsGrid" class="stats-grid"></div>
         </div>
       </section>
@@ -6876,7 +6899,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.101</span>
+        <span class="app-footer-version">バージョン 1.0.102</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7014,7 +7037,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.101";
+  const APP_REV = "1.0.102";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -17335,6 +17358,7 @@ const elements = {
   streakDayDetail: document.querySelector("#streakDayDetail"),
   statsBlock: document.querySelector("#statsBlock"),
   statsGrid: document.querySelector("#statsGrid"),
+  statsFilter: document.querySelector("#statsFilter"),
   resumeQuizButton: document.querySelector("#resumeQuizButton"),
   shareToolButton: document.querySelector("#shareToolButton"),
   shareToolHeaderButton: document.querySelector("#shareToolHeaderButton"),
@@ -30067,9 +30091,11 @@ let streakCalSelected = "";
 
 // 単語ごとの history から日別の学習量を集計する。専用の日次ログを持たない代わりに、
 // 既にある履歴を遡って使えるので、この機能を入れた時点より前の学習も表示できる。
-function buildDailyActivity() {
+// 既定は全単語。成績の単語帳フィルタが効いているときだけ、絞った集合を渡す。
+// カレンダー（renderStreakCalendar）は成績の絞り込みとは無関係なので、既定のまま使う。
+function buildDailyActivity(words = appState.words || []) {
   const byDay = new Map();
-  for (const word of appState.words || []) {
+  for (const word of words) {
     for (const entry of word.history || []) {
       const time = Date.parse(entry?.at);
       if (!Number.isFinite(time)) continue;
@@ -30503,6 +30529,12 @@ function statsConfidenceCard() {
     (checked < CONFIDENCE_MIN_SAMPLES
       ? `<p class="stats-recovery-note">意味4択で${escapeHtml(CONFIDENCE_MIN_SAMPLES)}語ぶん確かめると割合を出します。</p>`
       : `<p class="stats-recovery-note">「確実」と答えた${escapeHtml(declared)}回のうち、意味4択で確かめられた${escapeHtml(checked)}回ぶんの正答率です。まだ出ていない単語は含みません。</p>`) +
+    // 確信度の記録は合計だけを持っていて単語帳ごとに分けられない（申告のたびに
+    // 単語帳を書き残していないため）。絞り込み中は、この数字だけ全体だと断る。
+    // 黙って全体を出すと、絞ったつもりの数字と混ざる。
+    (statsDeckIds.size > 0
+      ? `<p class="stats-recovery-note">この数字は単語帳の絞り込みに関係なく、全体の集計です。</p>`
+      : "") +
     `</div>`
   );
 }
@@ -30723,7 +30755,9 @@ function statsActivityCard(byDay) {
 }
 
 function statsDeckProgressCard() {
-  const decks = (appState.decks || []).map((deck) => {
+  // 絞り込み中は選んだ冊だけを並べる（並びの中に対象外が混ざると比較にならない）。
+  const allDeckCount = (appState.decks || []).filter((deck) => deck?.id).length;
+  const decks = statsScopedDecks().map((deck) => {
     const words = (appState.words || []).filter((word) => word.deckId === deck.id);
     return {
       name: deck.name || "名称未設定",
@@ -30757,7 +30791,12 @@ function statsDeckProgressCard() {
     .join("");
   return (
     `<div class="stats-card">` +
-    statsCardHeader("単語帳ごとの進捗", `${decks.length}冊`) +
+    // 絞り込み中は「全8冊中2冊」のように、見えている数と全体数を区別する。
+    // 「2冊」とだけ出すと、単語帳が2冊しか無いように読める。
+    statsCardHeader(
+      "単語帳ごとの進捗",
+      allDeckCount > decks.length ? `全${allDeckCount}冊中${decks.length}冊` : `${decks.length}冊`,
+    ) +
     `<div class="stats-progress-list">${rows}</div>` +
     `<p class="stats-caption">語数の多い順。バーは習得済みの割合。</p>` +
     `</div>`
@@ -30767,7 +30806,7 @@ function statsDeckProgressCard() {
 // レベル別カードを出す条件。説明カード側でも同じ条件を使うので、
 // カードを2度組み立てずに済むようここへ切り出す。
 function statsCefrWords() {
-  const words = (appState.words || []).filter((word) =>
+  const words = statsScopedWords().filter((word) =>
     CEFR_ORDER.includes(word.cefr?.level),
   );
   return words.length < 10 ? [] : words;
@@ -30802,9 +30841,16 @@ function statsCefrCard() {
     .join("");
   return (
     `<div class="stats-card">` +
-    statsCardHeader("レベル別（CEFR）", `${words.length}語`) +
+    // 「レベル別（CEFR）」だと自分の英語力の判定に読めてしまう。ここで測っているのは
+    // 単語ひとつひとつの難しさなので、見出しでそれが分かるようにする。
+    statsCardHeader("単語の難しさ（CEFR）", `${words.length}語`) +
     `<div class="stats-cefr-list">${rows}</div>` +
     `<div class="stats-legend"><span><i style="background:var(--success)"></i>習得</span><span><i style="background:var(--accent)"></i>未習得</span></div>` +
+    // バーの長さはレベル間の語数比較（いちばん語数の多いレベルが最大）で、
+    // 右の「習得/総数」とは別の軸。同じものを2通りで見せていると誤解されるので書く。
+    `<p class="stats-caption">バーの長さ＝そのレベルの語数（いちばん多いレベルが最大）。` +
+    `緑はそのうち習得した分。右の数字は「習得 / そのレベルの語数」。あなたの英語力ではなく、` +
+    `単語ひとつひとつの難しさです。</p>` +
     `</div>`
   );
 }
@@ -30845,7 +30891,7 @@ function cefrGuideMarkup() {
 
 // A) 定着の内訳（習得 / 復習中 / 未着手）を積み上げバーで示す。
 function statsMasteryCard() {
-  const b = learningBuckets(appState.words || []);
+  const b = learningBuckets(statsScopedWords());
   const total = b.mastered + b.review + b.new;
   if (total === 0) return "";
   const parts = [
@@ -30987,12 +31033,37 @@ function statsAccuracyCard(byDay) {
 }
 
 // C) 回答速度の分布（任意の学習イベントが記録されている場合のみ）。
-// 回答速度の分布を単語帳で絞り込む（複数選択可・空＝すべて）。
+// 成績を単語帳で絞り込む（複数選択可・空＝すべて）。
+// 1.0.99 では「回答速度の分布」だけに付けていたが、同じパネルの中でカードごとに
+// 母集団が違うと数字を見比べられないため、パネル全体の絞り込みに格上げした。
 // 一覧のCEFRフィルタと同じで、保存データには含めずこの画面を開いている間だけ保持する。
-// 折りたたみの開閉も覚えておく。カードを作り直したときに閉じてしまうと、
-// 続けて2冊目を選べない。
-let statsSpeedDeckIds = new Set();
-let statsSpeedFilterOpen = false;
+// パネルを閉じて開き直すと「すべて」に戻る（絞ったまま忘れる事故を避けるため）。
+// 折りたたみの開閉も覚えておく。作り直したときに閉じてしまうと、続けて2冊目を選べない。
+let statsDeckIds = new Set();
+let statsFilterOpen = false;
+
+// 絞り込みを適用した単語。空＝すべて。
+function statsScopedWords() {
+  const words = appState.words || [];
+  if (statsDeckIds.size === 0) return words;
+  return words.filter((word) => statsDeckIds.has(word.deckId));
+}
+
+// 絞り込みを適用した学習イベント。イベントは wordId しか持たないので、
+// いまの単語帳を引いて判定する（記録の形式は変えない）。
+function statsScopedEvents() {
+  const events = retainedReviewEvents();
+  if (statsDeckIds.size === 0) return events;
+  const deckOf = reviewEventDeckIndex();
+  return events.filter((e) => statsDeckIds.has(deckOf.get(e.wordId)));
+}
+
+// 絞り込みの対象になっている単語帳（実在するものだけ）。
+function statsScopedDecks() {
+  const decks = (appState.decks || []).filter((deck) => deck?.id);
+  if (statsDeckIds.size === 0) return decks;
+  return decks.filter((deck) => statsDeckIds.has(deck.id));
+}
 
 // 学習イベントは wordId しか持たない（記録の形式は変えていない）。
 // いまの単語帳を引いて紐づけるので、これまでに溜まった記録もそのまま絞り込める。
@@ -31005,73 +31076,107 @@ function reviewEventDeckIndex() {
   return index;
 }
 
-// 選択中の単語帳のうち、いま実在するものだけを返す（消された単語帳を選んだままにしない）。
-function statsSpeedSelectedDecks(decks) {
-  const alive = new Set(decks.map((deck) => deck.id));
-  const kept = new Set([...statsSpeedDeckIds].filter((id) => alive.has(id)));
-  // 覚えている側からも落とす。残したままだと、同期で同じidの単語帳が戻ってきたときに
-  // 選んだ覚えのない絞り込みが復活する。
-  if (kept.size !== statsSpeedDeckIds.size) statsSpeedDeckIds = kept;
+// 消された単語帳を選んだままにしない。覚えている側からも落とす。
+// 残すと、同期で同じidの単語帳が戻ってきたときに選んだ覚えのない絞り込みが復活する。
+function statsPruneDeckSelection() {
+  const alive = new Set((appState.decks || []).map((deck) => deck?.id).filter(Boolean));
+  const kept = new Set([...statsDeckIds].filter((id) => alive.has(id)));
+  if (kept.size !== statsDeckIds.size) statsDeckIds = kept;
   return kept;
 }
 
-function statsSpeedDeckFilterMarkup(decks, selected, counts) {
+function statsFilterSummaryText(selected) {
+  return selected.size === 0 ? "すべての単語帳" : `${selected.size}冊を選択中`;
+}
+
+// 絞り込みのUI。単語帳ごとに「その単語帳に何語あるか」を添える。
+// カードの外（成績の見出しの直下）に置くので、選ぶたびにカードを描き直しても
+// ここは作り直されず、焦点と開閉が保たれる。
+function statsDeckFilterMarkup() {
+  const decks = (appState.decks || []).filter((deck) => deck?.id);
+  // 単語帳が1冊しかなければ絞り込む先が無い。
+  if (decks.length <= 1) return "";
+  const selected = statsPruneDeckSelection();
+  const counts = new Map();
+  for (const word of appState.words || []) {
+    if (word?.deckId) counts.set(word.deckId, (counts.get(word.deckId) || 0) + 1);
+  }
   const options = decks
     .map((deck) => {
       const name = deck.name || "名称未設定";
-      const count = counts.get(deck.id) || 0;
       return (
         `<label class="stats-deck-option">` +
-        `<input type="checkbox" data-speed-deck="${escapeHtml(deck.id)}"${selected.has(deck.id) ? " checked" : ""} />` +
+        `<input type="checkbox" data-stats-deck="${escapeHtml(deck.id)}"${selected.has(deck.id) ? " checked" : ""} />` +
         `<span class="stats-deck-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>` +
-        `<span class="stats-deck-count">${escapeHtml(count)}回</span>` +
+        `<span class="stats-deck-count">${escapeHtml(counts.get(deck.id) || 0)}語</span>` +
         `</label>`
       );
     })
     .join("");
-  const summary = selected.size === 0 ? "すべての単語帳" : `${selected.size}冊を選択中`;
   return (
-    `<details class="stats-deck-filter"${statsSpeedFilterOpen ? " open" : ""}>` +
-    `<summary>単語帳で絞る：${escapeHtml(summary)}</summary>` +
-    `<div class="stats-deck-options" role="group" aria-label="回答速度の分布に含める単語帳">${options}` +
-    `<button id="statsSpeedDeckClear" class="ghost mini" type="button"${selected.size === 0 ? " disabled" : ""}>すべてに戻す</button>` +
-    `</div></details>`
+    `<details class="stats-deck-filter"${statsFilterOpen ? " open" : ""}>` +
+    `<summary>単語帳で絞る：<span class="stats-filter-summary">${escapeHtml(statsFilterSummaryText(selected))}</span></summary>` +
+    `<div class="stats-deck-options" role="group" aria-label="成績に含める単語帳">${options}` +
+    `<button id="statsDeckClear" class="ghost mini" type="button"${selected.size === 0 ? " disabled" : ""}>すべてに戻す</button>` +
+    `</div>` +
+    // 選ぶとカードの中身が丸ごと入れ替わるが、見た目でしか分からない。
+    // 読み上げにも変化を伝える。
+    `<p class="sr-only" id="statsFilterStatus" role="status" aria-live="polite"></p>` +
+    // 行動のカードはクイズ側の「出題する単語帳」に従う。ここで絞ると数字と
+    // 「復習を始める」ボタンの範囲がずれるため、意図的に対象外にしている。
+    `<p class="stats-filter-note">下の集計に効きます。「今日の復習」など次にやることのカードは、` +
+    `クイズの「出題する単語帳」に従います。</p>` +
+    `</details>`
   );
+}
+
+// 単語帳の顔ぶれが変わったときだけ作り直す。毎回作り直すと、チェックを入れた瞬間に
+// 焦点が飛んで続けて選べない。
+let statsFilterSignature = "";
+
+function renderStatsFilter() {
+  const host = elements.statsFilter;
+  if (!host) return;
+  // 単語帳ごとの語数も署名に入れる。id と名前だけだと、単語の追加・削除・移動や
+  // 同期で中身が入れ替わったときに、一覧の語数が古いまま残る。
+  const counts = new Map();
+  for (const word of appState.words || []) {
+    if (word?.deckId) counts.set(word.deckId, (counts.get(word.deckId) || 0) + 1);
+  }
+  const signature = (appState.decks || [])
+    .map((deck) => `${deck?.id}:${deck?.name}:${counts.get(deck?.id) || 0}`)
+    .join("|");
+  if (host.dataset.signature === signature && host.innerHTML) return;
+  host.innerHTML = statsDeckFilterMarkup();
+  host.dataset.signature = signature;
+  statsFilterSignature = signature;
+}
+
+// 選択だけが変わったときは、見出しの文言と「すべてに戻す」の可否だけを直す。
+function syncStatsFilterSummary() {
+  const host = elements.statsFilter;
+  if (!host) return;
+  const selected = statsPruneDeckSelection();
+  const label = host.querySelector(".stats-filter-summary");
+  if (label) label.textContent = statsFilterSummaryText(selected);
+  const clear = host.querySelector("#statsDeckClear");
+  if (clear) clear.disabled = selected.size === 0;
+  const status = host.querySelector("#statsFilterStatus");
+  if (status) {
+    status.textContent =
+      selected.size === 0
+        ? "すべての単語帳で集計しました。"
+        : `${selected.size}冊で集計しました。`;
+  }
 }
 
 function statsSpeedCard() {
   if (!reviewLogEnabled()) return "";
-  const all = retainedReviewEvents().filter(
+  // 絞り込みはパネル上部の共通フィルタに従う（1.0.102 で自前の絞り込みは畳んだ）。
+  const events = statsScopedEvents().filter(
     (e) => Number.isFinite(e?.responseTimeMs) && e.result !== "dont-know",
   );
-  // 全体で5回に満たないうちは、どう絞っても意味のある形にならないので出さない（従来どおり）。
-  if (all.length < 5) return "";
-  const decks = (appState.decks || []).filter((deck) => deck?.id);
-  // 単語帳が1冊しかなければ絞り込む先が無いので、絞り込みは出さない。
-  const canFilter = decks.length > 1;
-  const deckOf = canFilter ? reviewEventDeckIndex() : null;
-  const selected = canFilter ? statsSpeedSelectedDecks(decks) : new Set();
-  const counts = new Map();
-  if (canFilter) {
-    for (const e of all) {
-      const id = deckOf.get(e.wordId);
-      if (id) counts.set(id, (counts.get(id) || 0) + 1);
-    }
-  }
-  const filter = canFilter ? statsSpeedDeckFilterMarkup(decks, selected, counts) : "";
-  const events = selected.size ? all.filter((e) => selected.has(deckOf.get(e.wordId))) : all;
-  // 絞った結果が少なすぎるときは、グラフの代わりに理由を出す。カードごと消すと
-  // 絞り込みも一緒に消えて、元に戻す手段が画面から無くなってしまう。
-  if (events.length < 5) {
-    return (
-      `<div class="stats-card" id="statsSpeedCard">` +
-      statsCardHeader("回答速度の分布", `${events.length}回`) +
-      filter +
-      `<p class="stats-caption">選んだ単語帳の記録が${events.length}回しかありません。` +
-      `5回以上たまると分布を出します。</p>` +
-      `</div>`
-    );
-  }
+  if (events.length < 5) return "";
   const buckets = [
     { label: "〜1秒", max: 1000, count: 0 },
     { label: "1-2秒", max: 2000, count: 0 },
@@ -31109,41 +31214,15 @@ function statsSpeedCard() {
   const srItems = buckets
     .map((bk) => `<li>${escapeHtml(`${bk.label}：${bk.count}回`)}</li>`)
     .join("");
-  const scope = selected.size ? `選んだ${selected.size}冊の` : "";
   return (
-    `<div class="stats-card" id="statsSpeedCard">` +
+    `<div class="stats-card">` +
     statsCardHeader("回答速度の分布", `${events.length}回`) +
-    filter +
     `<svg class="stats-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>` +
     `<ul class="sr-only">${srItems}</ul>` +
-    `<p class="stats-caption">棒の高さ＝その区間の回数。${scope}正答・誤答を含む直近${events.length}回。` +
+    `<p class="stats-caption">棒の高さ＝その区間の回数。正答・誤答を含む直近${events.length}回。` +
     `速さは定着の参考です（単語の長さや出題形式にも左右されます）。</p>` +
     `</div>`
   );
-}
-
-// 絞り込みを変えたときは、このカードだけ作り直す。成績全体を描き直すと
-// 押したチェックボックスが消えて焦点が飛び、続けて選べなくなる。
-function refreshStatsSpeedCard(focusDeckId = "") {
-  const current = elements.statsGrid?.querySelector("#statsSpeedCard");
-  if (!current) return;
-  const html = statsSpeedCard();
-  // 学習の記録を切った・記録を全部消したなど、もう出せなくなった場合は消えた記録の
-  // まま残さない。カードが1枚も無くなるところまで面倒を見るため、全体を描き直す。
-  if (!html) {
-    renderStatsCharts();
-    return;
-  }
-  const holder = document.createElement("div");
-  holder.innerHTML = html;
-  const next = holder.firstElementChild;
-  if (!next) return;
-  current.replaceWith(next);
-  if (!focusDeckId) return;
-  const box = [...next.querySelectorAll("input[data-speed-deck]")].find(
-    (input) => input.dataset.speedDeck === focusDeckId,
-  );
-  box?.focus();
 }
 
 // 学習の記録を開いている間だけ、成績を描き直す。閉じているときに描くのは無駄なうえ、
@@ -31154,19 +31233,25 @@ function refreshStatsIfVisible() {
 
 // C2) 出題形式別の正答率（学習イベントの promptMode 別）。第二弾。
 // 「意味を選ぶ」「例文の空所」「フラッシュカード」を形式別に振り返る。
+// 集計する出題形式。recordReviewEvent が受け付ける promptMode と1対1で対応させる。
+// ここと記録側がずれると、その形式の回答は黙って消える（1.0.79→1.0.100 で実際に起きた）。
+// 「まだ出せない指標」の件数もこの一覧で数える。未知の形式まで数えると、
+// カードは出ないのに「いま5回」と案内してしまう。
+const STATS_FORMAT_MODES = [
+  ["meaning-choice", "意味を選ぶ（英→日）"],
+  ["term-choice", "単語を選ぶ（日→英）"],
+  ["context-choice", "例文の空所"],
+  ["flashcard", "フラッシュカード"],
+];
+
 function statsFormatCard() {
   if (!reviewLogEnabled()) return "";
-  const events = retainedReviewEvents().filter((e) => e.result !== "dont-know");
+  const events = statsScopedEvents().filter((e) => e.result !== "dont-know");
   // 記録側（recordReviewEvent）が持つ promptMode を全て並べる。
   // 出題の向き（1.0.79）で term-choice を記録するようになったのに、ここへ足すのを
   // 忘れていたため、日→英で解いた回答が groups.find で落ちて1件も出ていなかった。
   // 記録の形式が増えたらここも増やす。
-  const groups = [
-    { key: "meaning-choice", label: "意味を選ぶ（英→日）", total: 0, correct: 0 },
-    { key: "term-choice", label: "単語を選ぶ（日→英）", total: 0, correct: 0 },
-    { key: "context-choice", label: "例文の空所", total: 0, correct: 0 },
-    { key: "flashcard", label: "フラッシュカード", total: 0, correct: 0 },
-  ];
+  const groups = STATS_FORMAT_MODES.map(([key, label]) => ({ key, label, total: 0, correct: 0 }));
   for (const e of events) {
     const g = groups.find((x) => x.key === e.promptMode);
     if (!g) continue;
@@ -31208,7 +31293,7 @@ function statsFormatCard() {
 // D) 苦手語ランキング（正誤履歴が3回以上ある語のうち、正答率の低い順）。
 function statsWeakCard() {
   const rows = [];
-  for (const word of appState.words || []) {
+  for (const word of statsScopedWords()) {
     const hist = word.history || [];
     if (hist.length < 3) continue;
     const correct = hist.reduce((n, h) => n + (h.correct ? 1 : 0), 0);
@@ -31257,7 +31342,7 @@ function statsWeakCard() {
 // built には各カードのHTMLが入る。空文字なら出ていない＝理由を書く対象。
 // 実際に描いた結果から作るので、条件の書き写し間違いで案内と食い違うことがない。
 function statsPendingCard(built) {
-  const words = appState.words || [];
+  const words = statsScopedWords();
   const reasons = [];
   const add = (name, why) => reasons.push({ name, why });
 
@@ -31268,7 +31353,7 @@ function statsPendingCard(built) {
   if (!built.deck) add("単語帳ごとの進捗", "単語帳を2冊以上つくると、冊ごとに比べられます。");
   if (!built.cefr) {
     const judged = words.filter((word) => CEFR_ORDER.includes(word.cefr?.level)).length;
-    add("レベル別（CEFR）", `CEFRが判定できた単語が10語たまると出ます（いま${judged}語）。`);
+    add("単語の難しさ（CEFR）", `CEFRが判定できた単語が10語たまると出ます（いま${judged}語）。`);
   }
   // 全問正解の語は苦手に入れない（statsWeakCard の rate >= 1 の除外）。
   // 3回解けば必ず出ると書くと、間違えたことが無い人には嘘になる。
@@ -31285,11 +31370,15 @@ function statsPendingCard(built) {
   if (missingLog.length && !reviewLogEnabled()) {
     add(missingLog.join("・"), "設定の「📈 学習の記録」をオンにすると集計を始めます。");
   } else if (missingLog.length) {
-    const graded = retainedReviewEvents().filter((e) => e.result !== "dont-know");
+    const graded = statsScopedEvents().filter((e) => e.result !== "dont-know");
     if (!built.format) {
       // 形式ごとに5回。いちばん進んでいる形式の件数を出す。
+      const known = new Set(STATS_FORMAT_MODES.map(([key]) => key));
       const perMode = new Map();
-      for (const e of graded) perMode.set(e.promptMode, (perMode.get(e.promptMode) || 0) + 1);
+      for (const e of graded) {
+        if (!known.has(e.promptMode)) continue;
+        perMode.set(e.promptMode, (perMode.get(e.promptMode) || 0) + 1);
+      }
       const best = Math.max(0, ...perMode.values());
       add("出題形式別の正答率", `同じ出題形式で5回たまると出ます（いちばん多い形式でいま${best}回）。`);
     }
@@ -31312,7 +31401,11 @@ function statsPendingCard(built) {
     `<div class="stats-card stats-card-wide">` +
     statsCardHeader("まだ出せない指標", `${reasons.length}件`) +
     `<div class="stats-pending-list">${rows}</div>` +
-    `<p class="stats-caption">条件がそろえば自動で並びます。いま消えているだけで、無くなったわけではありません。</p>` +
+    `<p class="stats-caption">` +
+    (statsDeckIds.size > 0
+      ? "選んだ単語帳の中で数えています。全体で見るには上の「すべてに戻す」を押してください。"
+      : "条件がそろえば自動で並びます。いま消えているだけで、無くなったわけではありません。") +
+    `</p>` +
     `</div>`
   );
 }
@@ -31321,7 +31414,17 @@ function renderStatsCharts(byDay) {
   const block = elements.statsBlock;
   const grid = elements.statsGrid;
   if (!block || !grid) return;
-  const activity = byDay instanceof Map ? byDay : buildDailyActivity();
+  // 選択の掃除はカードを組み立てる前に済ませる。あとに回すと、単語帳を消した直後に
+  // 「消えた単語帳で絞ったままのカード」と「すべてに戻った見出し」が同時に出る。
+  statsPruneDeckSelection();
+  // 絞り込み中は、その単語帳の履歴だけで日別集計をやり直す。
+  // 渡された byDay（カレンダーが作った全単語ぶん）はそのままでは使えない。
+  const activity =
+    statsDeckIds.size > 0
+      ? buildDailyActivity(statsScopedWords())
+      : byDay instanceof Map
+        ? byDay
+        : buildDailyActivity();
   // 出ていないカードの理由を書くために、どれが空だったかを覚えておく。
   const built = {
     recovery: statsRecoveryCard(),
@@ -31354,11 +31457,24 @@ function renderStatsCharts(byDay) {
   ].filter(Boolean);
   if (cards.length === 0) {
     // まだ集計できるデータがない（単語ゼロ・履歴なし）ときはブロックごと隠す。
-    // ここで「まだ出せない指標」だけを出すと、始めたばかりの画面が 不足の一覧になる。
-    block.hidden = true;
-    grid.innerHTML = "";
+    // ここで「まだ出せない指標」だけを出すと、始めたばかりの画面が不足の一覧になる。
+    // ただし絞り込み中は隠さない。隠すと絞り込みごと消えて、元に戻す手段が無くなる。
+    if (statsDeckIds.size === 0) {
+      block.hidden = true;
+      grid.innerHTML = "";
+      return;
+    }
+    block.hidden = false;
+    renderStatsFilter();
+    grid.innerHTML =
+      `<div class="stats-card stats-card-wide">` +
+      statsCardHeader("選んだ単語帳", "記録なし") +
+      `<p class="stats-caption">選んだ単語帳には、まだ集計できる記録がありません。` +
+      `上の「すべてに戻す」で全体に戻せます。</p>` +
+      `</div>`;
     return;
   }
+  renderStatsFilter();
   const pending = statsPendingCard(built);
   if (pending) cards.push(pending);
   block.hidden = false;
@@ -31372,6 +31488,11 @@ function openStreakPanel() {
   const now = new Date();
   streakCalMonth = { year: now.getFullYear(), month: now.getMonth() };
   streakCalSelected = localDateString();
+  // 絞り込みは開いている間だけのもの。開き直したら「すべて」に戻す。
+  // 残すと、あとで見たときに絞られたままなのに気づかない事故が起きる。
+  statsDeckIds = new Set();
+  statsFilterOpen = false;
+  if (elements.statsFilter) elements.statsFilter.dataset.signature = "";
   panel.hidden = false;
   elements.streakBadge?.setAttribute("aria-expanded", "true");
   renderStreakBadge(); // ラベルを「閉じる」に更新
@@ -33661,32 +33782,37 @@ elements.streakBadge?.addEventListener("click", () => {
 });
 elements.streakPanelClose?.addEventListener("click", closeStreakPanel);
 
-// 回答速度の分布の単語帳フィルタ（カードは作り直されるため委譲で受ける）。
-elements.statsGrid?.addEventListener("change", (event) => {
-  const box = event.target?.closest?.("input[data-speed-deck]");
+// 成績の単語帳フィルタ。UIはカードの外（#statsFilter）にあるので、選ぶたびに
+// カードを描き直しても、このチェックボックス自身は作り直されない。
+// ＝焦点も折りたたみの開閉もそのまま残る。
+elements.statsFilter?.addEventListener("change", (event) => {
+  const box = event.target?.closest?.("input[data-stats-deck]");
   if (!box) return;
-  const deckId = box.dataset.speedDeck;
-  if (box.checked) statsSpeedDeckIds.add(deckId);
-  else statsSpeedDeckIds.delete(deckId);
-  statsSpeedFilterOpen = true;
-  refreshStatsSpeedCard(deckId);
+  const deckId = box.dataset.statsDeck;
+  if (box.checked) statsDeckIds.add(deckId);
+  else statsDeckIds.delete(deckId);
+  syncStatsFilterSummary();
+  renderStatsCharts();
 });
-elements.statsGrid?.addEventListener("click", (event) => {
-  if (!event.target?.closest?.("#statsSpeedDeckClear")) return;
-  statsSpeedDeckIds.clear();
-  statsSpeedFilterOpen = true;
-  refreshStatsSpeedCard();
+elements.statsFilter?.addEventListener("click", (event) => {
+  if (!event.target?.closest?.("#statsDeckClear")) return;
+  statsDeckIds.clear();
+  for (const box of elements.statsFilter.querySelectorAll("input[data-stats-deck]")) {
+    box.checked = false;
+  }
+  syncStatsFilterSummary();
+  renderStatsCharts();
   // 押したボタンは戻したあと disabled になるので焦点を置けない。折りたたみの
   // 見出しへ移して、キーボード操作でも位置を見失わないようにする。
-  elements.statsGrid?.querySelector("#statsSpeedCard .stats-deck-filter > summary")?.focus();
+  elements.statsFilter.querySelector(".stats-deck-filter > summary")?.focus();
 });
 // toggle は上へ伝わらないので捕捉フェーズで受ける。開閉を覚えていないと、
-// カードを作り直したときに閉じてしまい、続けて2冊目を選べない。
-elements.statsGrid?.addEventListener(
+// 単語帳を作り直したときに閉じてしまう。
+elements.statsFilter?.addEventListener(
   "toggle",
   (event) => {
     const details = event.target;
-    if (details?.classList?.contains("stats-deck-filter")) statsSpeedFilterOpen = details.open;
+    if (details?.classList?.contains("stats-deck-filter")) statsFilterOpen = details.open;
   },
   true,
 );
