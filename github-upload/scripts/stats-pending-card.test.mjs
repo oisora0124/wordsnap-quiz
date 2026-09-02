@@ -47,6 +47,26 @@ function extractFunction(name) {
   throw new Error(`unbalanced braces for ${name}`);
 }
 
+// `const NAME = ...;` を対応する括弧の末尾まで切り出す。
+function extractConst(name) {
+  const start = html.indexOf(`const ${name} `);
+  if (start < 0) throw new Error(`const ${name} not found`);
+  let depth = 0;
+  let seen = false;
+  for (let i = start; i < html.length; i += 1) {
+    const ch = html[i];
+    if (ch === "(" || ch === "[" || ch === "{") {
+      depth += 1;
+      seen = true;
+    } else if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+    } else if (ch === ";" && depth === 0 && seen) {
+      return html.slice(start, i + 1);
+    }
+  }
+  throw new Error(`could not terminate const ${name}`);
+}
+
 // built は「各カードを実際に描いた結果」。空文字＝出ていない。
 function buildSandbox({ built = {}, words = [], events = [], logEnabled = true } = {}) {
   const pieces = [
@@ -58,6 +78,9 @@ function buildSandbox({ built = {}, words = [], events = [], logEnabled = true }
     `function statsScopedWords() { return ${JSON.stringify(words)}; }`,
     "let statsDeckIds = new Set();",
     `const STATS_FORMAT_MODES = [["meaning-choice","a"],["term-choice","b"],["context-choice","c"],["flashcard","d"]];`,
+    // カード定義。build は呼ばれないので、中で参照している描画関数は無くてよい。
+    extractConst("STATS_CARDS"),
+    extractConst("STATS_LOG_OFF_REASON"),
     extractFunction("escapeHtml"),
     extractFunction("statsCardHeader"),
     extractFunction("statsPendingCard"),
@@ -221,15 +244,29 @@ test("配線: カードが1枚も無いときは、まだ出せない指標も�
   assert.match(body, /cards\.push\(pending\)/, "不足の一覧を末尾に足していない");
 });
 
-test("配線: 案内は「実際に描いた結果」から作る（条件の書き写しでずれない）", () => {
+test("配線: 並び・組み立て・出ていない理由を、1つの定義（STATS_CARDS）から作る", () => {
+  // 3つを別々の場所で管理していると、カードを足したときにどれかを忘れて
+  // 「カードは出るのに理由が出ない」「理由は出るのにカードが無い」が起きる。
   const start = html.indexOf("function renderStatsCharts(");
   const body = html.slice(start, html.indexOf("\n}", start));
-  assert.match(body, /const built = \{/, "描いた結果をまとめていない");
+  assert.match(body, /for \(const card of STATS_CARDS\) built\[card\.key\] = card\.build\(ctx\);/, "定義から組み立てていない");
+  assert.match(body, /STATS_CARDS\.map\(\(card\) => built\[card\.key\]\)\.filter\(Boolean\)/, "並びが定義と別");
   assert.match(body, /statsPendingCard\(built\)/, "描いた結果を渡していない");
-  // カードの並びも built から組む。二重に呼ぶと結果がずれる。
-  const list = body.slice(body.indexOf("const cards = ["), body.indexOf("].filter(Boolean)"));
-  assert.ok(list.length > 0, "カードの並びが見つからない");
-  assert.doesNotMatch(list, /stats\w+Card\(/, "カードを2回組み立てている（結果がずれる）");
+  assert.doesNotMatch(body, /stats\w+Card\(\)/, "定義の外でカードを組み立てている");
+  const pend = html.slice(html.indexOf("function statsPendingCard("), html.indexOf("\n}", html.indexOf("function statsPendingCard(")));
+  assert.match(pend, /for \(const card of STATS_CARDS\)/, "理由を定義から作っていない");
+  assert.doesNotMatch(pend, /if \(!built\.\w+\) add\(/, "理由の if 群が残っている（三重管理に戻っている）");
+});
+
+test("配線: 定義に無いカードが描画に紛れ込まない・定義のキーが揃っている", () => {
+  const defs = html.slice(html.indexOf("const STATS_CARDS = ["), html.indexOf("\n];", html.indexOf("const STATS_CARDS = [")));
+  const keys = [...defs.matchAll(/key: "(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(new Set(keys).size, keys.length, "キーが重複している");
+  // 集計のカードは全部 pending を持つ。案内・説明（recovery/confidence/todayReview/cefrGuide/mastery）は持たない。
+  const withPending = [...defs.matchAll(/key: "(\w+)",[\s\S]*?(?=\n  \{|$)/g)]
+    .filter((m) => /pending:/.test(m[0]))
+    .map((m) => m[1]);
+  assert.deepEqual(withPending.sort(), ["accuracy", "activity", "cefr", "deck", "format", "speed", "weak"], "理由を持つカードの顔ぶれが変わっている");
 });
 
 // ---------------------------------------------------------------------------
@@ -250,6 +287,8 @@ function buildPairSandbox(events) {
     `function statsScopedWords() { return ${JSON.stringify(words)}; }`,
     "let statsDeckIds = new Set(); let statsFilterOpen = false;",
     `const STATS_FORMAT_MODES = [["meaning-choice","意味を選ぶ（英→日）"],["term-choice","単語を選ぶ（日→英）"],["context-choice","例文の空所"],["flashcard","フラッシュカード"]];`,
+    extractConst("STATS_CARDS"),
+    extractConst("STATS_LOG_OFF_REASON"),
     extractFunction("escapeHtml"),
     extractFunction("svgFill"),
     extractFunction("statsCardHeader"),
@@ -329,9 +368,8 @@ test("CEFR: バーの長さと右の数字が別の軸であることを書く",
 });
 
 test("CEFR: 案内の名前も見出しと合わせる", () => {
-  const pending = html.slice(html.indexOf("function statsPendingCard("));
-  const body = pending.slice(0, pending.indexOf("\n}"));
-  assert.match(body, /add\("単語の難しさ（CEFR）"/, "案内とカードの名前が食い違っている");
+  const defs = html.slice(html.indexOf("const STATS_CARDS = ["), html.indexOf("\n];", html.indexOf("const STATS_CARDS = [")));
+  assert.match(defs, /return \["単語の難しさ（CEFR）",/, "案内とカードの名前が食い違っている");
 });
 
 test("絞り込み中は「選んだ単語帳の中で数えている」と書く", () => {

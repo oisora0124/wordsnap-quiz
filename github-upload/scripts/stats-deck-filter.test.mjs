@@ -53,6 +53,7 @@ function buildSandbox({ decks, words, events = [] }) {
     `function retainedReviewEvents() { return ${JSON.stringify(events)}; }`,
     "let statsDeckIds = new Set();",
     "let statsFilterOpen = false;",
+    "let statsSelectionLost = false;",
     extractFunction("escapeHtml"),
     extractFunction("reviewEventDeckIndex"),
     extractFunction("statsScopedWords"),
@@ -65,6 +66,7 @@ function buildSandbox({ decks, words, events = [] }) {
       " select: (...ids) => { statsDeckIds = new Set(ids); }," +
       " selected: () => [...statsDeckIds]," +
       " setOpen: (v) => { statsFilterOpen = v; }," +
+      " setLost: (v) => { statsSelectionLost = v; }," +
       " words: () => statsScopedWords()," +
       " events: () => statsScopedEvents()," +
       " decks: () => statsScopedDecks()," +
@@ -196,7 +198,7 @@ test("集計のカードは、絞り込んだ母集団を使う", () => {
     ["statsDeckProgressCard", /statsScopedDecks\(\)/],
     ["statsFormatCard", /statsScopedEvents\(\)/],
     ["statsSpeedCard", /statsScopedEvents\(\)/],
-    ["statsPendingCard", /statsScopedWords\(\)/],
+    ["statsPendingCard", /words: statsScopedWords\(\)/],
   ]) {
     assert.match(bodyOf(name), marker, `${name} が絞り込みに従っていない`);
   }
@@ -328,9 +330,9 @@ test("絞り込みの結果を読み上げへ通知する", () => {
 
 test("「まだ出せない指標」は、知らない出題形式を件数に数えない", () => {
   // 未知の形式が5件あると、カードは出ないのに「いま5回」と案内してしまう。
-  const body = bodyOf("statsPendingCard");
-  assert.match(body, /const known = new Set\(STATS_FORMAT_MODES\.map/, "既知の形式で絞っていない");
-  assert.match(body, /if \(!known\.has\(e\.promptMode\)\) continue;/);
+  const defs = html.slice(html.indexOf("const STATS_CARDS = ["), html.indexOf("\n];", html.indexOf("const STATS_CARDS = [")));
+  assert.match(defs, /const known = new Set\(STATS_FORMAT_MODES\.map/, "既知の形式で絞っていない");
+  assert.match(defs, /if \(!known\.has\(e\.promptMode\)\) continue;/);
 });
 
 test("出題形式の一覧は1か所にまとめる（記録側とのずれを1か所で見る）", () => {
@@ -378,10 +380,10 @@ test("苦手カードは、一覧・件数・復習が1つの定義から出る"
 
 test("単語帳ごとの進捗は、1冊しか無いのか絞り込みで1冊なのかを書き分ける", () => {
   // どちらも「2冊以上つくると」と書くと、絞り込みを解けば見られることが伝わらない。
-  const body = bodyOf("statsPendingCard");
-  assert.match(body, /statsDeckIds\.size > 0 && allDecks > 1/, "書き分けていない");
-  assert.match(body, /絞り込みを解くと、単語帳どうしの進捗を比べられます/);
-  assert.match(body, /単語帳を2冊以上つくると/);
+  const defs = html.slice(html.indexOf("const STATS_CARDS = ["), html.indexOf("\n];", html.indexOf("const STATS_CARDS = [")));
+  assert.match(defs, /statsDeckIds\.size > 0 && allDecks > 1/, "書き分けていない");
+  assert.match(defs, /絞り込みを解くと、単語帳どうしの進捗を比べられます/);
+  assert.match(defs, /単語帳を2冊以上つくると/);
 });
 
 test("絞り込みの説明は、効かないカードを2つとも挙げる", () => {
@@ -457,4 +459,84 @@ test("苦手語: 履歴が無い語は入れない（stats だけで判定しな
     attempts("hasHistory", 3, 1),
   ]);
   assert.deepEqual(Array.from(w.rows()), ["hasHistory:33"]);
+});
+
+// ---------------------------------------------------------------------------
+// 4周目（1.0.104）で挙がった経路
+// ---------------------------------------------------------------------------
+
+test("同期で選んでいた単語帳が全部消えたら、黙って「すべて」に戻さず知らせる", () => {
+  // 空集合＝「すべて」の意味なので、消えると残った単語帳全体の数字が黙って出る。
+  // 本人が操作していないので、戻したことを1回だけ知らせる。
+  const prune = bodyOf("statsPruneDeckSelection");
+  assert.match(prune, /if \(statsDeckIds\.size > 0 && kept\.size === 0\) statsSelectionLost = true;/, "消えたことを覚えていない");
+  const markup = bodyOf("statsDeckFilterMarkup");
+  assert.match(markup, /statsSelectionLost\s*\?\s*`<p class="stats-filter-notice" role="status">選んでいた単語帳が無くなったため/, "知らせを出していない");
+  const render = bodyOf("renderStatsFilter");
+  assert.match(render, /statsSelectionLost = false;/, "知らせを1回で消していない");
+  const sync = bodyOf("syncStatsFilterSummary");
+  assert.match(sync, /\.stats-filter-notice"\)\?\.remove\(\)/, "選び直しても知らせが残る");
+});
+
+test("同期の知らせ: 実データで、選択が消えたときだけ立つ", () => {
+  const pieces = [
+    `const appState = ${JSON.stringify({ decks: [{ id: "d1", name: "帳" }], words: [] })};`,
+    "let statsDeckIds = new Set(); let statsSelectionLost = false;",
+    extractFunction("statsPruneDeckSelection"),
+    "globalThis.__p = { select: (...ids) => { statsDeckIds = new Set(ids); }, prune: () => statsPruneDeckSelection(), lost: () => statsSelectionLost, reset: () => { statsSelectionLost = false; } };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "stats-prune-check.js" }).runInNewContext(sandbox);
+  const p = sandbox.__p;
+  p.prune();
+  assert.equal(p.lost(), false, "何も選んでいないのに知らせが立つ");
+  p.select("d1");
+  p.prune();
+  assert.equal(p.lost(), false, "残っている単語帳を選んでいるのに知らせが立つ");
+  p.select("d1", "gone");
+  p.prune();
+  assert.equal(p.lost(), false, "一部が消えただけ（d1 は残る）なのに知らせが立つ");
+  p.select("gone");
+  p.prune();
+  assert.equal(p.lost(), true, "全部消えたのに知らせが立たない");
+});
+
+test("折りたたみの見出しは、指で当てやすい高さを持つ", () => {
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const at = css.indexOf(".stats-deck-filter > summary {");
+  assert.ok(at > 0);
+  const rule = css.slice(at, css.indexOf("}", at));
+  assert.match(rule, /min-height:\s*44px/, "375px幅では1行の文字だけだと当てにくい");
+  assert.match(rule, /display:\s*block/, "inline のままだと高さが効かない");
+});
+
+test("同期の知らせ: 残りが1冊以下になっても、知らせだけは出る", () => {
+  // 単語帳が1冊以下だと絞り込みUIは出さない。だが「選んでいた単語帳が消えて1冊に
+  // なった」直後にUIごと消えると、知らせまで消えてフラグだけが消費される（Codexの指摘）。
+  const s = buildSandbox({ decks: [DECKS[0]], words: WORDS, events: EVENTS });
+  assert.equal(s.markup(), "", "1冊のときは絞り込みUIを出さない（従来どおり）");
+  s.setLost(true);
+  const markup = s.markup();
+  assert.match(markup, /class="stats-filter-notice" role="status">選んでいた単語帳が無くなったため/, "知らせが出ない");
+  assert.doesNotMatch(markup, /data-stats-deck/, "1冊なのに絞り込みUIまで出している");
+});
+
+test("同期の知らせ: 2冊以上のときは、絞り込みUIの中に出る", () => {
+  const s = buildSandbox({ decks: DECKS, words: WORDS, events: EVENTS });
+  s.setLost(true);
+  const markup = s.markup();
+  assert.match(markup, /stats-filter-notice/);
+  assert.match(markup, /data-stats-deck="d1"/, "絞り込みUIが消えている");
+  // 知らせは1か所だけ
+  assert.equal((markup.match(/stats-filter-notice/g) || []).length, 1, "知らせが二重に出ている");
+});
+
+test("同期の知らせ: 成績ブロックごと隠す経路では、知らせのフラグを残さない", () => {
+  // データが無くてブロックを隠すときは renderStatsFilter() を通らない。
+  // フラグが残ると、あとでデータが入ったときに古い知らせが突然出る。
+  const body = bodyOf("renderStatsCharts");
+  const at = body.indexOf("block.hidden = true;");
+  assert.ok(at > 0);
+  const branch = body.slice(at, body.indexOf("return;", at));
+  assert.match(branch, /statsSelectionLost = false;/, "隠す経路で知らせのフラグを消していない");
 });
