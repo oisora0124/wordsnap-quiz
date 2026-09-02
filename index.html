@@ -1320,6 +1320,21 @@ h2 {
 
 .stats-deck-filter > summary {
   cursor: pointer;
+  /* 指で当てやすい高さを確保する（375px幅で1行の文字だけだと当てにくい） */
+  display: block;
+  min-height: 44px;
+  padding: 10px 0;
+  box-sizing: border-box;
+}
+
+.stats-filter-notice {
+  margin: 4px 0 6px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 0.76rem;
+  line-height: 1.5;
 }
 
 .stats-deck-options {
@@ -6899,7 +6914,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.103</span>
+        <span class="app-footer-version">バージョン 1.0.104</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7037,7 +7052,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.103";
+  const APP_REV = "1.0.104";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -31084,9 +31099,16 @@ function reviewEventDeckIndex() {
 function statsPruneDeckSelection() {
   const alive = new Set((appState.decks || []).map((deck) => deck?.id).filter(Boolean));
   const kept = new Set([...statsDeckIds].filter((id) => alive.has(id)));
+  // 選んでいた単語帳が全部消えると、空集合＝「すべて」の意味になって、残った単語帳
+  // 全体の数字が黙って出る。同期で消えた場合は本人が操作していないので、戻したことを
+  // 知らせる（絞り込みのUIに1回だけ出す）。
+  if (statsDeckIds.size > 0 && kept.size === 0) statsSelectionLost = true;
   if (kept.size !== statsDeckIds.size) statsDeckIds = kept;
   return kept;
 }
+
+// 「選んでいた単語帳が無くなった」の知らせを出すべきか。出したら消す。
+let statsSelectionLost = false;
 
 function statsFilterSummaryText(selected) {
   return selected.size === 0 ? "すべての単語帳" : `${selected.size}冊を選択中`;
@@ -31097,8 +31119,13 @@ function statsFilterSummaryText(selected) {
 // ここは作り直されず、焦点と開閉が保たれる。
 function statsDeckFilterMarkup() {
   const decks = (appState.decks || []).filter((deck) => deck?.id);
-  // 単語帳が1冊しかなければ絞り込む先が無い。
-  if (decks.length <= 1) return "";
+  const lostNotice = statsSelectionLost
+    ? `<p class="stats-filter-notice" role="status">選んでいた単語帳が無くなったため、すべての単語帳に戻しました。</p>`
+    : "";
+  // 単語帳が1冊しかなければ絞り込む先が無い。ただし「選んでいた単語帳が消えて
+  // 1冊になった」直後は、絞り込みUIごと消えると知らせまで消えてしまうので、
+  // 知らせだけは出す（Codexの指摘）。
+  if (decks.length <= 1) return lostNotice;
   const selected = statsPruneDeckSelection();
   const counts = new Map();
   for (const word of appState.words || []) {
@@ -31125,6 +31152,7 @@ function statsDeckFilterMarkup() {
     // 選ぶとカードの中身が丸ごと入れ替わるが、見た目でしか分からない。
     // 読み上げにも変化を伝える。
     `<p class="sr-only" id="statsFilterStatus" role="status" aria-live="polite"></p>` +
+    lostNotice +
     // 行動のカードはクイズ側の「出題する単語帳」に従う。ここで絞ると数字と
     // 「復習を始める」ボタンの範囲がずれるため、意図的に対象外にしている。
     `<p class="stats-filter-note">下の集計に効きます。ただし「今日の復習」など次にやることのカードは` +
@@ -31154,6 +31182,8 @@ function renderStatsFilter() {
   host.innerHTML = statsDeckFilterMarkup();
   host.dataset.signature = signature;
   statsFilterSignature = signature;
+  // 知らせは1回出したら終わり。次に作り直すときには出さない。
+  statsSelectionLost = false;
 }
 
 // 選択だけが変わったときは、見出しの文言と「すべてに戻す」の可否だけを直す。
@@ -31165,6 +31195,8 @@ function syncStatsFilterSummary() {
   if (label) label.textContent = statsFilterSummaryText(selected);
   const clear = host.querySelector("#statsDeckClear");
   if (clear) clear.disabled = selected.size === 0;
+  // 本人が選び直したら、「無くなったので戻した」の知らせは役目を終える。
+  host.querySelector(".stats-filter-notice")?.remove();
   const status = host.querySelector("#statsFilterStatus");
   if (status) {
     status.textContent =
@@ -31362,68 +31394,128 @@ function statsWeakCard() {
 //
 // built には各カードのHTMLが入る。空文字なら出ていない＝理由を書く対象。
 // 実際に描いた結果から作るので、条件の書き写し間違いで案内と食い違うことがない。
-function statsPendingCard(built) {
-  const words = statsScopedWords();
-  const reasons = [];
-  const add = (name, why) => reasons.push({ name, why });
-
-  // 期間はカード側の実装に合わせて書く。「クイズを解くと」だけだと、古い回答しか
-  // 無い人にも出るように読めてしまう。
-  if (!built.activity) add("学習量の推移", "直近30日にクイズを解くと、日ごとの回答数が出ます。");
-  if (!built.accuracy) add("正答率の推移", "直近14日にクイズを解くと、日ごとの正答率が出ます。");
-  if (!built.deck) {
-    // 単語帳が1冊しかないのか、絞り込みで1冊になったのかで、やることが違う。
-    // どちらも「2冊以上つくると」と書くと、絞り込みを解けば見られることが伝わらない。
-    const allDecks = (appState.decks || []).filter((deck) => deck?.id).length;
-    add(
-      "単語帳ごとの進捗",
-      statsDeckIds.size > 0 && allDecks > 1
-        ? "絞り込みを解くと、単語帳どうしの進捗を比べられます。"
-        : "単語帳を2冊以上つくると、冊ごとに比べられます。",
-    );
-  }
-  if (!built.cefr) {
-    const judged = words.filter((word) => CEFR_ORDER.includes(word.cefr?.level)).length;
-    add("単語の難しさ（CEFR）", `CEFRが判定できた単語が10語たまると出ます（いま${judged}語）。`);
-  }
-  // 条件は statsWeakWords() が持つ「3回以上 かつ 正答率80%未満」。
-  // 「1回でも間違えると出ます」と書くと、5回中1回誤答（80%）の人には嘘になる。
-  if (!built.weak) {
-    add("苦手な単語", "同じ単語を3回以上解いて、正答率が80%を下回ると出ます。");
-  }
-
-  // 学習イベントを使う2枚。設定がオフのときだけ理由が同じなのでまとめて書く。
-  // オンのときは数え方が違う（形式別は形式ごとに5回、速度は回答時間が残った回だけ）。
-  // 総イベント数で「あと何回」と書くと、0回と言っているのにカードが出ない状態になる。
-  const missingLog = [];
-  if (!built.format) missingLog.push("出題形式別の正答率");
-  if (!built.speed) missingLog.push("回答速度の分布");
-  if (missingLog.length && !reviewLogEnabled()) {
-    add(missingLog.join("・"), "設定の「📈 学習の記録」をオンにすると集計を始めます。");
-  } else if (missingLog.length) {
-    const graded = statsScopedEvents().filter((e) => e.result !== "dont-know");
-    if (!built.format) {
-      // 形式ごとに5回。いちばん進んでいる形式の件数を出す。
+// 成績カードの定義。並び順・組み立て・出ていないときの理由を、この1か所で持つ。
+// 3つを別々の場所（built のキー、cards の並び、statsPendingCard の if 群）で管理して
+// いると、カードを足したときにどれかを忘れて「カードは出るのに理由が出ない」
+// 「理由は出るのにカードが無い」が起きる（Codexの指摘）。
+//
+// pending は「そのカードが出ていないときに何と案内するか」を [名前, 理由] で返す。
+// 無いカード（案内のカード・説明文）は pending を持たない。
+// 理由が同じカードは statsPendingCard がまとめて1行にする（学習の記録がオフのとき等）。
+const STATS_CARDS = [
+  // 復帰カードは最上段。全件の数字より先に「まず20語」を見せる。
+  { key: "recovery", build: () => statsRecoveryCard() },
+  { key: "confidence", build: () => statsConfidenceCard() },
+  { key: "todayReview", build: () => statsTodayReviewCard() },
+  {
+    key: "activity",
+    build: (ctx) => statsActivityCard(ctx.activity),
+    // 期間はカード側の実装に合わせて書く。「クイズを解くと」だけだと、古い回答しか
+    // 無い人にも出るように読めてしまう。
+    pending: () => ["学習量の推移", "直近30日にクイズを解くと、日ごとの回答数が出ます。"],
+  },
+  { key: "mastery", build: () => statsMasteryCard() },
+  {
+    key: "deck",
+    build: () => statsDeckProgressCard(),
+    pending: () => {
+      // 単語帳が1冊しかないのか、絞り込みで1冊になったのかで、やることが違う。
+      // どちらも「2冊以上つくると」と書くと、絞り込みを解けば見られることが伝わらない。
+      const allDecks = (appState.decks || []).filter((deck) => deck?.id).length;
+      return [
+        "単語帳ごとの進捗",
+        statsDeckIds.size > 0 && allDecks > 1
+          ? "絞り込みを解くと、単語帳どうしの進捗を比べられます。"
+          : "単語帳を2冊以上つくると、冊ごとに比べられます。",
+      ];
+    },
+  },
+  {
+    key: "cefr",
+    build: () => statsCefrCard(),
+    pending: (ctx) => {
+      const judged = ctx.words.filter((word) => CEFR_ORDER.includes(word.cefr?.level)).length;
+      return ["単語の難しさ（CEFR）", `CEFRが判定できた単語が10語たまると出ます（いま${judged}語）。`];
+    },
+  },
+  { key: "cefrGuide", build: () => cefrGuideCard() },
+  {
+    key: "accuracy",
+    build: (ctx) => statsAccuracyCard(ctx.activity),
+    pending: () => ["正答率の推移", "直近14日にクイズを解くと、日ごとの正答率が出ます。"],
+  },
+  {
+    key: "format",
+    build: () => statsFormatCard(),
+    // 数え方はカードの実条件に合わせる。総イベント数で「あと何回」と書くと、
+    // 0回と言っているのにカードが出ない状態になる。
+    pending: (ctx) => {
+      if (!ctx.logEnabled) return ["出題形式別の正答率", STATS_LOG_OFF_REASON];
+      // 形式ごとに5回。いちばん進んでいる形式の件数を出す。未知の形式は数えない。
       const known = new Set(STATS_FORMAT_MODES.map(([key]) => key));
       const perMode = new Map();
-      for (const e of graded) {
+      for (const e of ctx.graded) {
         if (!known.has(e.promptMode)) continue;
         perMode.set(e.promptMode, (perMode.get(e.promptMode) || 0) + 1);
       }
       const best = Math.max(0, ...perMode.values());
-      add("出題形式別の正答率", `同じ出題形式で5回たまると出ます（いちばん多い形式でいま${best}回）。`);
-    }
-    if (!built.speed) {
-      const timed = graded.filter((e) => Number.isFinite(e?.responseTimeMs)).length;
-      add("回答速度の分布", `回答時間が残った記録が5回たまると出ます（いま${timed}回）。`);
-    }
+      return ["出題形式別の正答率", `同じ出題形式で5回たまると出ます（いちばん多い形式でいま${best}回）。`];
+    },
+  },
+  {
+    key: "speed",
+    build: () => statsSpeedCard(),
+    pending: (ctx) => {
+      if (!ctx.logEnabled) return ["回答速度の分布", STATS_LOG_OFF_REASON];
+      const timed = ctx.graded.filter((e) => Number.isFinite(e?.responseTimeMs)).length;
+      return ["回答速度の分布", `回答時間が残った記録が5回たまると出ます（いま${timed}回）。`];
+    },
+  },
+  {
+    key: "weak",
+    build: () => statsWeakCard(),
+    // 条件は statsWeakWords() が持つ「3回以上 かつ 正答率80%未満」。
+    // 「1回でも間違えると出ます」と書くと、5回中1回誤答（80%）の人には嘘になる。
+    pending: () => ["苦手な単語", "同じ単語を3回以上解いて、正答率が80%を下回ると出ます。"],
+  },
+];
+
+// 学習の記録がオフのときの理由。形式別と速度で同じ文なので、まとめて1行になる。
+const STATS_LOG_OFF_REASON = "設定の「📈 学習の記録」をオンにすると集計を始めます。";
+
+// まだ出せないカードの理由を1枚にまとめる。
+// カードは条件を満たさないと黙って消えるので、利用者からは「機能が無い」のか
+// 「データ待ち」なのか区別できなかった。カードごとに置き換えの札を出すと枚数が
+// 倍になるので、足りないものだけを最後に1枚並べる。
+//
+// built には各カードのHTMLが入る。空文字なら出ていない＝理由を書く対象。
+// 実際に描いた結果から作るので、条件の書き写し間違いで案内と食い違うことがない。
+function statsPendingCard(built) {
+  // 理由の計算に使う材料は1回だけ作る（カードごとに走査し直さない）。
+  let graded = null;
+  const ctx = {
+    words: statsScopedWords(),
+    logEnabled: reviewLogEnabled(),
+    get graded() {
+      if (!graded) graded = statsScopedEvents().filter((e) => e.result !== "dont-know");
+      return graded;
+    },
+  };
+  // 同じ理由のカードは1行にまとめる（名前を「・」でつなぐ）。並びは最初に出た位置。
+  const reasons = [];
+  for (const card of STATS_CARDS) {
+    if (!card.pending || built[card.key]) continue;
+    const [name, why] = card.pending(ctx);
+    const same = reasons.find((r) => r.why === why);
+    if (same) same.names.push(name);
+    else reasons.push({ names: [name], why });
   }
   if (reasons.length === 0) return "";
   const rows = reasons
     .map(
       (r) =>
         `<div class="stats-pending-row">` +
-        `<span class="stats-pending-name">${escapeHtml(r.name)}</span>` +
+        `<span class="stats-pending-name">${escapeHtml(r.names.join("・"))}</span>` +
         `<span class="stats-pending-why">${escapeHtml(r.why)}</span>` +
         `</div>`,
     )
@@ -31456,36 +31548,11 @@ function renderStatsCharts(byDay) {
       : byDay instanceof Map
         ? byDay
         : buildDailyActivity();
-  // 出ていないカードの理由を書くために、どれが空だったかを覚えておく。
-  const built = {
-    recovery: statsRecoveryCard(),
-    confidence: statsConfidenceCard(),
-    todayReview: statsTodayReviewCard(),
-    activity: statsActivityCard(activity),
-    mastery: statsMasteryCard(),
-    deck: statsDeckProgressCard(),
-    cefr: statsCefrCard(),
-    cefrGuide: cefrGuideCard(),
-    accuracy: statsAccuracyCard(activity),
-    format: statsFormatCard(),
-    speed: statsSpeedCard(),
-    weak: statsWeakCard(),
-  };
-  const cards = [
-    // 復帰カードは最上段。全件の数字より先に「まず20語」を見せる。
-    built.recovery,
-    built.confidence,
-    built.todayReview,
-    built.activity,
-    built.mastery,
-    built.deck,
-    built.cefr,
-    built.cefrGuide,
-    built.accuracy,
-    built.format,
-    built.speed,
-    built.weak,
-  ].filter(Boolean);
+  // 定義の並びどおりに組み立て、出ていないカードの理由を書くためにキーごとに残す。
+  const ctx = { activity };
+  const built = {};
+  for (const card of STATS_CARDS) built[card.key] = card.build(ctx);
+  const cards = STATS_CARDS.map((card) => built[card.key]).filter(Boolean);
   if (cards.length === 0) {
     // まだ集計できるデータがない（単語ゼロ・履歴なし）ときはブロックごと隠す。
     // ここで「まだ出せない指標」だけを出すと、始めたばかりの画面が不足の一覧になる。
@@ -31493,6 +31560,10 @@ function renderStatsCharts(byDay) {
     if (statsDeckIds.size === 0) {
       block.hidden = true;
       grid.innerHTML = "";
+      // ブロックごと隠すので「選んでいた単語帳が無くなった」の知らせも出す先が無い。
+      // ここで消しておかないとフラグが残り、あとでデータが入ったときに古い知らせが
+      // 突然出る（Codexの指摘）。
+      statsSelectionLost = false;
       return;
     }
     block.hidden = false;
