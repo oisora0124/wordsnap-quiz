@@ -137,6 +137,7 @@ function buildQuizSandbox() {
     extractFunction("quizDirectionSetting"),
     extractFunction("resolveQuizReverse"),
     extractFunction("pickDistractors"),
+    extractFunction("pickDistractorsWithFallback"),
     extractFunction("buildQuiz"),
     "globalThis.__b = {" +
       " setWords: (w) => { appState.words = w; currentQuiz = null; }," +
@@ -719,6 +720,7 @@ function buildReviewQuizSandbox() {
     extractFunction("normalizeTerm"),
     extractFunction("choiceCountNote"),
     extractFunction("pickDistractors"),
+    extractFunction("pickDistractorsWithFallback"),
     extractFunction("isMasteryVerificationDue"),
     extractFunction("mixedFormatUsesContext"),
     extractFunction("buildReviewQuiz"),

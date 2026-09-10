@@ -371,6 +371,7 @@ test("due provisional mastery bypasses context formats in the actual review quiz
       "const prefetchNextContextItem = () => {};",
       "const buildContextChoices = () => [];",
       "const pickDistractors = (pool) => pool.slice(0, 3);",
+      extractFunction("pickDistractorsWithFallback"),
       "const shuffle = (items) => items;",
       "const choiceCountNote = () => '';",
       extractFunction("isMasteryVerificationDue"),

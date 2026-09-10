@@ -244,12 +244,12 @@ h2 {
 .learning-quote {
   position: relative;
   display: flex;
-  /* 64chは日本語だと約32文字で切れてしまう。内容幅に合わせ、
-     画面幅が足りない時だけ省略記号にする。 */
+  /* 内容幅に合わせる。画面幅が足りないときは省略せず折り返す（下の .quote-text）。 */
   width: fit-content;
   min-width: 0;
   max-width: 100%;
-  gap: 0.45rem;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.45rem;
   align-items: baseline;
   margin: 0.4rem 0 0;
   padding: 0.35rem 0.65rem;
@@ -259,29 +259,26 @@ h2 {
   animation: rise 460ms ease both;
 }
 
+/* 名言と名前は省略せず全文を出す。1行に収まらなければ折り返し、
+   名前が横に入らないときは名前だけ次の行へ送る（flex-wrap）。 */
 .learning-quote .quote-text {
   min-width: 0;
   flex: 1 1 auto;
   margin: 0;
-  overflow: hidden;
   color: var(--ink);
   font-size: 0.92rem;
   font-style: italic;
   line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .learning-quote .quote-author {
   min-width: 0;
-  max-width: 42%;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   margin: 0;
-  overflow: hidden;
   color: var(--accent-text);
   font-size: 0.8rem;
   font-weight: 700;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -6914,7 +6911,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.104</span>
+        <span class="app-footer-version">バージョン 1.0.105</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7052,7 +7049,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.104";
+  const APP_REV = "1.0.105";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -26413,6 +26410,10 @@ function persistReviewProgress() {
         mixFormat: reviewSession.mixFormat,
         formatSeed: reviewSession.formatSeed,
         reverse: reviewSession.reverse, // 出題の向きも維持する（再開で向きが変わらないように）
+        // 復帰の抜き取りの印。これを落とすと「▶ 再開」で続けた回答が抜き取りに数えられず、
+        // 終わったはずの抜き取りが「続きを解く」のまま残って同じ語をもう一度解かされる。
+        recoverySessionId: reviewSession.recoverySessionId || "",
+        easyOrder: Boolean(reviewSession.easyOrder), // 進捗欄の「現在 A1」表示を再開後も保つ
         missedIds: reviewSession.missedIds,
         savedAt: Date.now(),
       }),
@@ -26494,6 +26495,10 @@ function resumeSavedReview() {
     // 旧い保存データには reverse が無い。その場合は false（従来どおり英→日）になる。
     reverse: Boolean(saved.reverse),
     missedIds: Array.isArray(saved.missedIds) ? saved.missedIds : [],
+    easyOrder: Boolean(saved.easyOrder),
+    // 抜き取りの印は startReview と同じ形（空文字＝通常のセッション）で戻す。
+    // 旧い保存データには無いので空文字になり、従来どおり通常の復習として続く。
+    recoverySessionId: String(saved.recoverySessionId || ""),
   };
   reviewResult = null; // 再開したら前回の結果表示は消す
   quizEmptyReason = "";
@@ -29508,10 +29513,11 @@ function buildReviewQuiz() {
       reviewSession.queue.shift();
       continue;
     }
-    let pool = appState.words.filter(
-      (word) => reviewSession.allIds.includes(word.id) && word.id !== answer.id,
-    );
-    if (pool.length < 3) pool = appState.words.filter((word) => word.id !== answer.id);
+    // includes だと「すべて・全部」のような大きなセッションで語数×語数の走査が毎問走る。
+    const sessionIds = new Set(reviewSession.allIds);
+    const others = appState.words.filter((word) => word.id !== answer.id);
+    let pool = others.filter((word) => sessionIds.has(word.id));
+    if (pool.length < 3) pool = others;
     const srsDueAtStart =
       Number(answer.learning?.nextReviewAt || 0) > 0 &&
       Number(answer.learning.nextReviewAt) <= Date.now();
@@ -29595,9 +29601,7 @@ function buildReviewQuiz() {
     // 使っている間その語は永久に仮習得のまま残り、フラッシュカードの対象からも
     // 外れ続ける。上で例文形式を抑止しているのと同じ理由・同じ対象。
     const reverse = Boolean(reviewSession.reverse) && !isMasteryVerificationDue(answer);
-    const distractors = pickDistractors(pool, answer, 3, [], {
-      dedupeBy: reverse ? "term" : "meaning",
-    });
+    const distractors = pickDistractorsWithFallback(pool, others, answer, reverse);
     if (distractors.length === 0) {
       // 正解だけの1択で採点するとSRSが不当に進む。通常・総復習・苦手復習・resumeの
       // どの入口でも、誤答を1件も作れない場合は問題を返さず共通の空状態へ合流させる。
@@ -29701,7 +29705,8 @@ function buildQuiz() {
   const answer = chooseNextWord(candidates);
   if (!answer) return null;
   const pool = quizSelectedDeckWords().filter((word) => word.id !== answer.id);
-  const basePool = pool.length >= 3 ? pool : appState.words.filter((word) => word.id !== answer.id);
+  const others = appState.words.filter((word) => word.id !== answer.id);
+  const basePool = pool.length >= 3 ? pool : others;
   // 出題の向き。おまかせクイズは1問ごとに引く（ミックスで問題ごとに変わる）。
   // 範囲クイズ・復習セッションは startReview でセッション単位に固定する。
   // 既定のforwardではMath.random()を消費しないため、設定を触らない限り
@@ -29709,9 +29714,7 @@ function buildQuiz() {
   // 仮習得の検証待ちの語だけは必ず英→日にする（本習得への確定は意味4択の正解が
   // 条件で、日→英では永久に確定しない）。理由は buildReviewQuiz 側と同じ。
   const reverse = resolveQuizReverse() && !isMasteryVerificationDue(answer);
-  const distractors = pickDistractors(basePool, answer, 3, [], {
-    dedupeBy: reverse ? "term" : "meaning",
-  });
+  const distractors = pickDistractorsWithFallback(basePool, others, answer, reverse);
   if (distractors.length === 0) {
     // 1択のまま正解扱いにできないよう、通常クイズも問題生成の時点で止める。
     quizEmptyReason =
@@ -30003,6 +30006,19 @@ function meaningsTooClose(a, b) {
 // 「同じ品詞＝意味カテゴリが近い」ほど良い誤答になるが、空所補充では逆で、
 // 同じ品詞の語は空所に文法的に入ってしまい「正解が2つ」に見えて根拠が立たない。
 // 品詞が違えば文の形から確実に除外でき、解答の根拠を持って選べる。
+// 4択の誤答を、まず出題範囲（復習セッション／選んだ単語帳）の語から選ぶ。範囲内の語は
+// 互いに関連が深く、紛らわしい選択肢になりやすいため。
+// ただし範囲内の語がすべて同じ訳（acquire/obtain/get＝取得する 等）だと誤答が1つも作れず、
+// 呼び出し側は「単語が足りません」でセッションごと終了する。他に何百語あっても
+// 「もう1語登録してください」と言われるのは不合理なので、範囲内で0件のときだけ
+// 全単語から選び直す。範囲内で1件以上作れた場合は従来どおり（選択肢の数や中身は変えない）。
+function pickDistractorsWithFallback(pool, fallbackPool, answer, reverse) {
+  const options = { dedupeBy: reverse ? "term" : "meaning" };
+  const picked = pickDistractors(pool, answer, 3, [], options);
+  if (picked.length > 0 || pool === fallbackPool) return picked;
+  return pickDistractors(fallbackPool, answer, 3, [], options);
+}
+
 function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options = {}) {
   // options.dedupeBy: 選択肢として画面に出す文字列の重複排除に何を見るか。
   // 英→日（既定）は意味文字列が選択肢に出るので意味で重複排除し、日→英（逆方向）は
