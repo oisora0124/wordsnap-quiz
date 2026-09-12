@@ -444,6 +444,7 @@ function buildPendingSandbox() {
     extractFunction("normalizeTerm"),
     extractFunction("choiceCountNote"),
     extractFunction("pickDistractors"),
+    extractFunction("pickDistractorsWithFallback"),
     extractFunction("isMasteryVerificationDue"),
     extractFunction("mixedFormatUsesContext"),
     extractFunction("buildReviewQuiz"),
