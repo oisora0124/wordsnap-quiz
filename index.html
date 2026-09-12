@@ -7,6 +7,22 @@
       name="description"
       content="英単語と意味を登録して自分の単語帳を作り、意味の4択クイズで復習できる単語学習ツール"
     />
+    <!-- SNS等で共有されたときのプレビュー。URLと画像は本番の素のアドレスに固定する
+         （個人キー付きのURLを絶対に載せない）。画像は既存のアイコンを使う。 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="WordBank" />
+    <meta property="og:title" content="WordBank" />
+    <meta
+      property="og:description"
+      content="英単語と意味を登録して自分の単語帳を作り、意味の4択クイズで復習できる単語学習ツール"
+    />
+    <meta property="og:url" content="https://wordbank.pages.dev/" />
+    <meta property="og:image" content="https://wordbank.pages.dev/assets/icon-512.png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="canonical" href="https://wordbank.pages.dev/" />
     <!-- 個人キーを ?w= に持つため、外部辞書・AI・リンク先へ参照元URLを送らない。 -->
     <meta name="referrer" content="no-referrer" />
     <meta name="color-scheme" content="light dark" />
@@ -5008,6 +5024,16 @@ textarea:focus-visible {
   }
 }
 
+/* 解答前の「次の問題」（飛ばす用途）は、解答の選択肢より目立たせない。解答後は主ボタンに戻る。 */
+#nextQuizButton.is-skip {
+  color: var(--ink);
+  background: transparent;
+  border-color: var(--line);
+}
+#nextQuizButton.is-skip:hover {
+  background: var(--surface-2);
+}
+
 .choices {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5796,7 +5822,7 @@ body.tutorial-open {
           <div class="streak-cal-weekdays" aria-hidden="true">
             <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
           </div>
-          <div id="streakCalendar" class="streak-cal"></div>
+          <div id="streakCalendar" class="streak-cal" role="group" aria-label="学習カレンダー"></div>
           <div id="streakDayDetail" class="streak-day-detail" role="status"></div>
           <p class="streak-note">
             学習の記録は単語ごとに直近50回まで保存されます。それより前の古い履歴は表示されないことがあります。
@@ -6096,7 +6122,13 @@ accurate 正確な"
             <button id="saveParsedButton" class="secondary" type="button" disabled>候補を保存</button>
           </div>
         </div>
-        <div id="candidateList" class="word-list empty">候補はまだありません。</div>
+        <!-- JSが動く前・動かないときも、renderCandidates() が出す空状態の案内と同じ内容を出す
+             （CANDIDATE_EMPTY_GUIDE_HTML と一致させること。ずれはテストが落とす）。 -->
+        <div id="candidateList" class="word-list empty empty-guide">
+          <p>まだ確認する単語がありません。</p>
+          <p>手順 1 で文字を貼り付けるか写真から読み取り、<strong>「単語リストに変換」</strong>を押すと、ここに候補が出ます。</p>
+          <button type="button" class="secondary" data-goto-step="import">手順 1（取り込む）へ</button>
+        </div>
       </section>
 
       <section
@@ -6117,7 +6149,7 @@ accurate 正確な"
             <span id="quizLearningProgress" class="pill subtle">習得済み 0 / 復習中 0 / 未着手 0</span>
             <span id="quizProgress" class="pill subtle" hidden></span>
             <span id="quizDailyGoal" class="pill subtle" hidden></span>
-            <span id="accuracy" class="pill">正答率 0%</span>
+            <span id="accuracy" class="pill" title="選んでいる単語帳の、これまでの全解答から計算した正答率">正答率（累計） 0%</span>
           </div>
         </div>
         <div id="quizProgressTrack" class="quiz-progress-track" hidden aria-hidden="true">
@@ -6448,7 +6480,7 @@ accurate 正確な"
                     <button id="syncKeyToggleButton" class="ghost mini" type="button" aria-pressed="false">表示</button>
                   </span>
                 </label>
-                <button id="syncCopyLinkButton" type="button" title="このページのリンクをクリップボードにコピーします。別の端末で開くと同じデータになります。">個人リンクをコピー</button>
+                <button id="syncCopyLinkButton" class="secondary danger" type="button" title="このページのリンク（個人キー入り）をクリップボードにコピーします。別の端末で開くと同じデータになります。自分以外には渡さないでください。">個人リンクをコピー</button>
                 <button id="syncPullButton" class="secondary" type="button" title="サーバーから最新のデータを取得して、この端末に反映します。">今すぐ読み込む</button>
                 <button id="syncNewKeyButton" class="ghost" type="button" title="新しい個人キーを発行し、今のデータをそのまま引き継ぎます。">新しい個人キーを発行</button>
               </div>
@@ -6645,7 +6677,7 @@ accurate 正確な"
                 <li data-sync-identity-ui="v2-native" hidden>全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこのV2保存先で保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
                 <li data-sync-identity-ui="v2-native" hidden>万一、引き継ぎコードが他人に知られてしまったら、「JSONを書き出す」で単語データを保存し、安全な新しい保存先へ移すまでコードを共有しないでください。</li>
               </ul>
-              <p class="settings-desc">品質改善のため、匿名の利用回数とエラー情報を送信します（単語の内容・個人キーは含まれません）。</p>
+              <p class="settings-desc">品質改善のため、匿名の利用回数とエラー情報を WordBank 自身のサーバー（このサイトの /api/telemetry）へ送ります。送るのは「どの機能を何回使ったか」「エラーの文と発生位置（URLのクエリと、個人キー・引き継ぎコードの形は伏せてから送ります）」「アプリのバージョン」で、単語や成績のデータそのものは送りません。外部の解析サービスには送りません。</p>
               <label class="settings-check">
                 <input id="telemetryOptoutToggle" type="checkbox" />
                 <span>匿名の利用統計とエラー情報の送信をOFFにする</span>
@@ -6911,7 +6943,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.106</span>
+        <span class="app-footer-version">バージョン 1.0.107</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7049,7 +7081,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.106";
+  const APP_REV = "1.0.107";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -25584,16 +25616,20 @@ async function runOcr(source, run) {
   }
 }
 
+// 手順2の空状態の案内。静的HTMLの #candidateList の初期内容と同じにしておく
+// （JSが動く前に見える表示と、動いたあとの表示が食い違わないように）。
+const CANDIDATE_EMPTY_GUIDE_HTML =
+  "<p>まだ確認する単語がありません。</p>" +
+  "<p>手順 1 で文字を貼り付けるか写真から読み取り、<strong>「単語リストに変換」</strong>を押すと、ここに候補が出ます。</p>" +
+  '<button type="button" class="secondary" data-goto-step="import">手順 1（取り込む）へ</button>';
+
 function renderCandidates() {
   elements.candidateCount.textContent = `候補 ${candidates.length}件`;
   elements.saveParsedButton.disabled = candidates.length === 0;
 
   if (candidates.length === 0) {
     elements.candidateList.className = "word-list empty empty-guide";
-    elements.candidateList.innerHTML =
-      '<p>まだ確認する単語がありません。</p>' +
-      '<p>手順 1 で文字を貼り付けるか写真から読み取り、<strong>「単語リストに変換」</strong>を押すと、ここに候補が出ます。</p>' +
-      '<button type="button" class="secondary" data-goto-step="import">手順 1（取り込む）へ</button>';
+    elements.candidateList.innerHTML = CANDIDATE_EMPTY_GUIDE_HTML;
     return;
   }
 
@@ -26281,6 +26317,16 @@ function updateQuizControls() {
   // 押した回数だけ解決コールバックが積み上がる（進んだように見えて進まない）。
   elements.nextQuizButton.hidden =
     inFlashcard || !quizActive || showingResult || currentQuiz?.contextPending === true;
+  // 解答前の「次の問題」は飛ばす用途だけ（おまかせでは採点せずに次へ、復習では同じ語を
+  // 作り直す）。解答の選択肢と同じ強さで出ていると解答前に押す誤操作が起きるので、
+  // 見た目を弱めて理由を添える。解答後・復習完了時は従来どおり主ボタンに戻す。
+  const skipOnly = questionActive && !elements.nextQuizButton.hidden;
+  elements.nextQuizButton.classList.toggle("is-skip", skipOnly);
+  if (skipOnly) {
+    elements.nextQuizButton.title = "解答前に押すと、この問題は採点されません";
+  } else {
+    elements.nextQuizButton.removeAttribute("title");
+  }
   if (elements.quizNextHint) {
     const canAdvance = !elements.nextQuizButton.hidden && currentQuiz?.answered;
     elements.quizNextHint.hidden = !canAdvance;
@@ -26323,7 +26369,8 @@ function renderAccuracy() {
   );
   const attempts = totals.correct + totals.wrong;
   const rate = attempts === 0 ? 0 : Math.round((totals.correct / attempts) * 100);
-  elements.accuracy.textContent = `正答率 ${rate}%`;
+  // 今のセッションではなく、選んでいる単語帳のこれまでの全解答から計算した値なので「累計」と示す。
+  elements.accuracy.textContent = `正答率（累計） ${rate}%`;
 }
 
 function wordAccuracy(word) {
@@ -30357,6 +30404,8 @@ function renderStreakCalendar() {
   if (elements.streakMonthLabel) {
     elements.streakMonthLabel.textContent = `${year}年${month + 1}月`;
   }
+  // 日付のボタン群に、何月の記録かが分かる名前を付ける（読み上げ環境で月が分かるように）。
+  grid.setAttribute("aria-label", `${year}年${month + 1}月の学習カレンダー。日付を選ぶとその日の記録を表示`);
   // 未来の月へは進めない（記録が存在しないため）
   if (elements.streakNextMonth) {
     const isCurrent = year === now.getFullYear() && month === now.getMonth();
