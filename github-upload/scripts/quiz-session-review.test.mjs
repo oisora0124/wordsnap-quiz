@@ -80,6 +80,7 @@ function resumeSandbox() {
     "function updateResumeButton() {}",
     "function renderQuiz() {}",
     "function setActiveStep() {}",
+    "function clearAutoNextTimer() {}",
     "function prefersReducedMotion() { return true; }",
     "function resolveQuizReverse() { return false; }",
     "function orderIdsByPriority(ids) { return ids.slice(); }",
@@ -258,6 +259,8 @@ test("実配線: 同じ訳だけの復習セッションでも、他の語があ
     extractFunction("pickDistractors"),
     extractFunction("pickDistractorsWithFallback"),
     extractFunction("buildReviewQuiz"),
+    extractFunction("quizSrsSnapshot"),
+    extractFunction("effectiveSrsDueAtStart"),
     "globalThis.__quiz = buildReviewQuiz();",
     "globalThis.__reason = quizEmptyReason;",
   ];

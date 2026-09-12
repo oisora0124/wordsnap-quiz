@@ -6911,7 +6911,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.105</span>
+        <span class="app-footer-version">バージョン 1.0.106</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7049,7 +7049,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.105";
+  const APP_REV = "1.0.106";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -26523,6 +26523,8 @@ function selectedQuizContextAmount() {
 function startReview(ids, options = {}) {
   const valid = ids.filter((id) => appState.words.some((word) => word.id === id));
   if (valid.length === 0) return;
+  // 直前の問題の自動送りが残っていると、新しいセッションの1問目を勝手に作り直す。
+  clearAutoNextTimer();
   flashcardSession = null;
   flashcardRevealed = false;
   let queue;
@@ -27082,13 +27084,12 @@ function buildCurrentFlashcard() {
       flashcardSession.allIds = flashcardSession.allIds.filter((id) => id !== removedId);
       continue;
     }
-    const dueAt = Number(answer.learning?.nextReviewAt || 0);
     return {
       answer,
       choices: [],
       answered: false,
       shownAt: Date.now(),
-      srsDueAtStart: dueAt > 0 && dueAt <= Date.now(),
+      ...quizSrsSnapshot(answer), // srsDueAtStart と progressStamp
       flashcard: true,
     };
   }
@@ -27350,6 +27351,7 @@ function restoreLastQuizSettings() {
 }
 
 function endReview(message) {
+  clearAutoNextTimer(); // 終了後に残った自動送りが、通常クイズの問題を勝手に進めないように
   clearSavedReviewProgress(); // 完走/中断したら再開データは消す（閉じた/リロード時だけ残る）
   // 抜き取りが全問終わっていれば確定する。途中終了でも十分な数がそろっていれば
   // その結果で計画を作る（足りなければ状態を残し「続きを解く」で再開できる）。
@@ -27373,6 +27375,25 @@ function dropWordFromReviewSession(id) {
   reviewSession.missedIds = reviewSession.missedIds.filter((entry) => entry !== id);
   reviewSession.total = Math.max(0, (reviewSession.total || 0) - 1);
   persistReviewProgress(); // 再開用スナップショットも削除後の姿に合わせる
+}
+
+// 同期で単語が消えた復習セッションの帳尻を合わせる。ローカル削除は上の
+// dropWordFromReviewSession を通るが、同期の差し替え（他端末の削除の反映・
+// 「他の端末に合わせる」）は appState ごと入れ替えるだけで通らない。
+// そのままだと消えた未回答語が buildReviewQuiz で黙って捨てられ、total には残って
+// 「間違えずにクリアした語」に数えられる（残り X/Y・結果画面の数字が実際とずれる）。
+// 回答済み（キューにない）語は正当に計上済みなので触らない。
+// 表示中の問題の語が消えていたら未回答のまま作り直す（残すと解答しても何も起きない）。
+// 戻り値は取り除いた未回答語の数。
+function reconcileReviewSessionWords() {
+  if (!reviewSession) return 0;
+  const ids = new Set(appState.words.map((word) => word.id));
+  const missing = reviewSession.queue.filter((id) => !ids.has(id));
+  for (const id of missing) dropWordFromReviewSession(id);
+  if (currentQuiz && !currentQuiz.answered && !ids.has(currentQuiz.answer?.id)) {
+    currentQuiz = null;
+  }
+  return missing.length;
 }
 
 // フラッシュカードでまだ回答していない削除語を、総数・再実行対象からも取り除く。
@@ -29510,7 +29531,9 @@ function buildReviewQuiz() {
   while (reviewSession.queue.length) {
     const answer = appState.words.find((word) => word.id === reviewSession.queue[0]);
     if (!answer) {
-      reviewSession.queue.shift();
+      // 同期で消えた未回答語。キューから外すだけだと total に残って「クリアした語」に
+      // 数えられるので、ローカル削除と同じく allIds・total からも取り除く。
+      dropWordFromReviewSession(reviewSession.queue[0]);
       continue;
     }
     // includes だと「すべて・全部」のような大きなセッションで語数×語数の走査が毎問走る。
@@ -29518,9 +29541,7 @@ function buildReviewQuiz() {
     const others = appState.words.filter((word) => word.id !== answer.id);
     let pool = others.filter((word) => sessionIds.has(word.id));
     if (pool.length < 3) pool = others;
-    const srsDueAtStart =
-      Number(answer.learning?.nextReviewAt || 0) > 0 &&
-      Number(answer.learning.nextReviewAt) <= Date.now();
+    const srs = quizSrsSnapshot(answer); // srsDueAtStart と progressStamp
 
     // 「全部」のセッション、または「一部」で例文に割り当てた単語は空所補充で出す
     // ただしフラッシュカード由来の仮習得は、期限到来時だけ必ず通常の意味4択で検証する。
@@ -29553,7 +29574,7 @@ function buildReviewQuiz() {
         prefetchNextContextItem();
         // 前の問題の正誤メッセージが残ったままにならないよう、待機中の案内に差し替える
         elements.quizFeedback.textContent = "例文と選択肢を用意しています…";
-        return { answer, choices: [], answered: false, shownAt: 0, context: null, contextPending: true, srsDueAtStart };
+        return { answer, choices: [], answered: false, shownAt: 0, context: null, contextPending: true, ...srs };
       }
       prefetchNextContextItem();
       if (!item) {
@@ -29577,7 +29598,7 @@ function buildReviewQuiz() {
             answered: false,
             shownAt: Date.now(),
             context: { en: item.en, ja: item.ja || null, src: item.src || "" },
-            srsDueAtStart,
+            ...srs,
           };
         }
         // 誤答候補が足りず空所補充にできなかった。「言い切れる誤答が作れない」場合は
@@ -29633,7 +29654,7 @@ function buildReviewQuiz() {
       answered: false,
       shownAt: Date.now(),
       context: null,
-      srsDueAtStart,
+      ...srs,
       reverse, // 日→英かどうか（採点・promptMode判定・自動読み上げの答え漏れ対策に使う）
     };
   }
@@ -29652,6 +29673,13 @@ function reviewScopeText() {
 }
 
 function renderReviewQuiz() {
+  // 同期で消えた語を先に取り除く。残り数・進捗・結果の数字をここから先は実態に合わせる。
+  const removed = reconcileReviewSessionWords();
+  if (removed > 0 && reviewSession.total === 0) {
+    // 未回答語しか無かったセッションの語が全部消えた。空の結果画面を出す意味はない。
+    endReview("同期で対象の単語がすべて消えたため、復習を終了しました。");
+    return;
+  }
   elements.quizScope.textContent = reviewScopeText();
 
   if (reviewSession.queue.length === 0) {
@@ -29736,9 +29764,7 @@ function buildQuiz() {
     choices,
     answered: false,
     shownAt: Date.now(), // 回答時間の計測起点（速度による習得判定に使う）
-    srsDueAtStart:
-      Number(answer.learning?.nextReviewAt || 0) > 0 &&
-      Number(answer.learning.nextReviewAt) <= Date.now(),
+    ...quizSrsSnapshot(answer), // srsDueAtStart と progressStamp
     reverse, // 日→英クイズかどうか（採点・promptMode判定・自動読み上げの答え漏れ対策に使う）
   };
 }
@@ -29812,6 +29838,27 @@ function srsIntervalMs(stage, multiplier = 1) {
   if (days < 3) return Math.round(days * SRS_DAY_MS);
   const jitter = 1 + (Math.random() * 0.24 - 0.12);
   return Math.round(days * SRS_DAY_MS * jitter);
+}
+
+// 問題を作った時点の「SRSの期限が来ていたか」と、その時点の学習進捗の印。
+// 期限到来の判定は作問時に固定する（考えている間に期限を過ぎても、その回は前進しない）。
+// 印は、表示中に同期で別端末の解答が入ったことを採点時に見抜くために使う。
+function quizSrsSnapshot(word, now = Date.now()) {
+  const dueAt = Number(word.learning?.nextReviewAt || 0);
+  return {
+    srsDueAtStart: dueAt > 0 && dueAt <= now,
+    progressStamp: Number(word.progressUpdatedAt || 0),
+  };
+}
+
+// 採点に使う「期限到来」。問題を出したあと同期で同じ語の学習進捗が変わっていたら
+// （別端末で先に答えた等。progressUpdatedAt が作問時の印と違う）、作問時の値を捨てて
+// 今の学習状態で判定し直す。作問時の true をそのまま使うと、別端末で進んだ段階から
+// もう一段進んでしまい、復習日が二重に延びる。印を持たない問題（古い形）は従来どおり。
+function effectiveSrsDueAtStart(quiz, word, now = Date.now()) {
+  if (quiz.progressStamp === undefined) return Boolean(quiz.srsDueAtStart);
+  if (Number(word.progressUpdatedAt || 0) === quiz.progressStamp) return Boolean(quiz.srsDueAtStart);
+  return quizSrsSnapshot(word, now).srsDueAtStart;
 }
 
 function applyLearningResult(word, isCorrect, srsDueAtStart = false, now = Date.now(), options = {}) {
@@ -30450,7 +30497,10 @@ function finishRecoveryProbe({ force = false } = {}) {
     saveRecoveryState(null);
     return;
   }
-  const complete = answered.length >= alive.length;
+  // 「全部答えた」は残っている語ごとに見る。件数の比較だと、答えたあとに削除した語の分で
+  // 数が合ってしまい、まだ答えていない語が残っているのに完了になる。
+  // 削除した語の回答は「思い出せたか」の観測としては有効なので、推定からは外さない。
+  const complete = alive.every((id) => Object.prototype.hasOwnProperty.call(state.probeAnswers || {}, id));
   if (!complete && !(force && answered.length >= RECOVERY_MIN_PROBE_ANSWERS)) return;
   const results = [];
   for (const id of answered) {
@@ -31793,7 +31843,9 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
 
   // 範囲クイズ・総復習でも通常クイズと同じ判定で学習状態（習得/復習）を更新する
   appState.quizCounter += 1;
-  const srsInfo = applyLearningResult(word, isCorrect, Boolean(currentQuiz.srsDueAtStart), answeredAt, {
+  // 表示中に同期で学習進捗が変わっていたら、作問時の期限到来をそのまま使わない。
+  const srsDueAtStart = effectiveSrsDueAtStart(currentQuiz, word, answeredAt);
+  const srsInfo = applyLearningResult(word, isCorrect, srsDueAtStart, answeredAt, {
     // フラッシュカードの自己申告（low/mid/high）。4択には渡さない。
     selfAssessment: currentQuiz.flashcard ? options.selfAssessment : undefined,
     responseMs,
