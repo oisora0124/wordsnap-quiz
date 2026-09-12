@@ -271,6 +271,8 @@ function buildGradeQuizSandbox() {
     "function renderQuiz() {}",
     extractFunction("currentQuizPromptMode"),
     extractFunction("gradeQuiz"),
+    extractFunction("quizSrsSnapshot"),
+    extractFunction("effectiveSrsDueAtStart"),
     "globalThis.__g = {" +
       " calls," +
       " setCurrentQuiz: (q) => { currentQuiz = q; }," +
@@ -448,6 +450,8 @@ function buildPendingSandbox() {
     extractFunction("isMasteryVerificationDue"),
     extractFunction("mixedFormatUsesContext"),
     extractFunction("buildReviewQuiz"),
+    extractFunction("quizSrsSnapshot"),
+    extractFunction("effectiveSrsDueAtStart"),
     "globalThis.__p = {" +
       " calls," +
       " setWords: (w) => { appState.words = w; }," +

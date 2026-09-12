@@ -139,6 +139,8 @@ function buildQuizSandbox() {
     extractFunction("pickDistractors"),
     extractFunction("pickDistractorsWithFallback"),
     extractFunction("buildQuiz"),
+    extractFunction("quizSrsSnapshot"),
+    extractFunction("effectiveSrsDueAtStart"),
     "globalThis.__b = {" +
       " setWords: (w) => { appState.words = w; currentQuiz = null; }," +
       " setDirection: (v) => { __store[QUIZ_DIRECTION_KEY] = v; }," +
@@ -582,6 +584,8 @@ function buildGradeQuizSandbox() {
     "function renderQuiz() {}",
     extractFunction("currentQuizPromptMode"),
     extractFunction("gradeQuiz"),
+    extractFunction("quizSrsSnapshot"),
+    extractFunction("effectiveSrsDueAtStart"),
     "globalThis.__g = {" +
       " calls," +
       " setCurrentQuiz: (q) => { currentQuiz = q; }," +
@@ -724,6 +728,8 @@ function buildReviewQuizSandbox() {
     extractFunction("isMasteryVerificationDue"),
     extractFunction("mixedFormatUsesContext"),
     extractFunction("buildReviewQuiz"),
+    extractFunction("quizSrsSnapshot"),
+    extractFunction("effectiveSrsDueAtStart"),
     "globalThis.__rq = {" +
       " setWords: (w) => { appState.words = w; }," +
       " setSession: (s) => { reviewSession = s; }," +
@@ -917,6 +923,7 @@ function buildStartReviewSandbox() {
     "function renderQuiz() {}",
     "function setStatus() {}",
     "function prefersReducedMotion() { return true; }",
+    "function clearAutoNextTimer() {}",
     extractFunction("persistReviewProgress"),
     extractFunction("startReview"),
     "globalThis.__sr = {" +

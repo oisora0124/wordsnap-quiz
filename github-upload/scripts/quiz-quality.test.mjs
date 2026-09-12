@@ -376,6 +376,8 @@ test("due provisional mastery bypasses context formats in the actual review quiz
       "const choiceCountNote = () => '';",
       extractFunction("isMasteryVerificationDue"),
       extractFunction("buildReviewQuiz"),
+      extractFunction("quizSrsSnapshot"),
+      extractFunction("effectiveSrsDueAtStart"),
       "globalThis.__quiz = buildReviewQuiz();",
     ];
     const sandbox = {};
