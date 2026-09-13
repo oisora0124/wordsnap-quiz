@@ -6943,7 +6943,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.107</span>
+        <span class="app-footer-version">バージョン 1.0.108</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7081,7 +7081,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.107";
+  const APP_REV = "1.0.108";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -19172,13 +19172,21 @@ function sanitizeTrash(raw, now) {
     const existing = entries.get(key);
     if (!existing || deletedAt > existing.deletedAt) {
       entries.set(key, {
-        id: item?.id || `${key}:${deletedAt}`,
+        id: String(item?.id || `${key}:${deletedAt}`), // DOM の data-trash-id と同じく文字列で扱う
         word,
         deletedAt,
       });
     }
   }
-  return [...entries.values()].sort((a, b) => b.deletedAt - a.deletedAt);
+  // id は「戻す」「完全削除」がどの行かを指す鍵。壊れたデータで同じ id が別の語に
+  // 付いていると、押した行とは別の語を戻したり消したりするので、重なったら振り直す。
+  const usedIds = new Set();
+  const list = [...entries.values()].sort((a, b) => b.deletedAt - a.deletedAt);
+  for (const entry of list) {
+    while (usedIds.has(entry.id)) entry.id = createId();
+    usedIds.add(entry.id);
+  }
+  return list;
 }
 
 function addWordToTrash(word, deletedAt = Date.now()) {
@@ -21602,6 +21610,14 @@ async function pullWordsnapState(options = {}) {
 // window.confirm() はiOSでホーム画面に追加した状態（standalone）だと正しく表示されず、
 // 画面全体が反応しなくなることがあるため使わない。代わりに「もう一度押すと確定」の
 // 2段階クリックにする（一定時間内に再度押さなければ自動的に取り消される）。
+// 2段階確認を解除して元の表示に戻す（対象が変わったときに、前の確認を無効にするために使う）。
+function disarmDangerButton(button) {
+  if (!button || button.dataset.armed !== "1") return;
+  window.clearTimeout(Number(button.dataset.armTimer || 0));
+  delete button.dataset.armed;
+  button.textContent = button.dataset.originalLabel || button.textContent;
+}
+
 function armDangerButton(button, armedLabel, timeoutMs = 4000) {
   if (!button) return true; // ボタンが無ければ確認をスキップして先に進める
   if (button.dataset.armed === "1") {
@@ -21796,7 +21812,6 @@ async function restoreFromRevision(rev) {
   try {
     const remote = await syncRequest("GET", null, { revision: rev });
     const localSnapshot = snapshotState();
-    offerUndo(localSnapshot);
     syncState.connected = true;
     syncState.applyingRemote = true;
     try {
@@ -21809,6 +21824,9 @@ async function restoreFromRevision(rev) {
       syncState.applyingRemote = false;
     }
     renderAll();
+    // 取り消しの提示は置換・保存のあとで。先に出すと「置換後に内容が変わっていないか」の指紋が
+    // 置換前の状態になり、復元直後の取り消しが拒否される。
+    offerUndo(localSnapshot);
     const restoredTarget = syncRequestRoute().expectedSyncId;
     const restoredWordCount = appState.words.length;
     const result = await syncPutState(null, { force: true });
@@ -22872,19 +22890,69 @@ function readLocalUndoSnapshot() {
   }
 }
 
+// 再読込後も「その後に変わっていないか」を見られるよう、保存した指紋と提示時刻を読む
+// （旧い保存には指紋が無い。その場合は提示時刻と最後の保存時刻で判断する）。
+function readLocalUndoRecordMeta() {
+  try {
+    const record = JSON.parse(localStorage.getItem(UNDO_STORAGE_KEY));
+    return {
+      after: typeof record?.after === "string" ? record.after : null,
+      createdAt: nonNegativeNumber(record?.createdAt),
+    };
+  } catch {
+    return { after: null, createdAt: 0 };
+  }
+}
+
+// 取り消す操作の直後の指紋。performUndo で「その後に内容が変わっていないか」を見る。
+// 保存データの読み戻し（次の行）より前に宣言すること（後ろだと起動時に TDZ で止まる）。
+let undoAfterSignature = null;
+let undoCreatedAt = 0; // 提示時刻。指紋の無い旧い保存データでは、これと最後の保存時刻で判断する
 let undoSnapshot = readLocalUndoSnapshot();
+if (undoSnapshot) ({ after: undoAfterSignature, createdAt: undoCreatedAt } = readLocalUndoRecordMeta());
 if (undoSnapshot && elements.undoButton) elements.undoButton.hidden = false;
 
 function snapshotState() {
   return JSON.parse(JSON.stringify(appState));
 }
 
+// 「元に戻す」を許してよいかを判定するための、状態の指紋。
+// 取り消す操作の直後の状態と、押した時点の状態が同じ（＝その間に学習・同期・編集が無い）
+// ときだけ戻せる。全状態を丸ごと置き換える方式なので、間に別の語の解答や他端末の変更が
+// 入っていると、それらまで巻き戻してしまうため。
+// cefr / pos / enrich / addedAt など、背景の補完で勝手に変わる項目は含めない
+// （含めると取り込み直後の品詞補完だけで取り消せなくなる）。
+// 語は normalizeWord を通してから見る。取り込み直後の語には deckUpdatedAt 等が無く、
+// 再読込で 0 が補われるので、生のまま比べると「再読込しただけで取り消せない」になる。
+function undoSignature(state) {
+  const now = Date.now();
+  const words = (state?.words || []).map((raw) => {
+    const w = normalizeWord(raw);
+    return [
+      w.id, w.term, w.meaning, w.deckId, w.deckUpdatedAt, w.favorite, w.favoriteUpdatedAt,
+      w.progressUpdatedAt, w.stats, w.history, w.learning,
+    ];
+  });
+  return JSON.stringify({
+    words,
+    decks: (state?.decks || []).map((deck) => [
+      String(deck?.id || ""), String(deck?.name || ""), nonNegativeNumber(deck?.updatedAt),
+    ]),
+    deletions: Object.entries(sanitizeDeletions(state?.deletions, now)).sort((a, b) => a[0].localeCompare(b[0])),
+    trash: sanitizeTrash(state?.trash, now).map((entry) => String(entry.id)),
+    quizCounter: nonNegativeInteger(state?.quizCounter),
+    streak: normalizeStreak(state?.streak),
+  });
+}
+
 function offerUndo(snapshot) {
   undoSnapshot = snapshot;
+  undoAfterSignature = undoSignature(appState);
+  undoCreatedAt = Date.now();
   // V2合流専用の導線は、合流処理側がこの直後にだけ表示する。
   // ほかの操作がUndoを置き換えた場合は古い合流導線を残さない。
   setV2JoinUndoVisible(false);
-  const json = JSON.stringify({ createdAt: Date.now(), state: snapshot });
+  const json = JSON.stringify({ createdAt: undoCreatedAt, state: snapshot, after: undoAfterSignature });
   try {
     localStorage.setItem(UNDO_STORAGE_KEY, json);
   } catch {
@@ -22895,6 +22963,8 @@ function offerUndo(snapshot) {
 
 function clearUndo() {
   undoSnapshot = null;
+  undoAfterSignature = null;
+  undoCreatedAt = 0;
   setV2JoinUndoVisible(false);
   try {
     localStorage.removeItem(UNDO_STORAGE_KEY);
@@ -22906,21 +22976,42 @@ function clearUndo() {
 
 function performUndo() {
   if (!undoSnapshot) return;
-  const restored = normalizeState(undoSnapshot);
+  // 取り消す操作のあとに学習・同期・編集で内容が変わっていたら、丸ごと戻すと
+  // それらまで消えるので戻さない（削除した語は「削除済み」から個別に戻せる）。
+  // 指紋の無い旧い保存データは、提示のあとに保存（学習・同期・編集はすべて保存を伴う）が
+  // 無いときだけ戻す。
+  const changedSince = undoAfterSignature
+    ? undoSignature(appState) !== undoAfterSignature
+    : undoCreatedAt > 0 && nonNegativeNumber(appState.savedAt) > undoCreatedAt;
+  if (changedSince) {
+    clearUndo();
+    setStatus(
+      "取り消す操作のあとに学習や同期で内容が変わったため、元に戻せませんでした。削除した単語は「削除済み」から戻せます。",
+    );
+    return;
+  }
+  const restored = consolidateSameNameDecks(normalizeState(undoSnapshot));
   // スナップショット取得後に付いた墓標（＝いま取り消した削除の記録）に復元語が負けないようにする。
   // 墓標は別端末へ同期済みの可能性があるため、取り除くだけでは不十分で、
   // restoreTrashWord と同じく復元する単語の追加時刻を現在に更新して復活を確定させる。
-  const currentDeletions = (appState && appState.deletions) || {};
-  const nowIso = new Date().toISOString();
+  // 現在の墓標は、戻す状態の単語帳ID（強制取得・過去版復元のあとは別IDの同名単語帳になっている
+  // ことがある）へ読み替えてから突き合わせる。読み替えないと戻した語の墓標を見落とす。
+  const remapDeck = buildDeckIdRemap((appState && appState.decks) || [], restored.decks);
+  const currentDeletions = {};
+  for (const [rawKey, ts] of Object.entries((appState && appState.deletions) || {})) {
+    const key = remapDeletionKeyWith(rawKey, remapDeck);
+    currentDeletions[key] = Math.max(Number(currentDeletions[key] || 0), Number(ts || 0));
+  }
   for (const word of restored.words) {
     const keys = [deletionKeyForWord(word), normalizeTerm(word.term)]; // 新形式＋旧形式
+    let latest = 0;
     for (const key of keys) {
       const ts = Math.max(Number(currentDeletions[key] || 0), Number(restored.deletions[key] || 0));
-      if (ts && ts >= wordAddedMs(word)) {
-        word.addedAt = nowIso; // 墓標より新しい追加時刻にする
-        delete restored.deletions[key];
-      }
+      if (!ts) continue;
+      latest = Math.max(latest, ts);
+      delete restored.deletions[key];
     }
+    if (latest && latest >= wordAddedMs(word)) word.addedAt = revivedAddedAtIso(latest); // 墓標より新しい追加時刻にする
   }
   appState = restored;
   currentQuiz = null;
@@ -22976,6 +23067,9 @@ function addDeck() {
   const deck = { id: createId(), name, updatedAt: Date.now() };
   appState.decks.push(deck);
   appState.activeDeckId = deck.id;
+  // 表示が新しい（空の）単語帳へ切り替わる。見えない選択を残すと、そのまま
+  // 「選んだ単語を削除」で見えていない語が消えるので、単語帳の切替と同じく捨てる。
+  selectedIds.clear();
   currentQuiz = null;
   saveState();
   setStatus(`単語帳「${name}」を作成しました。`);
@@ -23011,6 +23105,31 @@ function deleteDeck(button) {
   const count = appState.words.filter((word) => word.deckId === deck.id).length;
   // 削除後は先頭の単語帳（＝削除対象を除いた最初の単語帳）へ残単語が移る。名前を先に出して不安をなくす
   const targetDeck = appState.decks.find((item) => item.id !== deck.id);
+  // 移動先に同じ語がある語は移せない（同じ単語帳に同じ語が2つあると次の同期で1語に畳まれ、
+  // 片方の意味が消える）。確認を求める前に止めて、先に片づける語を伝える。
+  const conflicts = appState.words.filter(
+    (word) => word.deckId === deck.id && deckHasTerm(targetDeck.id, word.term, word.id),
+  );
+  if (conflicts.length > 0) {
+    const sample = conflicts.slice(0, 3).map((word) => `「${word.term}」`).join("");
+    const more = conflicts.length > 3 ? ` ほか${conflicts.length - 3}語` : "";
+    setStatus(
+      `単語帳「${deck.name}」はまだ削除できません。${sample}${more}は移動先の「${targetDeck.name}」にも同じ語があります。先にどちらかを別の単語帳へ移すか、訳を1つにまとめて片方を削除してください。`,
+    );
+    return;
+  }
+  // 移動先に新しい削除記録が残っている語も動かせない（次の同期で消えるため）。
+  const blockedByDeletion = appState.words.filter(
+    (word) => word.deckId === deck.id && deletionBlocksMove(targetDeck.id, word),
+  );
+  if (blockedByDeletion.length > 0) {
+    const sample = blockedByDeletion.slice(0, 3).map((word) => `「${word.term}」`).join("");
+    const more = blockedByDeletion.length > 3 ? ` ほか${blockedByDeletion.length - 3}語` : "";
+    setStatus(
+      `単語帳「${deck.name}」はまだ削除できません。${sample}${more}は移動先の「${targetDeck.name}」で以前に削除した記録が残っていて、そのまま移すと同期で消えます。先にその語を別の単語帳へ移すか、削除してください。`,
+    );
+    return;
+  }
   const note = count > 0 ? `含まれる${count}語は「${targetDeck.name}」へ移動します。` : "";
   // window.confirm はiOSのホーム画面起動で固まるため、2段階タップで確定する
   if (!armDangerButton(button, "もう一度押すと削除")) {
@@ -23037,14 +23156,188 @@ function deleteDeck(button) {
   );
 }
 
+// 移動先の単語帳に同じ語（normalizeTerm が同じ）が既にあるか。
+// 同期の同一性は「単語帳＋語」なので、同じ単語帳に同じ語が2つあると次のマージで
+// 1語に畳まれ、片方の意味が消えて履歴も混ざる。取り込み・復元はこの前提を守っているので、
+// 移動・単語帳の削除も同じ前提で止める。
+function deckHasTerm(deckId, term, excludeId = null) {
+  const key = normalizeTerm(term);
+  // 同名の単語帳（別端末で同時に同じ名前へ改名した等）は、同期のマージで同じ単語帳として
+  // 扱われるので、ここでも代表IDで比べる。
+  const canon = canonicalDeckIdMapper(appState.decks);
+  const target = canon(deckId);
+  return appState.words.some(
+    (word) => word.id !== excludeId && canon(word.deckId) === target && normalizeTerm(word.term) === key,
+  );
+}
+
+// 移動先の単語帳に同じ語の削除記録（墓標）が残っていると、移動した語が次の同期で
+// その墓標に負けて消える（削除判定は追加時刻と学習時刻しか見ず、移動時刻は見ない）。
+// 「削除済み」から戻すときと同じく、追加時刻を今にして墓標より新しくし、端末側の墓標も消す。
+// deckId を移動先へ変えたあとに呼ぶこと（墓標のキーは単語帳＋語）。
+// 復活させる語の追加時刻。削除記録（墓標）より必ず新しくする＝「今」か「墓標の直後」の遅い方
+// （端末の時計が進んだ状態で付いた未来の墓標にも負けない）。極端な値で Date が壊れないよう、
+// 1年先までに抑える。
+function revivedAddedAtIso(ts = 0) {
+  const now = Date.now();
+  const at = Math.min(Math.max(now, Number(ts || 0) + 1), now + 365 * 24 * 60 * 60 * 1000);
+  return new Date(at).toISOString();
+}
+
+// 語の所属に対する削除記録（墓標）を手元から消し、墓標が語の追加時刻以上なら追加時刻を
+// 墓標より新しくする。「削除済み」から戻す・元に戻す・JSON読み込みで使う。
+// deckId を確定させたあとに呼ぶこと（墓標のキーは単語帳＋語）。
+// 限界: 同期先にだけ残っている墓標は手元では見えないため、この処理では救えない
+// （従来の「削除済み」から戻す と同じ。同期の仕様に「復活の時刻」を足す設計が別途要る）。
+function reviveAgainstDeletion(word) {
+  const deletions = appState.deletions || {};
+  const keys = [deletionKeyForWord(word), normalizeTerm(word.term)]; // 新形式＋旧形式
+  let latest = 0;
+  let found = false;
+  for (const key of keys) {
+    const ts = Number(deletions[key] || 0);
+    if (!ts) continue;
+    latest = Math.max(latest, ts);
+    delete deletions[key];
+    found = true;
+  }
+  if (found && latest >= wordAddedMs(word)) word.addedAt = revivedAddedAtIso(latest);
+  return found;
+}
+
+// 置換前の単語帳IDを、置換後の同じ単語帳（同じID、なければ正規化した名前が同じ。同名は先勝ち）
+// のIDへ読み替える関数を返す。同期のマージ（addDeck）と同じ規則。JSON読み込み・元に戻すで、
+// 別端末で作った同名別IDの単語帳の墓標を取りこぼさないために使う。
+function buildDeckIdRemap(fromDecks, toDecks) {
+  const nameKey = (deck) => String(deck?.name || "").trim().toLowerCase();
+  const toIds = new Set((toDecks || []).map((deck) => deck.id));
+  const toByName = new Map();
+  for (const deck of toDecks || []) {
+    const key = nameKey(deck);
+    if (!toByName.has(key)) toByName.set(key, deck.id);
+  }
+  const map = new Map();
+  for (const deck of fromDecks || []) {
+    map.set(deck.id, toIds.has(deck.id) ? deck.id : toByName.get(nameKey(deck)) || deck.id);
+  }
+  return (deckId) => map.get(deckId) || deckId;
+}
+
+// 同じ状態の中に同名の単語帳が複数あるとき、同期のマージ（addDeck）は先頭の単語帳へ統合する。
+// その代表IDへ読み替える関数を返す（同名が無ければ恒等）。
+function canonicalDeckIdMapper(decks) {
+  const nameKey = (deck) => String(deck?.name || "").trim().toLowerCase();
+  const firstByName = new Map();
+  const map = new Map();
+  for (const deck of decks || []) {
+    const key = nameKey(deck);
+    if (!firstByName.has(key)) firstByName.set(key, deck.id);
+    map.set(deck.id, firstByName.get(key));
+  }
+  return (deckId) => map.get(deckId) || deckId;
+}
+
+// 墓標のキー（`単語帳ID 語`）の単語帳IDを読み替える。旧形式（語だけ）はそのまま。
+function remapDeletionKeyWith(key, remap) {
+  const sep = key.indexOf(" ");
+  if (sep <= 0) return key;
+  return `${remap(key.slice(0, sep))}${key.slice(sep)}`;
+}
+
+// 同名の単語帳が複数ある状態（別端末で作ったバックアップ等）を、同期のマージが後でやるのと
+// 同じ形にその場で揃える: 先頭の単語帳へ統合し、語・削除記録・削除済み・表示中の単語帳の
+// 所属を読み替える。統合で同じ単語帳に同じ語が2つになったら、同期と同じ mergeWord で1語にする
+// （黙って後の同期に任せると、それまで移動や削除の判定が同期の同一性とずれる）。
+// 同名が無ければ何も変えない。JSON読み込みと「元に戻す」で使う。
+function consolidateSameNameDecks(state) {
+  const canon = canonicalDeckIdMapper(state.decks);
+  if (!(state.decks || []).some((deck) => canon(deck.id) !== deck.id)) return state;
+  state.decks = state.decks.filter((deck) => canon(deck.id) === deck.id);
+  const byKey = new Map();
+  const words = [];
+  for (const word of state.words) {
+    word.deckId = canon(word.deckId);
+    const key = `${word.deckId}:${normalizeTerm(word.term)}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      Object.assign(existing, mergeWord(existing, word, "local"));
+      continue;
+    }
+    byKey.set(key, word);
+    words.push(word);
+  }
+  state.words = words;
+  const deletions = {};
+  for (const [rawKey, ts] of Object.entries(state.deletions || {})) {
+    const key = remapDeletionKeyWith(rawKey, canon);
+    deletions[key] = Math.max(Number(deletions[key] || 0), Number(ts || 0));
+  }
+  state.deletions = deletions;
+  // 削除済みも所属を読み替え、同じ語（単語帳＋語）は新しい方だけ残し、生きている語と重なる項目は除く
+  // （同期のマージと同じ形）。
+  for (const entry of state.trash || []) {
+    if (entry?.word) entry.word.deckId = canon(entry.word.deckId);
+  }
+  const liveKeys = new Set(state.words.map((word) => trashKeyForWord(word)));
+  state.trash = sanitizeTrash(state.trash, Date.now()).filter(
+    (entry) => !liveKeys.has(trashKeyForWord(entry.word)),
+  );
+  if (state.activeDeckId !== "all") state.activeDeckId = canon(state.activeDeckId);
+  return state;
+}
+
+// 単語帳をまたぐ移動で、移動先にこの語の削除記録（墓標）が残っていて、しかも語の追加・学習より
+// 新しいか。そのまま動かすと次の同期でその墓標に負けて語が学習データごと消える。
+// 追加時刻を今にして救う方法は、移動前の古い写しを持つ端末と合流すると追加時刻が古い方へ戻り
+// （マージは古い追加時刻を採る）2回目の同期で消えるため、マージの規則を変えない範囲では
+// 移動を止めるのが確実。
+function deletionBlocksMove(deckId, word) {
+  const deletions = appState.deletions || {};
+  const term = normalizeTerm(word.term);
+  // 同名の単語帳は同期のマージで1つに統合され、墓標もその代表IDへ読み替えられる。
+  // なので墓標は「移動先そのもの」と「移動先の代表」の両方で探し、単語帳の数も代表IDで数える。
+  const canon = canonicalDeckIdMapper(appState.decks);
+  const deckCount = new Set(
+    appState.words.filter((w) => w.id !== word.id && normalizeTerm(w.term) === term).map((w) => canon(w.deckId)),
+  ).add(canon(deckId)).size;
+  // 同期と同じく、新形式の墓標があればそれだけを見る。無いときだけ旧形式を見る。
+  // 新形式は、移動先と同じ単語帳とみなされる（代表IDが同じ）すべての単語帳IDの墓標を見る
+  // （同期は非代表側の墓標も代表IDへ読み替えて使うため）。
+  // 旧形式（語だけ）は「その語が1つの単語帳にしか無い」ときだけ効く（同期と同じ条件）。
+  const destination = canon(deckId);
+  const siblingIds = new Set([deckId, ...appState.decks.filter((deck) => canon(deck.id) === destination).map((deck) => deck.id)]);
+  let tsNew = 0;
+  for (const id of siblingIds) {
+    tsNew = Math.max(tsNew, Number(deletions[deletionKeyForWord({ ...word, deckId: id })] || 0));
+  }
+  const ts = tsNew || (deckCount <= 1 ? Number(deletions[term] || 0) : 0);
+  return Boolean(ts && ts >= wordAddedMs(word) && ts >= wordProgressMs(word));
+}
+
 function moveWordToDeck(wordId, deckId) {
   const word = appState.words.find((item) => item.id === wordId);
-  if (!word || !appState.decks.some((deck) => deck.id === deckId)) return;
+  if (!word || !appState.decks.some((deck) => deck.id === deckId)) return false;
+  if (word.deckId === deckId) return true; // 同じ単語帳なら何もしない（移動時刻を無駄に更新しない）
+  if (deckHasTerm(deckId, word.term, word.id)) {
+    setStatus(
+      `「${word.term}」は単語帳「${deckName(deckId)}」にもうあるため移動できません。移動先の「${word.term}」を別の単語帳へ移すか、訳を移動先の語に書き足してこちらを削除してください。`,
+    );
+    return false;
+  }
+  if (deletionBlocksMove(deckId, word)) {
+    setStatus(
+      `「${word.term}」は単語帳「${deckName(deckId)}」で以前に削除した記録が残っているため、そのまま移すと同期で消えます。別の単語帳へ移すか、「${deckName(deckId)}」で「${word.term}」を取り込み直してからこちらを削除してください（学習の記録は引き継げません）。`,
+    );
+    return false;
+  }
   word.deckId = deckId;
   // 移動時刻を残す。これが無いとマージでローカル優先に倒れ、別端末での移動が消える。
   word.deckUpdatedAt = Date.now();
+  // 移動した語は表示中の単語帳から消えるので、見えない選択を残さない（一括移動と同じ扱い）。
+  selectedIds.delete(word.id);
   saveState();
   setStatus(`「${word.term}」を単語帳「${deckName(deckId)}」へ移動しました。`);
+  return true;
 }
 
 function deckOptionsMarkup(selectedId) {
@@ -25960,13 +26253,10 @@ function restoreTrashWord(trashId) {
   const now = new Date().toISOString();
   word.id = appState.words.some((entry) => entry.id === word.id) ? createId() : word.id;
   word.addedAt = now;
+  // 手元の墓標（新形式＋旧形式）を消す。墓標が未来時刻なら、追加時刻をその直後にする。
+  reviveAgainstDeletion(word);
   appState.words.push(word);
   appState.trash = (appState.trash || []).filter((entry) => entry.id !== trashId);
-  if (appState.deletions) {
-    // 新形式（デッキID＋単語）と旧形式（単語のみ）の両方の墓標を消す
-    delete appState.deletions[deletionKeyForWord(word)];
-    delete appState.deletions[normalizeTerm(word.term)];
-  }
   // 「すべて」表示中は復元語もそのまま一覧に出るので、閲覧中のデッキを勝手に切り替えない。
   // 特定デッキ表示中だけ、復元先のデッキへ切り替えて復元結果が見えるようにする。
   if (appState.activeDeckId !== "all") appState.activeDeckId = word.deckId;
@@ -33717,7 +34007,11 @@ elements.savedList.addEventListener("change", (event) => {
   }
 
   const select = event.target.closest("[data-move-word]");
-  if (select) moveWordToDeck(select.dataset.moveWord, select.value);
+  if (select && !moveWordToDeck(select.dataset.moveWord, select.value)) {
+    // 移動できなかった（移動先に同じ語がある等）ときは、選択欄を実際の所属へ戻す。
+    const word = appState.words.find((item) => item.id === select.dataset.moveWord);
+    if (word) select.value = word.deckId;
+  }
 });
 
 elements.deckBar.addEventListener("click", async (event) => {
@@ -34302,9 +34596,46 @@ elements.moveSelectedButton?.addEventListener("click", () => {
   const idSet = new Set(ids);
   // すでに移動先デッキにいる単語は数えない・触らない。
   // 触ると deckUpdatedAt が無駄に更新され、他端末で行われた移動を上書きしてしまう。
-  const targets = appState.words.filter((word) => idSet.has(word.id) && word.deckId !== deckId);
-  if (targets.length === 0) {
+  // 同名の単語帳は同期で1つに統合されるので、代表IDで比べる（別端末での同時改名で同名が残ることがある）
+  const canonDeck = canonicalDeckIdMapper(appState.decks);
+  const destination = canonDeck(deckId);
+  const candidatesToMove = appState.words.filter(
+    (word) => idSet.has(word.id) && canonDeck(word.deckId) !== destination,
+  );
+  if (candidatesToMove.length === 0) {
     setStatus(`選んだ単語はすでにすべて単語帳「${deckName(deckId)}」に入っています。`);
+    return;
+  }
+  // 移動先に同じ語がある語（選んだ語どうしの重なりも含む）は動かさない。
+  // 同じ単語帳に同じ語が2つあると次の同期で1語に畳まれ、片方の意味が消えるため。
+  const destTerms = new Set(
+    appState.words
+      .filter((word) => canonDeck(word.deckId) === destination)
+      .map((word) => normalizeTerm(word.term)),
+  );
+  const targets = [];
+  const blockedByTerm = [];
+  const blockedByDeletion = [];
+  for (const word of candidatesToMove) {
+    const key = normalizeTerm(word.term);
+    if (destTerms.has(key)) {
+      blockedByTerm.push(word);
+      continue;
+    }
+    // 移動先に、この語の新しい削除記録が残っている語も動かさない（次の同期で消えるため）。
+    if (deletionBlocksMove(deckId, word)) {
+      blockedByDeletion.push(word);
+      continue;
+    }
+    destTerms.add(key);
+    targets.push(word);
+  }
+  const blockedNote = [
+    blockedByTerm.length ? `${blockedByTerm.length}件（${blockedByTerm.slice(0, 3).map((w) => w.term).join("、")}${blockedByTerm.length > 3 ? " ほか" : ""}）は移動先に同じ語があるため残しました。` : "",
+    blockedByDeletion.length ? `${blockedByDeletion.length}件（${blockedByDeletion.slice(0, 3).map((w) => w.term).join("、")}${blockedByDeletion.length > 3 ? " ほか" : ""}）は移動先で以前に削除した記録があり、同期で消えるため残しました。` : "",
+  ].join("");
+  if (targets.length === 0) {
+    setStatus(`単語帳「${deckName(deckId)}」へ移動できる語がありません。${blockedNote}`);
     return;
   }
   const snapshot = snapshotState();
@@ -34321,7 +34652,7 @@ elements.moveSelectedButton?.addEventListener("click", () => {
   selectedIds.clear();
   saveState();
   offerUndo(snapshot);
-  setStatus(`${targets.length}件を単語帳「${deckName(deckId)}」へ移動しました。`);
+  setStatus(`${targets.length}件を単語帳「${deckName(deckId)}」へ移動しました。${blockedNote}`);
 });
 
 // 選んだ単語をまとめて削除（ゴミ箱に30日保管・元に戻せる）
@@ -34332,13 +34663,22 @@ elements.deleteSelectedButton?.addEventListener("click", () => {
     return;
   }
   const targets = appState.words.filter((word) => ids.includes(word.id));
+  // 確認したときの対象と、確定するときの対象が同じであることを確かめる。
+  // 1回目のあと4秒以内に選択を変えて2回目を押すと、確認文に無かった語まで消えるため。
+  const armedIds = ids.slice().sort().join(",");
+  const deleteButton = elements.deleteSelectedButton;
+  if (deleteButton?.dataset.armed === "1" && deleteButton.dataset.armedIds !== armedIds) {
+    disarmDangerButton(deleteButton); // 対象が変わった。前の確認は捨てて、いまの対象で確認し直す
+  }
   // window.confirm はiOSのホーム画面起動で固まるため、2段階タップで確定する
-  if (!armDangerButton(elements.deleteSelectedButton, "もう一度押すと削除")) {
+  if (!armDangerButton(deleteButton, "もう一度押すと削除")) {
+    if (deleteButton) deleteButton.dataset.armedIds = armedIds;
     setStatus(
       `選んだ ${targets.length}件 を削除します（30日間「削除済み」から戻せます）。よければもう一度押してください（4秒で取り消し）。`,
     );
     return;
   }
+  if (deleteButton) delete deleteButton.dataset.armedIds;
   const idSet = new Set(ids);
   const snapshot = snapshotState();
   targets.forEach((word) => recordDeletion(word));
@@ -34602,6 +34942,15 @@ function showImportedV2CredentialConfirm(credential) {
   if (elements.importConfirmButton) {
     elements.importConfirmButton.textContent = "接続する";
     elements.importConfirmButton.classList.remove("danger");
+    // 「置き換える」を素早く2回押したとき、2回目が同じ位置の「接続する」として
+    // 通らないよう、少しの間だけ押せなくする（読み直してから押してもらう）。
+    const button = elements.importConfirmButton;
+    button.dataset.holdDisabled = "1";
+    button.disabled = true;
+    window.setTimeout(() => {
+      delete button.dataset.holdDisabled;
+      if (importConfirmMode === "credential") button.disabled = false;
+    }, 1000);
   }
   if (elements.importConfirmBar) elements.importConfirmBar.hidden = false;
 }
@@ -34673,9 +35022,16 @@ async function connectImportedV2Credential(credential) {
   }
 }
 
+// 読み込みの世代番号。前のファイルの確認中に別のファイルを選んだとき、先に選んだ方の
+// 読み込みが遅れて完了しても採用しない（最後に選んだファイルだけが確認に出る）。
+let importReadGen = 0;
+
 elements.importJsonInput.addEventListener("change", async () => {
   const [file] = elements.importJsonInput.files;
   if (!file) return;
+  const gen = ++importReadGen;
+  // 前のファイルの確認バーが出たままだと、読み込み中に「置き換える」を押せてしまう。
+  hideImportConfirmBar();
 
   try {
     if (file.size > IMPORT_MAX_FILE_BYTES) {
@@ -34684,6 +35040,7 @@ elements.importJsonInput.addEventListener("change", async () => {
       return;
     }
     const imported = JSON.parse(await file.text());
+    if (gen !== importReadGen) return; // その後に別のファイルが選ばれた
     if (imported?.kind === "wordbank-deck") {
       hideImportConfirmBar();
       setStatus("これは共有単語帳のJSONです。隣の「共有単語帳を追加」から読み込んでください。");
@@ -34703,53 +35060,98 @@ elements.importJsonInput.addEventListener("change", async () => {
         : null;
     resetImportConfirmUi();
     if (elements.importConfirmText) {
-      elements.importConfirmText.textContent = `現在のデータを、読み込んだ${imported.words.length}語で置き換えます（「元に戻す」で取り消せます）。`;
+      // 件数は正規化後（単語か意味が空の行は入らない）の数を出す。生の行数を出すと、
+      // 「100語」と確認したのに実際は少ない、という食い違いになる。
+      // normalizeState は使わない（重複IDの振り直しで選択と再開データを消す副作用があり、
+      // ファイルを選んだだけで消えてしまう）。normalizeWord と同じ「単語と意味が空でない」で数える。
+      const usable = imported.words.filter(
+        (word) => word && String(word.term || "").trim() && String(word.meaning || "").trim(),
+      ).length;
+      const dropped = imported.words.length - usable;
+      const droppedNote = dropped > 0 ? `${dropped}行は単語か意味が空のため読み込めません。` : "";
+      elements.importConfirmText.textContent = `現在のデータを、読み込んだ${usable}語で置き換えます（「元に戻す」で取り消せます）。${droppedNote}`;
     }
     if (elements.importConfirmBar) elements.importConfirmBar.hidden = false;
     setStatus("内容を確認して「置き換える」を押してください。");
   } catch {
+    // 先に選んだファイルの失敗で、あとから選んだファイルの確認を消さない。
+    if (gen !== importReadGen) return;
     hideImportConfirmBar();
     setStatus("JSONを読み込めませんでした。書き出したデータを選んでください。");
   } finally {
-    elements.importJsonInput.value = "";
+    if (gen === importReadGen) elements.importJsonInput.value = "";
   }
 });
 
+let importConfirmBusy = false; // 処理中の二重押しを防ぐ
+
 elements.importConfirmButton?.addEventListener("click", async () => {
-  if (importConfirmMode === "credential") {
-    const credential = pendingImportV2Credential;
-    hideImportConfirmBar();
-    if (credential && !getActiveV2Credential()) {
-      await connectImportedV2Credential(credential);
+  if (importConfirmBusy) return;
+  importConfirmBusy = true;
+  if (elements.importConfirmButton) elements.importConfirmButton.disabled = true;
+  try {
+    if (importConfirmMode === "credential") {
+      const credential = pendingImportV2Credential;
+      hideImportConfirmBar();
+      if (credential && !getActiveV2Credential()) {
+        await connectImportedV2Credential(credential);
+      }
+      return;
     }
-    return;
-  }
-  if (!pendingImport) return;
-  const imported = pendingImport;
-  const importedCredential = pendingImportV2Credential;
-  const snapshot = snapshotState();
-  const previousWords = appState.words;
-  appState = normalizeState(imported);
-  invalidatePersonalFactorCache();
-  // 【復活防止】置き換えで消えた単語（置換前にあり置換後に無い）へ削除の記録（墓標）を付ける。
-  // これが無いと、次の同期マージで他端末側に残っている同じ単語が復活してしまう。
-  // 同じ単語が置換後にも存在すればキーが一致して墓標は付かない＝再インポートしても冪等。
-  const deletedAt = Date.now();
-  const nextKeys = new Set(appState.words.map((word) => deletionKeyForWord(word)));
-  for (const word of previousWords) {
-    const key = deletionKeyForWord(word);
-    if (!nextKeys.has(key)) appState.deletions[key] = deletedAt;
-  }
-  currentQuiz = null;
-  saveState();
-  offerUndo(snapshot);
-  trackUsage("json-import");
-  if (importedCredential && !getActiveV2Credential()) {
-    showImportedV2CredentialConfirm(importedCredential);
-    setStatus("JSONデータを読み込みました。引き継ぎコードで接続するか確認してください。");
-  } else {
-    hideImportConfirmBar();
-    setStatus("JSONデータを読み込みました。「元に戻す」で取り消せます。");
+    if (!pendingImport) return;
+    const imported = pendingImport;
+    const importedCredential = pendingImportV2Credential;
+    const snapshot = snapshotState();
+    const previousWords = appState.words;
+    const previousDecks = appState.decks || [];
+    const previousDeletions = appState.deletions || {};
+    // 読み込んだ状態に同名の単語帳が複数あれば、同期のマージと同じ形（先頭へ統合）に先に揃える。
+    // 揃えないと、読み込んだ側の墓標や語の所属が同期の同一性とずれ、戻した語が次の同期で消える。
+    appState = consolidateSameNameDecks(normalizeState(imported));
+    invalidatePersonalFactorCache();
+    // 置換前後の単語帳を「同じID、なければ正規化した名前が同じ」で対応させる（同期のマージと同じ規則）。
+    // 別端末で作った同名別IDの単語帳のバックアップでも、墓標と語を正しく突き合わせるため。
+    const remapDeck = buildDeckIdRemap(previousDecks, appState.decks);
+    // 置換前の削除記録（墓標）は、読み替えたキーで引き継ぐ。捨てると、まだ同期していない削除が
+    // 消えて他端末に残っている同じ単語が次の同期で復活する。旧IDのまま残すと、戻した語の墓標を
+    // 見つけられず、次の同期で名前で読み替えられた墓標に負けて戻した語が消える。
+    for (const [rawKey, ts] of Object.entries(previousDeletions)) {
+      const key = remapDeletionKeyWith(rawKey, remapDeck);
+      if (!appState.deletions[key] || ts > appState.deletions[key]) appState.deletions[key] = ts;
+    }
+    // 【復活防止】置き換えで消えた単語（置換前にあり置換後に無い）へ削除の記録（墓標）を付ける。
+    // これが無いと、次の同期マージで他端末側に残っている同じ単語が復活してしまう。
+    // 同じ単語が置換後にも存在すればキーが一致して墓標は付かない＝再インポートしても冪等。
+    const deletedAt = Date.now();
+    const nextKeys = new Set(appState.words.map((word) => deletionKeyForWord(word)));
+    // 「消えた語」の判定も同じ対応表で行う。IDだけで比べると、同名別IDの単語帳に残っている語が
+    // 消えた語に見えて墓標が付き、次の同期で読み替えられて読み込んだ語まで消える。
+    for (const word of previousWords) {
+      const key = deletionKeyForWord({ ...word, deckId: remapDeck(word.deckId) });
+      if (nextKeys.has(key)) continue; // 読み込んだデータにも同じ語がある＝消えていない
+      // 既にある墓標（ファイル側の新しい記録など）を古い値で上書きしない
+      appState.deletions[key] = Math.max(Number(appState.deletions[key] || 0), deletedAt);
+    }
+    // 読み込みで戻した語が、手元の削除記録に負けて次の同期で再び消えないようにする
+    // （削除より前に書き出したバックアップで戻す場合）。同期先にだけ残る墓標は手元で見えないので、
+    // ここでは救えない（従来どおり）。
+    for (const word of appState.words) reviveAgainstDeletion(word);
+    currentQuiz = null;
+    saveState();
+    offerUndo(snapshot);
+    trackUsage("json-import");
+    if (importedCredential && !getActiveV2Credential()) {
+      showImportedV2CredentialConfirm(importedCredential);
+      setStatus("JSONデータを読み込みました。引き継ぎコードで接続するか確認してください。");
+    } else {
+      hideImportConfirmBar();
+      setStatus("JSONデータを読み込みました。「元に戻す」で取り消せます。");
+    }
+  } finally {
+    importConfirmBusy = false;
+    if (elements.importConfirmButton && !elements.importConfirmButton.dataset.holdDisabled) {
+      elements.importConfirmButton.disabled = false;
+    }
   }
 });
 
