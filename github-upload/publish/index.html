@@ -6943,7 +6943,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.108</span>
+        <span class="app-footer-version">バージョン 1.0.109</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7081,7 +7081,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.108";
+  const APP_REV = "1.0.109";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23618,6 +23618,9 @@ const IPA_CHARS = /[əɪʊɔɛæɑɒʌʃʒθðŋːˈˌ]/;
 
 function stripNoise(line) {
   return line
+    // 全角の英数字は半角に直す（OCR や日本語入力でよく混じる。従来は英字として認識されず、
+    // 読み取れなかった行の報告も無いまま黙って落ちていた）。
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
     .replace(/\[[^\]]*\]/g, " ") // [phonetics]
     .replace(/\/[^/]*\//g, " ") // /phonetics/
     .replace(/^[\s\d.,、。)）(（・|>※◇◆■□●○\-–—]+/, "") // leading numbers / bullets / symbols
@@ -23625,10 +23628,18 @@ function stripNoise(line) {
     .trim();
 }
 
+// 見出し語の直後に付く品詞の括弧書き（apple (n) りんご の "(n)"）。そのまま残すと
+// 括弧が空白に変わって「apple n」という語になる。
+const TERM_POS_PAREN = /[（(]\s*(?:n|v|vi|vt|adj|adv|prep|conj|pron|int|aux|名|動|形|副|前|接|代|助|自動|他動|自|他)\.?\s*[）)]/gi;
+
 function cleanTermText(text) {
   return text
+    .replace(TERM_POS_PAREN, " ")
     .replace(/[^A-Za-z0-9' .-]/g, " ")
     .replace(/\s+/g, " ")
+    // 「apple - りんご」の区切りのハイフンが語の末尾に残らないよう、前後のハイフンと空白は落とす
+    // （well-known のような語中のハイフンはそのまま）。
+    .replace(/^[\s-]+|[\s-]+$/g, "")
     .trim();
 }
 
@@ -23639,7 +23650,12 @@ function firstMeaning(text) {
   const latin = t.search(/[A-Za-z]/);
   if (latin > 0) t = t.slice(0, latin);
   t = t.split(/[、,，;；。．・/]/)[0];
-  return t.replace(/\s+/g, "").trim();
+  // 「apple(りんご)」「apple（りんご）」のように訳を括弧で囲む書き方では、閉じ括弧が訳の末尾に残る
+  return t
+    .replace(/\s+/g, "")
+    .replace(/^[（(\[［「『【]+/, "")
+    .replace(/[)）\]］」』】]+$/, "")
+    .trim();
 }
 
 // 日本語で始まる行の末尾に、意味として取り込まれずに捨てられる英単語があるかを返す。
@@ -33809,7 +33825,10 @@ elements.candidateList.addEventListener("click", (event) => {
   nextTarget?.focus();
 });
 
-elements.saveParsedButton.addEventListener("click", () => {
+let saveParsedBusy = false; // 保存中の二重押しを防ぐ
+
+elements.saveParsedButton.addEventListener("click", async () => {
+  if (saveParsedBusy) return;
   const now = new Date().toISOString();
   const targetDeckId =
     (elements.saveDeckSelect && elements.saveDeckSelect.value) || appState.decks[0].id;
@@ -33868,32 +33887,53 @@ elements.saveParsedButton.addEventListener("click", () => {
       },
     }));
 
-  appState.words.push(...cleaned);
-  // 保存できた分だけ一覧から取り除く。残った分は理由付きで確認タブに出したままにする。
-  candidates = rejected;
-  currentQuiz = null;
-  if (appState.activeDeckId !== "all") appState.activeDeckId = targetDeckId;
-  // 保存先の明示選択を解除するのは、候補を出し切ったときだけにする。
-  // 一部だけ保存できて候補が残っている間に解除すると、そのあとの再描画で保存先が
-  // 既定へ戻り、直した残りが別の単語帳へ入ってしまう（元の不具合の再現になる）。
-  if (rejected.length === 0) saveDeckChosenByUser = false;
+  saveParsedBusy = true;
+  elements.saveParsedButton.disabled = true;
+  const previousActiveDeckId = appState.activeDeckId;
   try {
-    saveState();
-  } catch (error) {
-    notifyInlineSaveFailure();
-    throw error;
+    appState.words.push(...cleaned);
+    currentQuiz = null;
+    if (appState.activeDeckId !== "all") appState.activeDeckId = targetDeckId;
+    clearUndo();
+    // 端末への保存（localStorage と IndexedDB）が済んだことを確かめてから候補を消す。
+    // 確かめずに「保存しました」と出すと、両方が失敗した環境（容量切れ等）では
+    // 再読込で語が消え、直した候補も失われる。
+    const persisted = await persistAppStateChecked();
+    if (!persisted) {
+      const added = new Set(cleaned.map((word) => word.id));
+      appState.words = appState.words.filter((word) => !added.has(word.id));
+      appState.activeDeckId = previousActiveDeckId;
+      renderAll();
+      notifyInlineSaveFailure();
+      setStatus(
+        "端末に保存できませんでした（保存領域が使えないか、いっぱいです）。候補はそのまま残しています。空き容量を確認するか、「保存した単語」の「JSONを書き出す」で控えを取ってから、もう一度お試しください。",
+      );
+      playSound("wrong");
+      renderCandidates();
+      return;
+    }
+    // 保存できた分だけ一覧から取り除く。残った分は理由付きで確認タブに出したままにする。
+    candidates = rejected;
+    // 保存先の明示選択を解除するのは、候補を出し切ったときだけにする。
+    // 一部だけ保存できて候補が残っている間に解除すると、そのあとの再描画で保存先が
+    // 既定へ戻り、直した残りが別の単語帳へ入ってしまう（元の不具合の再現になる）。
+    if (rejected.length === 0) saveDeckChosenByUser = false;
+    renderAll();
+    // 取り込んだ分は、画面を開くのを待たずにその場で埋めておく。
+    queueMetadataPrefetch(cleaned);
+    const keptBack = rejected.length ? `${rejected.length}件は保存できず残しました。` : "";
+    setStatus(
+      `単語帳「${deckName(targetDeckId)}」に${cleaned.length}件を保存しました。${keptBack}`,
+    );
+    scheduleInlineSaveSuccess(`編集した単語と意味を保存しました（${cleaned.length}件）。`);
+    playSound(cleaned.length > 0 ? "save" : "wrong");
+    // 保存できなかった候補が残っているときは確認タブに留まる（直せないまま画面が変わらないように）。
+    if (cleaned.length > 0 && rejected.length === 0) setActiveStep("quiz", { sound: false });
+    else renderCandidates();
+  } finally {
+    saveParsedBusy = false;
+    elements.saveParsedButton.disabled = candidates.length === 0;
   }
-  // 取り込んだ分は、画面を開くのを待たずにその場で埋めておく。
-  queueMetadataPrefetch(cleaned);
-  const keptBack = rejected.length ? `${rejected.length}件は保存できず残しました。` : "";
-  setStatus(
-    `単語帳「${deckName(targetDeckId)}」に${cleaned.length}件を保存しました。${keptBack}`,
-  );
-  scheduleInlineSaveSuccess(`編集した単語と意味を保存しました（${cleaned.length}件）。`);
-  playSound(cleaned.length > 0 ? "save" : "wrong");
-  // 保存できなかった候補が残っているときは確認タブに留まる（直せないまま画面が変わらないように）。
-  if (cleaned.length > 0 && rejected.length === 0) setActiveStep("quiz", { sound: false });
-  else renderCandidates();
 });
 
 elements.trashToggleButton?.addEventListener("click", () => {

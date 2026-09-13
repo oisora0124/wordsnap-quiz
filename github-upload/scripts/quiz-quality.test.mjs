@@ -127,6 +127,7 @@ function buildSandbox() {
     `const IPA_CHARS = ${html.match(/const IPA_CHARS = (\/.+\/);/)[1]};`,
     `const SENTENCE_END_CHARS = ${html.match(/const SENTENCE_END_CHARS = (\/.+\/);/)[1]};`,
     extractFunction("stripNoise"),
+    extractConst("TERM_POS_PAREN"),
     extractFunction("cleanTermText"),
     extractFunction("firstMeaning"),
     extractFunction("droppedEnglishTail"),
