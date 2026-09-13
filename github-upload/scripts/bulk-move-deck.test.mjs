@@ -101,6 +101,23 @@ function buildSandbox({ decks, words, selectedIds, deckSelectValue }) {
       calls.push("setStatus");
       lastStatus = message;
     }
+    // 1.0.108: 移動先の同じ語の検査と、墓標の始末をハンドラが呼ぶようになった。
+    // このファイルの語は id と同じ term を持つ（term が無いと全部が「同じ語」に見える）。
+    // 語の同一性は本体と同じ「前後の空白を除いて小文字」で十分（このテストの語は単純）。
+    function normalizeTerm(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+    const revived = [];
+    function reviveAgainstDeletion(word) {
+      revived.push(word.id);
+      return false;
+    }
+    function deletionBlocksMove() {
+      return false; // このテストの語には削除記録が無い
+    }
+    function canonicalDeckIdMapper() {
+      return (id) => id; // このテストの単語帳に同名は無い
+    }
 
     function moveSelectedHandler() ${handlerBody}
 
@@ -113,6 +130,7 @@ function buildSandbox({ decks, words, selectedIds, deckSelectValue }) {
       getLastStatus: () => lastStatus,
       getLastSnapshot: () => lastSnapshot,
       getOfferUndoArg: () => offerUndoArg,
+      revived,
     };
   `;
   const sandbox = { globalThis: undefined, Date, JSON, Set, Array };
@@ -132,8 +150,8 @@ test("移動した単語は deckId と deckUpdatedAt の両方が更新される
   const api = buildSandbox({
     decks: baseDecks(),
     words: [
-      { id: "w1", deckId: "d1" },
-      { id: "w2", deckId: "d1" },
+      { id: "w1", term: "w1", deckId: "d1" },
+      { id: "w2", term: "w2", deckId: "d1" },
     ],
     selectedIds: ["w1", "w2"],
     deckSelectValue: "d2",
@@ -157,8 +175,8 @@ test("移動先にすでに入っている単語は触らない（deckUpdatedAt�
   const api = buildSandbox({
     decks: baseDecks(),
     words: [
-      { id: "w1", deckId: "d1" }, // 移動対象
-      { id: "w2", deckId: "d2", deckUpdatedAt: 111 }, // すでに移動先。既存の更新時刻を持つ
+      { id: "w1", term: "w1", deckId: "d1" }, // 移動対象
+      { id: "w2", term: "w2", deckId: "d2", deckUpdatedAt: 111 }, // すでに移動先。既存の更新時刻を持つ
     ],
     selectedIds: ["w1", "w2"],
     deckSelectValue: "d2",
@@ -178,8 +196,8 @@ test("移動後に selectedIds が空になる", () => {
   const api = buildSandbox({
     decks: baseDecks(),
     words: [
-      { id: "w1", deckId: "d1" },
-      { id: "w2", deckId: "d1" },
+      { id: "w1", term: "w1", deckId: "d1" },
+      { id: "w2", term: "w2", deckId: "d1" },
     ],
     selectedIds: ["w1", "w2"],
     deckSelectValue: "d2",
@@ -196,7 +214,7 @@ test("移動後に selectedIds が空になる", () => {
 test("selectedIds.clear() は saveState() より前に呼ばれる（描画時点で選択を残さない）", () => {
   const api = buildSandbox({
     decks: baseDecks(),
-    words: [{ id: "w1", deckId: "d1" }],
+    words: [{ id: "w1", term: "w1", deckId: "d1" }],
     selectedIds: ["w1"],
     deckSelectValue: "d2",
   });
@@ -217,7 +235,7 @@ test("selectedIds.clear() は saveState() より前に呼ばれる（描画時�
 test("offerUndo は saveState の後に呼ばれる（順序が逆だと取り消しが効かない）", () => {
   const api = buildSandbox({
     decks: baseDecks(),
-    words: [{ id: "w1", deckId: "d1" }],
+    words: [{ id: "w1", term: "w1", deckId: "d1" }],
     selectedIds: ["w1"],
     deckSelectValue: "d2",
   });
@@ -235,7 +253,7 @@ test("offerUndo は saveState の後に呼ばれる（順序が逆だと取り�
 test("snapshotState は単語を書き換える前に取られている（取り消しで移動前へ戻れる）", () => {
   const api = buildSandbox({
     decks: baseDecks(),
-    words: [{ id: "w1", deckId: "d1" }],
+    words: [{ id: "w1", term: "w1", deckId: "d1" }],
     selectedIds: ["w1"],
     deckSelectValue: "d2",
   });
@@ -256,7 +274,7 @@ test("snapshotState は単語を書き換える前に取られている（取り
 test("移動先デッキが存在しないときは状態を書き換えず案内だけ出す", () => {
   const api = buildSandbox({
     decks: baseDecks(),
-    words: [{ id: "w1", deckId: "d1" }],
+    words: [{ id: "w1", term: "w1", deckId: "d1" }],
     selectedIds: ["w1"],
     deckSelectValue: "存在しないデッキ",
   });
@@ -272,7 +290,7 @@ test("移動先デッキが存在しないときは状態を書き換えず案�
 test("選択が空のときは状態を書き換えず案内だけ出す", () => {
   const api = buildSandbox({
     decks: baseDecks(),
-    words: [{ id: "w1", deckId: "d1" }],
+    words: [{ id: "w1", term: "w1", deckId: "d1" }],
     selectedIds: [],
     deckSelectValue: "d2",
   });
@@ -288,8 +306,8 @@ test("対象が全部すでに移動先にいるときは状態を書き換え�
   const api = buildSandbox({
     decks: baseDecks(),
     words: [
-      { id: "w1", deckId: "d2" },
-      { id: "w2", deckId: "d2" },
+      { id: "w1", term: "w1", deckId: "d2" },
+      { id: "w2", term: "w2", deckId: "d2" },
     ],
     selectedIds: ["w1", "w2"],
     deckSelectValue: "d2",
