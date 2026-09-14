@@ -109,12 +109,14 @@ assert.ok(rescheduleAt > renderDirtyAt,
 // 保存できなかった取り込み候補を黙って捨てない。理由を付けて確認タブに残す。
 const saveHandlerStart = publicHtml.indexOf('elements.saveParsedButton.addEventListener("click"');
 assert.ok(saveHandlerStart >= 0, "the save-candidates handler is missing");
-const saveHandlerSource = publicHtml.slice(saveHandlerStart, saveHandlerStart + 4000);
+const saveHandlerSource = publicHtml.slice(saveHandlerStart, saveHandlerStart + 7000);
 assert.doesNotMatch(saveHandlerSource, /^\s*candidates = \[\];\s*$/m,
   "saving must not clear every candidate; rejected rows have to stay for the user to fix");
-assert.match(saveHandlerSource, /candidates = rejected;/,
-  "saving must keep the candidates it could not save");
-assert.match(saveHandlerSource, /problem:/,
+// 1.0.110: 保存開始時の写しで置き換えず、いまの一覧から「保存した候補」だけを外す
+// （待っている間に一覧が作り直されても新しい候補を消さない）。保存できなかった候補は残る。
+assert.match(saveHandlerSource, /candidates = candidates\.filter\(\(item\) => !acceptedItems\.has\(item\)\);/,
+  "saving must keep the candidates it could not save (remove only the saved ones)");
+assert.match(saveHandlerSource, /item\.problem = /,
   "rejected candidates must carry the reason they were not saved");
 
 // 取り込み中に選んだ保存先を、同期の再描画で既定へ戻さない。

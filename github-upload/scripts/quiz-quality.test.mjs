@@ -1195,7 +1195,9 @@ test("バックフィルは単語帳の全語を埋め切る（表示中の100�
 function buildPrefetchSandbox(words) {
   const pieces = [
     `const PREFETCH_BATCH_SIZE = ${html.match(/const PREFETCH_BATCH_SIZE = (\d+);/)[1]};`,
+    `const PREFETCH_PERSIST_EVERY_BATCHES = ${html.match(/const PREFETCH_PERSIST_EVERY_BATCHES = (\d+);/)[1]};`,
     "let prefetchRunning = false;",
+    "let prefetchDirtyBatches = 0;",
     "const prefetchQueue = [];",
     "const appState = { words: globalThis.__words };",
     "const elements = { prefetchAllStatus: null };",
