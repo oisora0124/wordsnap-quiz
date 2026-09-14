@@ -7,6 +7,9 @@
 // 4. 共有単語帳の追加: 端末への保存を確かめてから成功を伝える。失敗したら戻す。
 // 5. 採点で成績が変わったら一覧を作り直す（並びと番号選択のずれ）。
 // 6. 選択の整理・一括操作の対象抽出は語数×選択数にしない。補完の保存はまとめる。
+//
+// 1.0.111（astra・Fable の相互レビュー対応）: 後読み正規表現を使わない（Safari 16.4 未満で全体が構文エラー）、
+// 空白なしの全角記号が続く番号（1・apple）、語を囲む引用符（‘apple’）、保存待ちと OCR のロックの重なり。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -128,6 +131,37 @@ test("取り込み: 行頭の番号は「番号＋区切り」か「番号＋空
   }
 });
 
+test("取り込み: 空白なしで全角記号が続く番号（1・apple、2．apple）も番号として外す（1.0.110 の退行）", () => {
+  const p = parseSandbox();
+  assert.deepEqual(pairs(p.parseVocabulary("1・apple りんご\n2．bank 銀行\n3：cat 猫\n4，dog 犬\n5|egg 卵\n24-hour 終日の", null)), [
+    ["apple", "りんご"],
+    ["bank", "銀行"],
+    ["cat", "猫"],
+    ["dog", "犬"],
+    ["egg", "卵"],
+    ["24-hour", "終日の"],
+  ]);
+  // 保存済みの apple と同じ語として重複判定される（「1 apple」にならない）
+  assert.equal(p.parseVocabulary("1・apple りんご", null).candidates[0].term, "apple");
+});
+
+test("取り込み: 語を囲む曲がった引用符は綴りに残さず、同じ語として重複判定される（1.0.110 の退行）", () => {
+  const p = parseSandbox();
+  assert.deepEqual(pairs(p.parseVocabulary("‘apple’ りんご", null)), [["apple", "りんご"]]);
+  assert.deepEqual(pairs(p.parseVocabulary("'bank' 銀行", null)), [["bank", "銀行"]]);
+  assert.deepEqual(pairs(p.parseVocabulary("don’t しない\nrock 'n' roll ロック", null)), [["don't", "しない"], ["rock 'n' roll", "ロック"]], "語中の ' は残す");
+  const r = p.parseVocabulary("‘apple’ りんご\napple りんご", null);
+  assert.equal(r.candidates.length, 1);
+  assert.equal(r.dupInputCount, 1);
+});
+
+test("取り込み: 語中のダッシュの置換に後読み正規表現を使わない（Safari 16.4 未満で全体が構文エラーになる）", () => {
+  assert.doesNotMatch(html, /\(\?<[=!]/);
+  const p = parseSandbox();
+  assert.equal(p.stripNoise("a‐b‐c 連続"), "a-b-c 連続", "連続するダッシュも全部置き換える");
+  assert.equal(p.stripNoise("apple —りんご"), "apple —りんご", "英字に挟まれていないダッシュは触らない");
+});
+
 test("取り込み: 見出し語のあとの英語行（例文・類義語・補足）は読み飛ばし、続く訳は従来どおり意味になる", () => {
   const p = parseSandbox();
   // main と同じ挙動を保つ（例文の訳を機械的に捨てる案は、類義語の羅列や cf. 等を誤認するため見送り）
@@ -202,7 +236,9 @@ function saveSandbox() {
     "let currentQuiz = null;",
     "let saveDeckChosenByUser = false;",
     "let saveParsedBusy = false;",
+    "let activeOcrRun = null;",
     "const elements = { saveDeckSelect: { value: 'd1' }, saveParsedButton: { disabled: false }, candidateList: { inert: false }, parseButton: { disabled: false } };",
+    extractFunction("syncParseButtonLock"),
     "let __release; const __persist = new Promise((r) => { __release = r; });",
     "let __during = null;",
     "function deckName(id) { return appState.decks.find((d) => d.id === id)?.name || '単語帳'; }",
@@ -217,7 +253,7 @@ function saveSandbox() {
     "function setActiveStep() {}",
     "function queueMetadataPrefetch() {}",
     `const handler = async () => ${body};`,
-    "globalThis.__s = { run: handler, state: () => appState, candidates: () => candidates, setCandidates: (c) => { candidates = c; }, release: (v) => __release(v), during: () => __during, el: elements };",
+    "globalThis.__s = { run: handler, state: () => appState, candidates: () => candidates, setCandidates: (c) => { candidates = c; }, release: (v) => __release(v), during: () => __during, el: elements, setOcrRun: (r) => { activeOcrRun = r; }, syncParseButtonLock };",
   ];
   const sandbox = {};
   new Script(pieces.join("\n\n"), { filename: "import-library-save.js" }).runInNewContext(sandbox);
@@ -233,6 +269,28 @@ test("候補の保存: 待っている間は候補の編集と再変換を止め
   await pending;
   assert.equal(s.el.candidateList.inert, false);
   assert.equal(s.el.parseButton.disabled, false);
+});
+
+test("候補の保存: 保存待ち中に端末内OCRが始まり先に保存が終わっても、「変換」は OCR の終了まで止め、終われば押せる", async () => {
+  const s = saveSandbox();
+  const pending = s.run();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(s.el.parseButton.disabled, true);
+  // 保存待ち中に OCR が始まる（lockOcrUiForRun は控えを取って disabled にする）
+  const run = {};
+  s.setOcrRun(run);
+  const snapshotDisabled = s.el.parseButton.disabled; // OCR 側の控え＝true
+  s.el.parseButton.disabled = true;
+  // 保存が先に終わる。従来はここで false に戻し、OCR 終了時に控えの true が戻って押せないまま残った
+  s.release(true);
+  await pending;
+  assert.equal(s.el.parseButton.disabled, true, "OCR がまだ動いているので止めたまま");
+  // OCR の終了: 控えを戻してから求め直す（finishOcrUiRun と同じ順）
+  s.el.parseButton.disabled = snapshotDisabled;
+  s.setOcrRun(null);
+  s.syncParseButtonLock();
+  assert.equal(s.el.parseButton.disabled, false, "両方終わったら押せる");
+  assert.match(extractFunction("finishOcrUiRun"), /activeOcrRun = null;\s*[^]*?syncParseButtonLock\(\);/, "OCR 側も解除の最後に求め直す");
 });
 
 test("候補の保存: 待っている間に一覧が作り直されても、消すのは保存した候補だけ", async () => {
@@ -252,7 +310,7 @@ test("候補の保存: 待っている間に一覧が作り直されても、消
 // ============================================================================
 // 4. 共有単語帳の追加
 // ============================================================================
-function shareSandbox({ persisted }) {
+function shareSandbox({ persisted, during = "" }) {
   const body = extractHandlerBody('elements.importDeckShareInput?.addEventListener("change", async () => {');
   const pieces = [
     extractFunction("normalizeTerm"),
@@ -261,19 +319,20 @@ function shareSandbox({ persisted }) {
     "let __idSeq = 0; function createId() { return `id${++__idSeq}`; }",
     "function emptyEnrich() { return {}; }",
     "let appState = { words: [{ id: 'old', term: 'old', meaning: '古い', deckId: 'd1' }], decks: [{ id: 'd1', name: 'A' }], activeDeckId: 'd1' };",
-    "let currentQuiz = null; const selectedIds = new Set(['old']);",
+    "let currentQuiz = { live: true }; const selectedIds = new Set(['old']);",
+    "function undoSignature(state) { return JSON.stringify(state.words.map((w) => [w.id, w.term, w.meaning, w.stats || null])); }",
     "let __status = []; let __undo = 0; let __rendered = 0; let __cleared = 0;",
     "function setStatus(m) { __status.push(m); }",
     "function offerUndo() { __undo += 1; }",
     "function renderAll() { __rendered += 1; }",
     "function clearUndo() { __cleared += 1; }",
     "function snapshotState() { return JSON.parse(JSON.stringify(appState)); }",
-    `async function persistAppStateChecked() { return ${persisted ? "true" : "false"}; }`,
+    `async function persistAppStateChecked() { ${during || ""}; return ${persisted ? "true" : "false"}; }`,
     extractFunction("uniqueImportedDeckName"),
     extractFunction("parseDeckSharePayload"),
     "const elements = { importDeckShareInput: { files: [{ size: 10, text: async () => JSON.stringify({ kind: 'wordbank-deck', version: 1, deck: { name: 'B' }, words: [{ term: 'apple', meaning: 'りんご' }, { term: 'bank', meaning: '銀行' }] }) }], value: 'x' } };",
     `const handler = async () => ${body};`,
-    "globalThis.__d = { run: handler, state: () => appState, status: () => __status, undo: () => __undo, rendered: () => __rendered, cleared: () => __cleared };",
+    "globalThis.__d = { run: handler, state: () => appState, status: () => __status, undo: () => __undo, rendered: () => __rendered, cleared: () => __cleared, quiz: () => currentQuiz, selected: () => selectedIds };",
   ];
   const sandbox = {};
   new Script(pieces.join("\n\n"), { filename: "import-library-share.js" }).runInNewContext(sandbox);
@@ -291,6 +350,17 @@ test("共有単語帳の追加: 端末に保存できたら追加して案内す
   assert.match(d.status().at(-1), /共有単語帳「B」を2語追加しました/);
 });
 
+test("共有単語帳の追加: 保存を待つ間に内容が変わっていたら（同期・採点）、取り消しは出さない（1.0.111）", async () => {
+  // 取り消しの指紋を待ったあとに取ると、待っている間の学習記録まで取り消しの対象になっていた
+  const d = shareSandbox({ persisted: true, during: "appState.words[0].stats = { correct: 1, wrong: 0 }" });
+  await d.run();
+  assert.deepEqual(Array.from(d.state().words, (w) => w.term), ["old", "apple", "bank"], "追加自体は成功する");
+  assert.equal(d.undo(), 0, "待っている間の変更ごと巻き戻る取り消しは出さない");
+  assert.equal(d.cleared(), 1, "古い取り消しは消す");
+  assert.equal(d.quiz(), null);
+  assert.match(d.status().at(-1), /共有単語帳「B」を2語追加しました/);
+});
+
 test("共有単語帳の追加: 端末に保存できなかったら、追加した単語帳と語を戻し、失敗を伝える", async () => {
   const d = shareSandbox({ persisted: false });
   await d.run();
@@ -300,6 +370,10 @@ test("共有単語帳の追加: 端末に保存できなかったら、追加し
   assert.equal(d.undo(), 0, "失敗したのに取り消しを出さない");
   assert.match(d.status().at(-1), /共有単語帳を追加できませんでした：端末に保存できませんでした/);
   assert.ok(d.rendered() >= 1, "戻した状態で描き直す");
+  // 1.0.111: 失敗したときは、進行中のクイズ・選択・直前の取り消しもそのまま残す
+  assert.equal(d.quiz()?.live, true, "進行中のクイズを捨てない"); // vm の別レルムなので deepEqual は使わない
+  assert.deepEqual(Array.from(d.selected()), ["old"], "選択を消さない");
+  assert.equal(d.cleared(), 0, "直前の取り消しを消さない");
 });
 
 // ============================================================================

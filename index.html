@@ -6943,7 +6943,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.110</span>
+        <span class="app-footer-version">バージョン 1.0.111</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7081,7 +7081,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.110";
+  const APP_REV = "1.0.111";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23624,18 +23624,20 @@ function stripNoise(line) {
     // 曲がったアポストロフィ（don’t）は ASCII に。語中の各種ダッシュ（well‑known）はハイフンに。
     // 従来は「don t」「well known」になり、綴りが変わって重複判定もすり抜けていた。
     .replace(/[’‘‛]/g, "'")
-    .replace(/(?<=[A-Za-z])[‐‑‒–—](?=[A-Za-z])/g, "-")
+    // 後読み（?<=）は Safari 16.4 未満で構文エラーになり、このファイル全体が読み込めなくなるので使わない。
+    .replace(/([A-Za-z])[‐‑‒–—](?=[A-Za-z])/g, "$1-")
     .replace(/\[[^\]]*\]/g, " ") // [phonetics]
     .replace(/\/[^/]*\//g, " "); // /phonetics/
   // 行頭の番号・箇条書き記号・丸数字を、無くなるまで外す（「1. (1) りんご」「1.1 りんご」のように
   // 重なる形がある）。番号は「番号＋区切り（. ) 、 :）」か「番号＋空白」のときだけ外し、
-  // 「24-hour」のように語の一部の数字は残す。
+  // 「24-hour」のように語の一部の数字は残す。区切りには全角の句読点や中黒・箇条書き記号も含める
+  // （「1・apple」「2．apple」は従来どおり番号として外す。空白なしでも番号の区切りになる）。
   for (;;) {
     const before = text;
     text = text
       .replace(/^\s*[①-⑳⓪㉑-㉟㊱-㊿⑴-⒇⒈-⒛]+\s*/, "")
       .replace(/^[\s.,、。)）(（・|>※◇◆■□●○\-–—]+/, "")
-      .replace(/^\d+(?:[.,、。)）:]\s*|\s+)/, "");
+      .replace(/^\d+(?:[.,、。)）:：．，・|>※◇◆■□●○]\s*|\s+)/, "");
     if (text === before) break;
   }
   return text.replace(/\s+/g, " ").trim();
@@ -23651,8 +23653,9 @@ function cleanTermText(text) {
     .replace(/[^A-Za-z0-9' .-]/g, " ")
     .replace(/\s+/g, " ")
     // 「apple - りんご」の区切りのハイフンが語の末尾に残らないよう、前後のハイフンと空白は落とす
-    // （well-known のような語中のハイフンはそのまま）。
-    .replace(/^[\s-]+|[\s-]+$/g, "")
+    // （well-known のような語中のハイフンはそのまま）。語を囲む引用符（'apple'、曲がった
+    // 引用符は stripNoise で ' になる）も綴りではないので落とす（don't のような語中の ' は残す）。
+    .replace(/^[\s'-]+|[\s'-]+$/g, "")
     .trim();
 }
 
@@ -33423,6 +33426,8 @@ function finishOcrUiRun(run) {
   restoreOcrUi(run.uiLock);
   clearOcrProgress();
   activeOcrRun = null;
+  // 控えを戻したあと、候補の保存待ちが続いていれば「変換」は止めたままにする
+  syncParseButtonLock();
 }
 
 async function cancelActiveOcrRun() {
@@ -33888,6 +33893,15 @@ elements.candidateList.addEventListener("click", (event) => {
 
 let saveParsedBusy = false; // 保存中の二重押しを防ぐ
 
+// 「単語リストに変換」は、端末内OCRの実行中と候補の保存待ちの両方で止める。二つが重なったとき
+// （保存待ち中に手順1でOCRを始める等）、それぞれが自分の控えを戻すと、先に終わった側の解除を
+// 後から終わった側が「止める」に戻してしまい、両方終わっても押せないまま残る。
+// なので保存側は自分で戻さず、いまの状態から求め直す（OCR側も解除の最後にこれを呼ぶ）。
+function syncParseButtonLock() {
+  if (!elements.parseButton) return;
+  elements.parseButton.disabled = Boolean(activeOcrRun) || saveParsedBusy;
+}
+
 elements.saveParsedButton.addEventListener("click", async () => {
   if (saveParsedBusy) return;
   const now = new Date().toISOString();
@@ -33953,7 +33967,7 @@ elements.saveParsedButton.addEventListener("click", async () => {
   elements.saveParsedButton.disabled = true;
   // 保存を待つ間は候補の編集・削除・再変換を止める（待っている間の編集が保存に入らず消えるため）。
   if (elements.candidateList) elements.candidateList.inert = true;
-  if (elements.parseButton) elements.parseButton.disabled = true;
+  syncParseButtonLock();
   const previousActiveDeckId = appState.activeDeckId;
   try {
     appState.words.push(...cleaned);
@@ -34000,7 +34014,7 @@ elements.saveParsedButton.addEventListener("click", async () => {
   } finally {
     saveParsedBusy = false;
     if (elements.candidateList) elements.candidateList.inert = false;
-    if (elements.parseButton) elements.parseButton.disabled = false;
+    syncParseButtonLock();
     elements.saveParsedButton.disabled = candidates.length === 0;
   }
 });
@@ -35005,11 +35019,12 @@ elements.importDeckShareInput?.addEventListener("change", async () => {
     appState.decks.push(deck);
     appState.words.push(...words);
     appState.activeDeckId = deck.id;
-    currentQuiz = null;
-    selectedIds.clear();
-    clearUndo();
+    // 取り消しの指紋（「この操作の直後の内容」）は保存を待つ前に取る。待ったあとの内容で取ると、
+    // 待っている間に同期や採点で変わった分まで取り消しの対象になり、無関係な学習記録が消える。
+    const afterSignature = undoSignature(appState);
     // 端末への保存が済んだことを確かめてから成功を伝える（候補の保存と同じ。両方失敗する環境では
     // 「追加しました」と出ても再読込で消えるため）。失敗したら追加した単語帳と語を戻す。
+    // 進行中のクイズ・選択・直前の取り消しは、保存できてから捨てる（失敗したときに残すため）。
     const persisted = await persistAppStateChecked();
     if (!persisted) {
       const added = new Set(words.map((word) => word.id));
@@ -35019,8 +35034,13 @@ elements.importDeckShareInput?.addEventListener("change", async () => {
       renderAll();
       throw new Error("端末に保存できませんでした（保存領域が使えないか、いっぱいです）。空き容量を確認して、もう一度お試しください");
     }
+    currentQuiz = null;
+    selectedIds.clear();
+    clearUndo();
     renderAll();
-    offerUndo(snapshot);
+    // 待っている間に内容が変わっていたら（同期の合流・採点）、取り消しは出さない。
+    // 出すとその変更ごと巻き戻るため。追加した単語帳は「削除」で戻せる。
+    if (undoSignature(appState) === afterSignature) offerUndo(snapshot);
     setStatus(`共有単語帳「${deck.name}」を${words.length}語追加しました。学習成績は新規状態です。`);
   } catch (error) {
     setStatus(`共有単語帳を追加できませんでした：${error.message}`);

@@ -1419,4 +1419,9 @@ for (const file of repositoryTextFiles(repoDir)) {
   assert.ok(!read(file).includes("\u0000"), `NUL byte in source: ${file}`);
 }
 
+// 後読み正規表現（(?<= / (?<!）は Safari 16.4 未満（iOS 16.3 以前）で構文エラーになり、
+// 単一ファイル構成のためアプリ全体が起動しなくなる。既存コードの下限は省略可能チェーン
+// （Safari 13.1）なので、1行で下限が上がらないようここで機械的に弾く（1.0.111）。
+assert.doesNotMatch(publicHtml, /\(\?<[=!]/, "lookbehind regex is not allowed (Safari < 16.4 fails to parse the whole app)");
+
 console.log("WordBank release checks passed.");
