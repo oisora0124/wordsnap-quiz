@@ -182,6 +182,8 @@ function saveSandbox({ persisted }) {
     "let currentQuiz = { answer: { id: 'old' } };",
     "let saveDeckChosenByUser = true;",
     "let saveParsedBusy = false;",
+    "let activeOcrRun = null;",
+    "function syncParseButtonLock() { if (elements.parseButton) elements.parseButton.disabled = Boolean(activeOcrRun) || saveParsedBusy; }",
     "const elements = { saveDeckSelect: { value: 'd2' }, saveParsedButton: { disabled: false } };",
     "let __log = [];",
     "function deckName(id) { return appState.decks.find((d) => d.id === id)?.name || '単語帳'; }",

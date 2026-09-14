@@ -6943,7 +6943,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.109</span>
+        <span class="app-footer-version">バージョン 1.0.111</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7081,7 +7081,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.109";
+  const APP_REV = "1.0.111";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23617,15 +23617,30 @@ const POS_HEAD = /^[動名形副前接代助自他熟句]+[\s　]+/;
 const IPA_CHARS = /[əɪʊɔɛæɑɒʌʃʒθðŋːˈˌ]/;
 
 function stripNoise(line) {
-  return line
+  let text = line
     // 全角の英数字は半角に直す（OCR や日本語入力でよく混じる。従来は英字として認識されず、
     // 読み取れなかった行の報告も無いまま黙って落ちていた）。
     .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    // 曲がったアポストロフィ（don’t）は ASCII に。語中の各種ダッシュ（well‑known）はハイフンに。
+    // 従来は「don t」「well known」になり、綴りが変わって重複判定もすり抜けていた。
+    .replace(/[’‘‛]/g, "'")
+    // 後読み（?<=）は Safari 16.4 未満で構文エラーになり、このファイル全体が読み込めなくなるので使わない。
+    .replace(/([A-Za-z])[‐‑‒–—](?=[A-Za-z])/g, "$1-")
     .replace(/\[[^\]]*\]/g, " ") // [phonetics]
-    .replace(/\/[^/]*\//g, " ") // /phonetics/
-    .replace(/^[\s\d.,、。)）(（・|>※◇◆■□●○\-–—]+/, "") // leading numbers / bullets / symbols
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/\/[^/]*\//g, " "); // /phonetics/
+  // 行頭の番号・箇条書き記号・丸数字を、無くなるまで外す（「1. (1) りんご」「1.1 りんご」のように
+  // 重なる形がある）。番号は「番号＋区切り（. ) 、 :）」か「番号＋空白」のときだけ外し、
+  // 「24-hour」のように語の一部の数字は残す。区切りには全角の句読点や中黒・箇条書き記号も含める
+  // （「1・apple」「2．apple」は従来どおり番号として外す。空白なしでも番号の区切りになる）。
+  for (;;) {
+    const before = text;
+    text = text
+      .replace(/^\s*[①-⑳⓪㉑-㉟㊱-㊿⑴-⒇⒈-⒛]+\s*/, "")
+      .replace(/^[\s.,、。)）(（・|>※◇◆■□●○\-–—]+/, "")
+      .replace(/^\d+(?:[.,、。)）:：．，・|>※◇◆■□●○]\s*|\s+)/, "");
+    if (text === before) break;
+  }
+  return text.replace(/\s+/g, " ").trim();
 }
 
 // 見出し語の直後に付く品詞の括弧書き（apple (n) りんご の "(n)"）。そのまま残すと
@@ -23638,8 +23653,9 @@ function cleanTermText(text) {
     .replace(/[^A-Za-z0-9' .-]/g, " ")
     .replace(/\s+/g, " ")
     // 「apple - りんご」の区切りのハイフンが語の末尾に残らないよう、前後のハイフンと空白は落とす
-    // （well-known のような語中のハイフンはそのまま）。
-    .replace(/^[\s-]+|[\s-]+$/g, "")
+    // （well-known のような語中のハイフンはそのまま）。語を囲む引用符（'apple'、曲がった
+    // 引用符は stripNoise で ' になる）も綴りではないので落とす（don't のような語中の ' は残す）。
+    .replace(/^[\s'-]+|[\s'-]+$/g, "")
     .trim();
 }
 
@@ -23823,8 +23839,15 @@ function parseVocabulary(text, deckId = null) {
         pendingTerm = cleanTermText(line);
         pendingTermLine = lineNo;
       }
+      // 見出し語でない英語行（例文・類義語の羅列・cf. などの補足）は読み飛ばす。例文の訳
+      // （次の「。」で終わる行）が見出し語の意味になることがあるが、辞書の写しでは類義語の羅列の
+      // 後ろに本来の訳が来る形も多く、機械的に捨てると従来読めた訳を落とす。候補は保存前に確認できる。
       continue;
     }
+
+    // どの形にも当てはまらなかった行（日本語より前に英字以外の記号や数字だけがある等）。
+    // 黙って捨てると、その訳が消えたことに気づけないので、読み取れなかった行として報告する。
+    if (hasJp) unreadableLines.push(lineNo);
   }
   releasePendingTerm(); // 末尾に意味の対応しない見出し語が残っていれば記録
 
@@ -26327,8 +26350,10 @@ function emptyTrash() {
 }
 
 function pruneSelection() {
+  // 1万語を全選択した状態で every/some を回すと語数×語数になるので、実在IDは Set で引く
+  const ids = new Set(appState.words.map((word) => word.id));
   for (const id of [...selectedIds]) {
-    if (!appState.words.some((word) => word.id === id)) selectedIds.delete(id);
+    if (!ids.has(id)) selectedIds.delete(id);
   }
 }
 
@@ -26366,6 +26391,10 @@ function renderSelection() {
 // of rebuilding the whole list. Used after grading a quiz answer to avoid
 // flicker and lost scroll/focus on large libraries.
 function updateSavedWordRow(word) {
+  // 成績が変わると「間違えた回数が多い順」などの並びも変わる。行の中身だけ差し替えて並びを
+  // 据え置くと、次に一覧を開いたとき表示の番号と範囲選択の対象（最新の並びで計算）がずれるので、
+  // 一覧は次に開いたときに作り直す。
+  dirtyPanels.add("library");
   const row = elements.savedList.querySelector(`.saved-item[data-word-id="${word.id}"]`);
   if (!row) return; // word not visible in the current deck scope
 
@@ -32600,7 +32629,11 @@ function backfillSavedCefr() {
 // 「保存した単語」画面を一度も開かない利用者の語彙まで外部へ送ることになる。
 // 全体を埋めたい場合は設定の「起動中に先読み」を明示的に有効にしてもらう。
 const PREFETCH_BATCH_SIZE = 4;
+// 補完結果の保存は、ある程度たまったときとキューが空になったときだけ行う。
+// 4語ごとに全状態を JSON 化して保存すると、1万語では数千回の保存になる。
+const PREFETCH_PERSIST_EVERY_BATCHES = 25;
 let prefetchRunning = false;
+let prefetchDirtyBatches = 0; // 保存していない変更を含むバッチの数
 const prefetchQueue = [];
 
 function queueMetadataPrefetch(words) {
@@ -32618,13 +32651,22 @@ async function runMetadataPrefetchBatch() {
   const batch = prefetchQueue.splice(0, PREFETCH_BATCH_SIZE);
   if (batch.length === 0) {
     prefetchRunning = false;
+    if (prefetchDirtyBatches > 0) {
+      // キューが空になったら、まとめておいた変更を保存する
+      prefetchDirtyBatches = 0;
+      persistAppState({ sync: false });
+      updatePrefetchAllStatus();
+    }
     return;
   }
   let changed = false;
+  // 語の検索は索引で（語数×語数にしない）。待っている間に単語が入れ替わることがあるので、
+  // 応答後にもう一度引き直す。
+  let byId = new Map(appState.words.map((w) => [w.id, w]));
   const resolved = await Promise.all(
     batch.map(async (item) => {
       // 応答を待つ間に単語が消えている・別の語に置き換わっていることがある。
-      const live = appState.words.find((w) => w.id === item.id);
+      const live = byId.get(item.id);
       if (!live || normalizeTerm(live.term) !== normalizeTerm(item.term)) return null;
       const needCefr = !(live.cefr && (live.cefr.level || live.cefr.estimated));
       const needPos = !live.pos;
@@ -32635,10 +32677,11 @@ async function runMetadataPrefetchBatch() {
       return { item, cefr, pos };
     }),
   );
+  byId = new Map(appState.words.map((w) => [w.id, w]));
   for (const entry of resolved) {
     if (!entry) continue;
     // 書き戻す直前にもう一度引き直す（待っている間の削除・同期に追随する）。
-    const live = appState.words.find((w) => w.id === entry.item.id);
+    const live = byId.get(entry.item.id);
     if (!live || normalizeTerm(live.term) !== normalizeTerm(entry.item.term)) continue;
     if (entry.cefr) {
       live.cefr = { level: entry.cefr.level, estimated: entry.cefr.estimated };
@@ -32650,8 +32693,12 @@ async function runMetadataPrefetchBatch() {
     }
   }
   if (changed) {
-    persistAppState({ sync: false });
-    updatePrefetchAllStatus();
+    prefetchDirtyBatches += 1;
+    if (prefetchDirtyBatches >= PREFETCH_PERSIST_EVERY_BATCHES) {
+      prefetchDirtyBatches = 0;
+      persistAppState({ sync: false });
+      updatePrefetchAllStatus();
+    }
   }
   scheduleIdleTask(runMetadataPrefetchBatch);
 }
@@ -33332,6 +33379,19 @@ window.addEventListener("pointermove", editorPointerMove);
 window.addEventListener("pointerup", editorPointerUp);
 window.addEventListener("pointercancel", editorPointerUp);
 
+// OCR・AI抽出の結果を入力欄へ入れる。読み取りを待っている間に入力欄が変わっていたら
+// （追記・サンプル集の追加など）、それを消さずに結果を末尾へ足す。変わっていなければ置き換える。
+// 戻り値は「足した」かどうか（案内文の出し分け用）。
+function applyOcrText(text, inputAtStart) {
+  const current = elements.ocrText.value;
+  if (current === inputAtStart || !current.trim()) {
+    elements.ocrText.value = text;
+    return false;
+  }
+  elements.ocrText.value = `${current.trimEnd()}\n${text}`;
+  return true;
+}
+
 function lockOcrUiForRun() {
   const controls = [
     elements.imageInput,
@@ -33342,6 +33402,8 @@ function lockOcrUiForRun() {
     elements.ocrLayoutSelect,
     elements.hiAccToggle,
     ...elements.editorTools.querySelectorAll("button, input"),
+    // サンプル集の追加も入力欄を書き換えるので、読み取り中は止める
+    ...(elements.sampleChips ? elements.sampleChips.querySelectorAll("button") : []),
   ].filter((control, index, list) => control && list.indexOf(control) === index);
   const snapshot = controls.map((control) => ({ control, disabled: control.disabled }));
   for (const { control } of snapshot) control.disabled = true;
@@ -33364,6 +33426,8 @@ function finishOcrUiRun(run) {
   restoreOcrUi(run.uiLock);
   clearOcrProgress();
   activeOcrRun = null;
+  // 控えを戻したあと、候補の保存待ちが続いていれば「変換」は止めたままにする
+  syncParseButtonLock();
 }
 
 async function cancelActiveOcrRun() {
@@ -33410,6 +33474,7 @@ elements.ocrButton.addEventListener("click", async () => {
     uiLock: null,
   };
   activeOcrRun = run;
+  const inputAtStart = elements.ocrText.value;
   run.uiLock = lockOcrUiForRun();
   updateOcrProgress("画像を補正しています…");
   let source = null;
@@ -33417,10 +33482,10 @@ elements.ocrButton.addEventListener("click", async () => {
     source = getEditedCanvas();
     const result = await runOcr(source, run);
     ensureOcrRunActive(run);
-    elements.ocrText.value = result.text;
+    const appended = applyOcrText(result.text, inputAtStart);
     if (isOcrResultReliable(result)) {
       setStatus(
-        `端末内OCRが完了しました（単語と訳の組を約${result.metrics.pairCount}件検出）。内容を確認してから「単語リストに変換」を押してください。`,
+        `端末内OCRが完了しました（単語と訳の組を約${result.metrics.pairCount}件検出）。${appended ? "入力欄の末尾に足しました。" : ""}内容を確認してから「単語リストに変換」を押してください。`,
       );
     } else {
       setStatus(
@@ -33658,6 +33723,7 @@ function renderAiKeyFields() {
 }
 
 elements.aiOcrButton.addEventListener("click", async () => {
+  const inputAtStart = elements.ocrText.value; // 抽出を待つ間に入力欄が変わったら、結果は末尾に足す
   // 処理中にもう一度押した場合は「中断」として扱う（進捗表示の近くにある同じボタンが導線）
   if (aiExtractAbort) {
     aiExtractCancelled = true;
@@ -33722,8 +33788,8 @@ elements.aiOcrButton.addEventListener("click", async () => {
       }
     }
     if (result) {
-      elements.ocrText.value = result.text;
-      setStatus(`${result.name} が抽出しました。内容を確認して「単語リストに変換」を押してください。`);
+      const appended = applyOcrText(result.text, inputAtStart);
+      setStatus(`${result.name} が抽出しました。${appended ? "入力欄の末尾に足しました。" : ""}内容を確認して「単語リストに変換」を押してください。`);
     } else if (aiExtractCancelled) {
       setStatus("AI抽出を中断しました。");
     } else {
@@ -33827,6 +33893,15 @@ elements.candidateList.addEventListener("click", (event) => {
 
 let saveParsedBusy = false; // 保存中の二重押しを防ぐ
 
+// 「単語リストに変換」は、端末内OCRの実行中と候補の保存待ちの両方で止める。二つが重なったとき
+// （保存待ち中に手順1でOCRを始める等）、それぞれが自分の控えを戻すと、先に終わった側の解除を
+// 後から終わった側が「止める」に戻してしまい、両方終わっても押せないまま残る。
+// なので保存側は自分で戻さず、いまの状態から求め直す（OCR側も解除の最後にこれを呼ぶ）。
+function syncParseButtonLock() {
+  if (!elements.parseButton) return;
+  elements.parseButton.disabled = Boolean(activeOcrRun) || saveParsedBusy;
+}
+
 elements.saveParsedButton.addEventListener("click", async () => {
   if (saveParsedBusy) return;
   const now = new Date().toISOString();
@@ -33843,22 +33918,23 @@ elements.saveParsedButton.addEventListener("click", async () => {
   // 意味を消してしまった行や重複した行が、通知も編集の機会もないまま失われていた。
   const rejected = [];
   const accepted = [];
+  const acceptedItems = new Set(); // 保存した候補（同じオブジェクト）。あとで一覧から外すのに使う
   for (const item of candidates) {
     const pair = validPair(item.term, item.meaning);
     if (!pair) {
-      rejected.push({ ...item, problem: "単語と意味の両方を入力してください。" });
+      item.problem = "単語と意味の両方を入力してください。";
+      rejected.push(item);
       continue;
     }
     const key = normalizeTerm(pair.term);
     if (inDeck.has(key)) {
-      rejected.push({
-        ...item,
-        problem: `「${deckName(targetDeckId)}」に同じ単語があります。`,
-      });
+      item.problem = `「${deckName(targetDeckId)}」に同じ単語があります。`;
+      rejected.push(item);
       continue;
     }
     inDeck.add(key);
     accepted.push(pair);
+    acceptedItems.add(item);
   }
   const cleaned = accepted
     .map((item) => ({
@@ -33889,6 +33965,9 @@ elements.saveParsedButton.addEventListener("click", async () => {
 
   saveParsedBusy = true;
   elements.saveParsedButton.disabled = true;
+  // 保存を待つ間は候補の編集・削除・再変換を止める（待っている間の編集が保存に入らず消えるため）。
+  if (elements.candidateList) elements.candidateList.inert = true;
+  syncParseButtonLock();
   const previousActiveDeckId = appState.activeDeckId;
   try {
     appState.words.push(...cleaned);
@@ -33913,7 +33992,9 @@ elements.saveParsedButton.addEventListener("click", async () => {
       return;
     }
     // 保存できた分だけ一覧から取り除く。残った分は理由付きで確認タブに出したままにする。
-    candidates = rejected;
+    // 保存開始時の写しで置き換えず、いまの一覧から「保存した候補」だけを外す
+    // （待っている間に一覧が作り直されていても、新しい候補を消さない）。
+    candidates = candidates.filter((item) => !acceptedItems.has(item));
     // 保存先の明示選択を解除するのは、候補を出し切ったときだけにする。
     // 一部だけ保存できて候補が残っている間に解除すると、そのあとの再描画で保存先が
     // 既定へ戻り、直した残りが別の単語帳へ入ってしまう（元の不具合の再現になる）。
@@ -33932,6 +34013,8 @@ elements.saveParsedButton.addEventListener("click", async () => {
     else renderCandidates();
   } finally {
     saveParsedBusy = false;
+    if (elements.candidateList) elements.candidateList.inert = false;
+    syncParseButtonLock();
     elements.saveParsedButton.disabled = candidates.length === 0;
   }
 });
@@ -34627,8 +34710,8 @@ elements.moveSelectedButton?.addEventListener("click", () => {
     setStatus("移動先の単語帳を選んでください。");
     return;
   }
-  // 実在する単語だけを対象にする（一括削除ハンドラと同じ流儀）
-  const ids = [...selectedIds].filter((id) => appState.words.some((word) => word.id === id));
+  // 実在する単語だけを対象にする（一括削除ハンドラと同じ流儀。語数×選択数にならないよう1回の走査）
+  const ids = appState.words.filter((word) => selectedIds.has(word.id)).map((word) => word.id);
   if (ids.length === 0) {
     setStatus("移動する単語が選択されていません。");
     return;
@@ -34697,12 +34780,12 @@ elements.moveSelectedButton?.addEventListener("click", () => {
 
 // 選んだ単語をまとめて削除（ゴミ箱に30日保管・元に戻せる）
 elements.deleteSelectedButton?.addEventListener("click", () => {
-  const ids = [...selectedIds].filter((id) => appState.words.some((word) => word.id === id));
+  const targets = appState.words.filter((word) => selectedIds.has(word.id)); // 実在する語だけ（1回の走査）
+  const ids = targets.map((word) => word.id);
   if (ids.length === 0) {
     setStatus("削除する単語が選択されていません。");
     return;
   }
-  const targets = appState.words.filter((word) => ids.includes(word.id));
   // 確認したときの対象と、確定するときの対象が同じであることを確かめる。
   // 1回目のあと4秒以内に選択を変えて2回目を押すと、確認文に無かった語まで消えるため。
   const armedIds = ids.slice().sort().join(",");
@@ -34932,13 +35015,32 @@ elements.importDeckShareInput?.addEventListener("change", async () => {
         lastSrsResult: "",
       },
     }));
+    const previousActiveDeckId = appState.activeDeckId;
     appState.decks.push(deck);
     appState.words.push(...words);
     appState.activeDeckId = deck.id;
+    // 取り消しの指紋（「この操作の直後の内容」）は保存を待つ前に取る。待ったあとの内容で取ると、
+    // 待っている間に同期や採点で変わった分まで取り消しの対象になり、無関係な学習記録が消える。
+    const afterSignature = undoSignature(appState);
+    // 端末への保存が済んだことを確かめてから成功を伝える（候補の保存と同じ。両方失敗する環境では
+    // 「追加しました」と出ても再読込で消えるため）。失敗したら追加した単語帳と語を戻す。
+    // 進行中のクイズ・選択・直前の取り消しは、保存できてから捨てる（失敗したときに残すため）。
+    const persisted = await persistAppStateChecked();
+    if (!persisted) {
+      const added = new Set(words.map((word) => word.id));
+      appState.words = appState.words.filter((word) => !added.has(word.id));
+      appState.decks = appState.decks.filter((item) => item.id !== deck.id);
+      appState.activeDeckId = previousActiveDeckId;
+      renderAll();
+      throw new Error("端末に保存できませんでした（保存領域が使えないか、いっぱいです）。空き容量を確認して、もう一度お試しください");
+    }
     currentQuiz = null;
     selectedIds.clear();
-    saveState();
-    offerUndo(snapshot);
+    clearUndo();
+    renderAll();
+    // 待っている間に内容が変わっていたら（同期の合流・採点）、取り消しは出さない。
+    // 出すとその変更ごと巻き戻るため。追加した単語帳は「削除」で戻せる。
+    if (undoSignature(appState) === afterSignature) offerUndo(snapshot);
     setStatus(`共有単語帳「${deck.name}」を${words.length}語追加しました。学習成績は新規状態です。`);
   } catch (error) {
     setStatus(`共有単語帳を追加できませんでした：${error.message}`);
