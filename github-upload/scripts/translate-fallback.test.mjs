@@ -168,3 +168,32 @@ test("まとめ訳は1回の呼び出しにまとめる（gtxを使う理由そ�
   assert.deepEqual(Array.from(out), ["走る", "歩く", "跳ぶ"]);
   assert.equal(Array.from(t.calls).filter(isGtx).length, 1, "3語を1回で訳す");
 });
+
+// ============================================================================
+// 1.0.118: MyMemory が HTTP 200 のまま本文で失敗を返す形（枠切れ・引数の誤り）
+// ============================================================================
+const myMemoryBodyError = (message, status = "403") => ({
+  ok: true,
+  status: 200,
+  text: async () => JSON.stringify({ responseData: { translatedText: message }, responseStatus: status }),
+});
+
+test("MyMemory が 200 のまま本文 responseStatus=403 で英語のエラー文を返したら、それを訳として採用しない", async () => {
+  const t = buildSandbox((url) => (isGtx(url) ? httpError(503) : myMemoryBodyError("MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY.")));
+  assert.equal(await t.Translate.translateOne("apple"), null, "エラー文を「和訳」として返さない");
+  assert.equal(await t.Translate.translateOne("apple"), null, "失敗はキャッシュされず、次も取りに行く");
+  assert.equal(Array.from(t.calls).filter(isMyMemory).length, 2);
+});
+
+test("MyMemory の responseStatus が数値の 200 や省略でも、従来どおり訳を返す（後方互換）", async () => {
+  const numeric = buildSandbox((url) => (isGtx(url) ? httpError(503) : { ok: true, status: 200, text: async () => JSON.stringify({ responseData: { translatedText: "りんご" }, responseStatus: 200 }) }));
+  assert.equal(await numeric.Translate.translateOne("apple"), "りんご");
+  const omitted = buildSandbox((url) => (isGtx(url) ? httpError(503) : myMemoryOk("りんご")));
+  assert.equal(await omitted.Translate.translateOne("apple"), "りんご");
+});
+
+test("まとめ訳は件数に応じて待ち時間を延ばす（1件8秒＋1件ごとに1秒、上限20秒）", () => {
+  assert.match(MODULE_SOURCE, /const batchTimeoutMs = Math\.min\(20000, TRANSLATE_TIMEOUT_MS \+ 1000 \* uncached\.length\);/);
+  assert.match(MODULE_SOURCE, /await viaGtx\(joined, batchTimeoutMs\)/);
+  assert.match(MODULE_SOURCE, /async function getTextResult\(url, timeoutMs = TRANSLATE_TIMEOUT_MS\)/);
+});

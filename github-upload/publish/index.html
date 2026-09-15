@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.117</span>
+        <span class="app-footer-version">バージョン 1.0.118</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.117";
+  const APP_REV = "1.0.118";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7592,9 +7592,9 @@ const Translate = (() => {
   // 「相手が落ちている(down)」と「応答は来たが中身が使えない」を分けて返す。
   // まとめて失敗として数えると、たまたま訳せない語が続いただけで相手を切り離してしまう。
   // down とみなすのは、通信不可・タイムアウト・429（上限）・5xx（相手側の障害）だけ。
-  async function getTextResult(url) {
+  async function getTextResult(url, timeoutMs = TRANSLATE_TIMEOUT_MS) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TRANSLATE_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) return { down: res.status === 429 || res.status >= 500, text: null };
@@ -7607,9 +7607,9 @@ const Translate = (() => {
   }
 
   // 遮断器を通して取得する。落ちている間は呼ばずに即 null を返す。
-  async function getTextVia(breaker, url) {
+  async function getTextVia(breaker, url, timeoutMs = TRANSLATE_TIMEOUT_MS) {
     if (breaker.isTripped()) return null;
-    const { down, text } = await getTextResult(url);
+    const { down, text } = await getTextResult(url, timeoutMs);
     if (down) {
       breaker.fail();
       return null;
@@ -7618,10 +7618,11 @@ const Translate = (() => {
     return text;
   }
 
-  async function viaGtx(text) {
+  async function viaGtx(text, timeoutMs = TRANSLATE_TIMEOUT_MS) {
     const raw = await getTextVia(
       gtxBreaker,
       `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ja&dt=t&q=${encodeURIComponent(text)}`,
+      timeoutMs,
     );
     if (!raw) return null;
     try {
@@ -7642,6 +7643,10 @@ const Translate = (() => {
     if (!raw) return null;
     try {
       const data = JSON.parse(raw);
+      // MyMemory は枠切れ・引数の誤りを HTTP 200 のまま本文の responseStatus（"403" 等）で返し、
+      // translatedText には英語の大文字のエラー文が入る。見ないと、その文が「和訳」として保存・表示される。
+      const status = Number(data?.responseStatus ?? 200);
+      if (status !== 200) return null;
       const translated = data?.responseData?.translatedText;
       return typeof translated === "string" && translated.trim() ? translated.trim() : null;
     } catch {
@@ -7689,7 +7694,10 @@ const Translate = (() => {
     const joined = uncached.map((item) => item.text).join(`\n${BATCH_MARKER}\n`);
     let batchOk = false;
     try {
-      const translatedJoined = await viaGtx(joined);
+      // まとめた分だけ長くかかるので、件数に応じて待ち時間を延ばす（1件8秒＋1件ごとに1秒、上限20秒）。
+      // 単発と同じ8秒で打ち切ると、例文5件＋定義3件の後追いが単発より失敗しやすくなる。
+      const batchTimeoutMs = Math.min(20000, TRANSLATE_TIMEOUT_MS + 1000 * uncached.length);
+      const translatedJoined = await viaGtx(joined, batchTimeoutMs);
       if (translatedJoined) {
         const parts = translatedJoined
           .split(BATCH_MARKER)
@@ -7963,10 +7971,17 @@ const Enrich = (() => {
   }
 
   // 応答しない源は後回し。元気な源がそろって「無い」と答えたら、後回しの源を待たずに未収録とする。
-  async function record(term) {
+  // options.throwIfUnconfirmed: 未収録が確定していない（応答しなかった源が残る）ときは null を返さず
+  // 一時的な失敗として投げる。クイズの例文モードは null を「作り直しても変わらない」として長く見送るため、
+  // 確定していない null を渡すと復旧後も取り直さなくなる。
+  async function record(term, options = {}) {
     const w = clean(term);
     if (!w) return null;
     if (w in recordCache) return recordCache[w];
+    const unconfirmed = (transient) => {
+      if (options.throwIfUnconfirmed) throw transient || transientError("unconfirmed");
+      return null;
+    };
     // 順番どおりに始めるが、先頭の源が HEDGE_MS 返らなければ次の源も並行して叩き、先に取れた方を使う
     // （ヘッジ）。健全なときは1回の通信で済み、遅い源に付き合って待ち続けることもない。
     // 途中で「無い」と分かった源は次へ進み、応答しなかった源は後回しの印を付ける。
@@ -8038,7 +8053,7 @@ const Enrich = (() => {
       // 元気な源が1つしか無く、それが「無い」と言っただけなら、後回し中の源が復帰したときに
       // 取り直せるよう確定させない（同時に2つの辞書が落ちている間に本物の語を未収録と決めない）。
       if (first.misses >= 2 || tired.length === 0) return (recordCache[w] = null);
-      return null;
+      return unconfirmed(null);
     }
     const second = await attempt(tired);
     if (second.rec) return (recordCache[w] = second.rec);
@@ -8047,7 +8062,7 @@ const Enrich = (() => {
     if (!transient) return (recordCache[w] = null); // 全源が「無い」と確定
     // 2つ以上の源が「無い」と言い、残りは応答しなかった: 今回は未収録として扱うが、応答しなかった源が
     // 復帰したら取り直せるよう確定（キャッシュ）はしない
-    if (misses >= 2) return null;
+    if (misses >= 2) return unconfirmed(transient);
     throw transient;
   }
 
@@ -29651,7 +29666,7 @@ async function fetchContextFromDictionary(word) {
   // 辞書データは「詳しく」と同じ取得経路（dictionaryapi.dev → 予備の Wiktionary 系。応答しない源は
   // 後回し）を共用する。どの源にも項目が無ければ null（作り直しても結果は変わらない）。応答しなければ
   // transient 付きの例外が投げられ、呼び出し側が15分後の取り直しにつなぐ（恒久的な「例文なし」にしない）。
-  const rec = await window.Enrich.record(term);
+  const rec = await window.Enrich.record(term, { throwIfUnconfirmed: true });
   if (!rec) return null;
   // 多義語で語義違いの例文を出さないよう、登録済みの品詞に一致する定義の例文を優先する。
   // （品詞が分からない語は従来どおり全定義から選ぶ。辞書だけで語義までは特定できない）
@@ -33722,29 +33737,33 @@ async function backfillTranslationsOnce(type, word, section, chip) {
     else if (type === "synonyms") normalized = normalizeSynonymsData(raw);
     else return; // collocationsは和訳対象外
 
+    // 訳が無い項目を集める。undefined（未取得）だけでなく null（前に取れなかった）も対象にする。
+    // 一瞬の通信断で null になった項目が、二度と取り直されずに「取得できませんでした」のまま残っていた。
+    // 取れなかった表示は、取れるまでそのまま（取れたら置き換わる）。
+    const needsJa = (ja) => ja === undefined || ja === null;
     const texts = [];
     const targets = [];
     if (type === "examples") {
       for (const item of normalized.examples) {
-        if (item.en && item.ja === undefined) {
+        if (item.en && needsJa(item.ja)) {
           texts.push(item.en);
           targets.push(item);
         }
       }
       for (const item of normalized.definitions) {
-        if (item.def && item.ja === undefined) {
+        if (item.def && needsJa(item.ja)) {
           texts.push(item.def);
           targets.push(item);
         }
       }
     } else if (type === "etymology") {
-      if (normalized.text && normalized.ja === undefined) {
+      if (normalized.text && needsJa(normalized.ja)) {
         texts.push(normalized.text);
         targets.push(normalized);
       }
     } else if (type === "synonyms") {
       for (const item of normalized.items) {
-        if (item.word && item.ja === undefined) {
+        if (item.word && needsJa(item.ja)) {
           texts.push(item.word);
           targets.push(item);
         }
@@ -33756,9 +33775,14 @@ async function backfillTranslationsOnce(type, word, section, chip) {
     if (texts.length === 0) return;
 
     const translated = await window.Translate.translateBatch(texts);
+    let changed = false;
     targets.forEach((target, i) => {
-      target.ja = translated[i] !== undefined ? translated[i] : null;
+      const next = translated[i] !== undefined ? translated[i] : null;
+      if (target.ja === next) return; // null のまま（また取れなかった）なら書き直さない
+      target.ja = next;
+      changed = true;
     });
+    if (!changed) return; // 何も変わらなければ保存も再描画もしない（1万語の JSON 化を無駄に走らせない）
     persistAppState({ sync: false });
 
     // チップが開いたままであれば和訳を反映して再描画する（開き直されていれば新しい欄へ）。
