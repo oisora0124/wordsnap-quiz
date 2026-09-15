@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.115</span>
+        <span class="app-footer-version">バージョン 1.0.116</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.115";
+  const APP_REV = "1.0.116";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -24953,11 +24953,87 @@ function applyPerspective(src, v, h, mesh = 18) {
 
 // 優先順。キーごとの一覧GETで実際に使えるものを選ぶため、最新が無料枠に
 // 未開放でも下位へ自動フォールバックする。
-const GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"];
+// 2026-09-15 時点の最新 Flash は 3.8。古いキーや無料枠で未開放のときは順に下位へ。
+const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"];
 const GEMINI_MODEL_PREF_KEY = "wordsnap-gemini-model:v1";
 const GEMINI_MODEL_DISCOVERY_FAILURE_KEY = "wordsnap-gemini-model-discovery-failure:v1";
 const GEMINI_MODEL_DISCOVERY_BACKOFF_MS = 3 * 60 * 1000;
-const GROQ_MODEL = "qwen/qwen3.6-27b";
+// Groq の画像対応モデルは新しい順に試す。Gemini のような一覧GETでの事前選択は入れず、「そのモデルが
+// 無い」応答（404、または 400 で model not found / decommissioned 等）のときだけ次へ進む。レート制限
+// （429）や本文の問題（400 の他の理由）では別モデルへ再送しない（同じ画像で二重に課金しない）。
+// 使えたモデルは端末に控え、次回からそれを最初に使う。
+const GROQ_MODELS = ["qwen/qwen3.8-27b", "qwen/qwen3.6-27b"];
+const GROQ_MODEL_PREF_KEY = "wordsnap-groq-model:v1";
+let groqModelMemory = "";
+
+function rememberedGroqModel() {
+  if (GROQ_MODELS.includes(groqModelMemory)) return groqModelMemory;
+  try {
+    const saved = localStorage.getItem(GROQ_MODEL_PREF_KEY);
+    if (GROQ_MODELS.includes(saved)) {
+      groqModelMemory = saved;
+      return saved;
+    }
+  } catch {
+    // 保存領域が無ければ起動中の記憶だけで動く
+  }
+  return "";
+}
+
+function rememberGroqModel(model) {
+  groqModelMemory = model;
+  try {
+    localStorage.setItem(GROQ_MODEL_PREF_KEY, model);
+  } catch {
+    // ignore
+  }
+}
+
+function groqModelOrder() {
+  const first = rememberedGroqModel();
+  return first ? [first, ...GROQ_MODELS.filter((model) => model !== first)] : [...GROQ_MODELS];
+}
+
+// 「そのモデルが使えない」応答か。モデル名の誤り・提供終了・権限なしだけを対象にする。
+function isGroqModelUnavailable(status, message) {
+  if (status === 404) return true;
+  const text = String(message || "").toLowerCase();
+  return (
+    status === 400 &&
+    /model/.test(text) &&
+    /not found|does not exist|decommissioned|no longer supported|not supported|unknown model|deprecated|do not have access/.test(text)
+  );
+}
+
+// Groq のチャット補完を1回呼ぶ。モデルが無いときだけ次のモデルで1回やり直す。
+// 失敗は Error（message・status 付き）で投げる。
+async function groqChatCompletion(key, body, signal) {
+  const models = groqModelOrder();
+  let lastError = null;
+  for (let i = 0; i < models.length; i += 1) {
+    const model = models[i];
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      signal,
+      body: JSON.stringify({ model, ...body }),
+    });
+    if (res.ok) {
+      rememberGroqModel(model);
+      return res.json();
+    }
+    let message = `HTTP ${res.status}`;
+    try {
+      const err = await res.json();
+      message = err.error?.message || message;
+    } catch {
+      // keep status
+    }
+    lastError = Object.assign(new Error(message), { status: res.status });
+    if (!isGroqModelUnavailable(res.status, message) || i === models.length - 1) throw lastError;
+  }
+  throw lastError;
+}
 const geminiModelMemory = new Map();
 const geminiModelDiscoveryInflight = new Map();
 const geminiModelDiscoveryFailures = new Map();
@@ -25154,7 +25230,7 @@ function aiPrompt() {
 const AI_PROVIDERS = [
   {
     id: "gemini",
-    // モデルはキーごとに使える最新Flash（3.6→3.5→2.5）を自動選択するため、名前に版を固定しない
+    // モデルはキーごとに使える最新Flash（3.8→3.7→3.6→3.5→2.5）を自動選択するため、名前に版を固定しない
     name: "Google Gemini Flash（無料枠・最新版を自動選択）",
     placeholder: "AIza… を貼り付け",
     keyUrl: "https://aistudio.google.com/apikey",
@@ -25163,7 +25239,7 @@ const AI_PROVIDERS = [
   },
   {
     id: "groq",
-    name: "Groq Qwen 3.6 Vision（無料枠）",
+    name: "Groq Qwen 3.8 Vision（無料枠・使えないときは 3.6）",
     placeholder: "gsk_… を貼り付け",
     keyUrl: "https://console.groq.com/keys",
     extract: extractWithGroq,
@@ -25853,12 +25929,9 @@ async function extractWithGemini(canvas, key, signal) {
 // OpenAI-compatible vision request to Groq.
 // signal: タイムアウト/手動中断用のAbortSignal（省略可）
 async function extractWithGroq(canvas, key, signal) {
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    signal,
-    body: JSON.stringify({
-      model: GROQ_MODEL,
+  const data = await groqChatCompletion(
+    key,
+    {
       temperature: 0,
       reasoning_effort: "none",
       max_completion_tokens: 4096,
@@ -25871,19 +25944,9 @@ async function extractWithGroq(canvas, key, signal) {
           ],
         },
       ],
-    }),
-  });
-  if (!res.ok) {
-    let message = `HTTP ${res.status}`;
-    try {
-      const err = await res.json();
-      message = err.error?.message || message;
-    } catch {
-      // keep status
-    }
-    throw new Error(message);
-  }
-  const data = await res.json();
+    },
+    signal,
+  );
   return (data?.choices?.[0]?.message?.content || "").trim();
 }
 
@@ -29032,29 +29095,18 @@ async function generateContextWithGemini(word, key, signal, prompt = contextGenP
 }
 
 async function generateContextWithGroq(word, key, signal, prompt = contextGenPrompt(word)) {
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    signal,
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      temperature: 0.7,
-      reasoning_effort: "none",
-      max_completion_tokens: 512,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  if (!res.ok) {
-    let message = `HTTP ${res.status}`;
-    try {
-      const err = await res.json();
-      message = err.error?.message || message;
-    } catch {
-      // keep status
-    }
-    throw contextGenerationError(message, res.status);
+  let data;
+  try {
+    data = await groqChatCompletion(
+      key,
+      { temperature: 0.7, reasoning_effort: "none", max_completion_tokens: 512, messages: [{ role: "user", content: prompt }] },
+      signal,
+    );
+  } catch (error) {
+    // HTTP 応答の失敗は従来どおり status 付きの生成エラーに（429・5xx を一時失敗として扱う経路を保つ）
+    if (Number.isFinite(error?.status)) throw contextGenerationError(error.message, error.status);
+    throw error;
   }
-  const data = await res.json();
   return String(data?.choices?.[0]?.message?.content || "").trim();
 }
 
