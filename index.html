@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.116</span>
+        <span class="app-footer-version">バージョン 1.0.117</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.116";
+  const APP_REV = "1.0.117";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -8033,13 +8033,21 @@ const Enrich = (() => {
     const tired = DICT_SOURCES.filter((source) => isDegraded(source.id));
     const first = await attempt(fresh);
     if (first.rec) return (recordCache[w] = first.rec);
-    if (first.misses > 0 && !first.transient) return (recordCache[w] = null);
+    if (first.misses > 0 && !first.transient) {
+      // 元気な源がそろって「無い」（2つ以上、または全源を試した）なら未収録として確定する。
+      // 元気な源が1つしか無く、それが「無い」と言っただけなら、後回し中の源が復帰したときに
+      // 取り直せるよう確定させない（同時に2つの辞書が落ちている間に本物の語を未収録と決めない）。
+      if (first.misses >= 2 || tired.length === 0) return (recordCache[w] = null);
+      return null;
+    }
     const second = await attempt(tired);
     if (second.rec) return (recordCache[w] = second.rec);
     const misses = first.misses + second.misses;
     const transient = second.transient || first.transient;
-    // 2つ以上の源が「無い」と確定したなら、残りが応答しなくても未収録とみなす
-    if (!transient || misses >= 2) return (recordCache[w] = null);
+    if (!transient) return (recordCache[w] = null); // 全源が「無い」と確定
+    // 2つ以上の源が「無い」と言い、残りは応答しなかった: 今回は未収録として扱うが、応答しなかった源が
+    // 復帰したら取り直せるよう確定（キャッシュ）はしない
+    if (misses >= 2) return null;
     throw transient;
   }
 
@@ -23149,6 +23157,8 @@ function initWordsnapSync() {
       stopQuizTimer(); // 背面ではカウントダウンを止める（見えない所で時間切れにしない）
       // 背面ではタイマーが遅延・凍結されるため、デバウンス待ちの変更は今すぐ送る。
       flushPendingSyncPush();
+      // まとめて保存する予定だった補完結果も、背面で殺される前に保存する
+      flushPendingPrefetchPersist();
       return;
     }
     resetQuizTimerOnResume();
@@ -23157,6 +23167,7 @@ function initWordsnapSync() {
   window.addEventListener("pageshow", pullIfConnected);
   // タブを閉じる・別ページへ移る直前の最後の砦（visibilitychangeが来ない環境向け）。
   window.addEventListener("pagehide", flushPendingSyncPush);
+  window.addEventListener("pagehide", flushPendingPrefetchPersist);
   // オフライン復帰時：オフライン中に解いた進捗（stats・history・streak等）を即サーバーへ反映する。
   // pull で差分があれば pull 内部で push まで行われるため、二重pushを避け、
   // 差分が無かったとき（＝オフライン中の自分の進捗が未送信のとき）だけ明示的に押し込む。
@@ -25019,8 +25030,9 @@ async function groqChatCompletion(key, body, signal) {
       body: JSON.stringify({ model, ...body }),
     });
     if (res.ok) {
+      const data = await res.json(); // 本文が読めてから「使えた」と覚える
       rememberGroqModel(model);
-      return res.json();
+      return data;
     }
     let message = `HTTP ${res.status}`;
     try {
@@ -33016,6 +33028,16 @@ let prefetchRunning = false;
 let prefetchDirtyBatches = 0; // 保存していない変更を含むバッチの数
 const prefetchQueue = [];
 
+// 保存をまとめている間にページが背面へ行く・閉じられるとき、未保存の補完結果（最大で
+// 25バッチ＝約100語分の CEFR・品詞）をその場で保存する。保存せずに強制終了されると、
+// 次回起動で同じ語を外部へ問い合わせ直すことになる。
+function flushPendingPrefetchPersist() {
+  if (prefetchDirtyBatches <= 0) return;
+  prefetchDirtyBatches = 0;
+  persistAppState({ sync: false });
+  updatePrefetchAllStatus();
+}
+
 function queueMetadataPrefetch(words) {
   if (!Array.isArray(words) || words.length === 0) return;
   for (const word of words) {
@@ -33665,7 +33687,31 @@ async function handleEnrichChip(chip) {
 
 // 表示済みの例文・語源・類義語のうち和訳が未取得のものを裏側でまとめて翻訳し、
 // 成功したらキャッシュ更新＆再描画する。失敗しても既存表示はそのまま維持する（クラッシュしない）。
-async function backfillTranslations(type, word, section, chip) {
+//
+// 同じ語・同じ種類の後追いは同時に1本だけ走らせる。チップを閉じてすぐ開き直すと2本目が始まり、
+// 2本目が word.enrich[type] を新しいオブジェクトに差し替えるため、1本目の訳文は差し替え前の
+// （もう表示も保存もされない）オブジェクトに書かれて捨てられ、翻訳の通信も二重になっていた。
+// 完了時の再描画は、呼び出し時の欄ではなく「いま表示されている」欄へ行う（開き直しで欄が
+// 作り直されていても、和訳が「取得中…」のまま残らない）。
+const backfillInFlight = new Map(); // `${word.id}|${type}` → 進行中の後追い
+
+function backfillTranslations(type, word, section, chip) {
+  const key = `${word?.id}|${type}`;
+  if (backfillInFlight.has(key)) return backfillInFlight.get(key);
+  const run = backfillTranslationsOnce(type, word, section, chip).finally(() => backfillInFlight.delete(key));
+  backfillInFlight.set(key, run);
+  return run;
+}
+
+// いま画面に出ている、この語・この種類の欄とチップ（開き直しで作り直されていれば新しい方）
+function liveEnrichTargets(type, word, section, chip) {
+  const liveChip =
+    document.querySelector(`.enrich-chip[data-enrich="${type}"][data-word-id="${word.id}"]`) || chip;
+  const liveSection = liveChip?.closest?.(".saved-item")?.querySelector?.(`[data-section="${type}"]`) || section;
+  return { liveChip, liveSection };
+}
+
+async function backfillTranslationsOnce(type, word, section, chip) {
   try {
     const raw = word.enrich[type];
     if (!raw) return;
@@ -33715,9 +33761,10 @@ async function backfillTranslations(type, word, section, chip) {
     });
     persistAppState({ sync: false });
 
-    // チップが開いたままであれば和訳を反映して再描画する。
-    if (chip.getAttribute("aria-pressed") === "true" && section.isConnected) {
-      section.innerHTML = enrichSectionShell(type, enrichBody(type, word.enrich[type], word.term));
+    // チップが開いたままであれば和訳を反映して再描画する（開き直されていれば新しい欄へ）。
+    const { liveChip, liveSection } = liveEnrichTargets(type, word, section, chip);
+    if (liveChip?.getAttribute("aria-pressed") === "true" && liveSection?.isConnected) {
+      liveSection.innerHTML = enrichSectionShell(type, enrichBody(type, word.enrich[type], word.term));
     }
   } catch {
     // 通信・パース失敗時は何もしない（既存表示を維持）

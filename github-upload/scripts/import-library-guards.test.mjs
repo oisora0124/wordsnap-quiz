@@ -411,6 +411,11 @@ test("選択の整理・一括操作の対象抽出は Set で引く（語数×�
   assert.doesNotMatch(prefetch, /appState\.words\.find\(/);
   assert.match(prefetch, /prefetchDirtyBatches >= PREFETCH_PERSIST_EVERY_BATCHES/, "保存はまとめる");
   assert.match(prefetch, /if \(prefetchDirtyBatches > 0\) \{[\s\S]*?persistAppState\(\{ sync: false \}\);/, "キューが空になったら残りを保存する");
+  // 1.0.117: 背面へ行く・閉じられるときは、まとめていた未保存分をその場で保存する
+  const flush = extractFunction("flushPendingPrefetchPersist");
+  assert.match(flush, /if \(prefetchDirtyBatches <= 0\) return;[\s\S]*?prefetchDirtyBatches = 0;[\s\S]*?persistAppState\(\{ sync: false \}\);/);
+  assert.match(html, /if \(document\.hidden\) \{[\s\S]*?flushPendingSyncPush\(\);\s*[^]*?flushPendingPrefetchPersist\(\);/, "visibilitychange（背面）で保存");
+  assert.match(html, /window\.addEventListener\("pagehide", flushPendingPrefetchPersist\);/, "pagehide で保存");
   const every = Number(html.match(/const PREFETCH_PERSIST_EVERY_BATCHES = (\d+);/)[1]);
   assert.ok(every >= 10 && every <= 100);
 });

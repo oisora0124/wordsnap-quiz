@@ -198,7 +198,7 @@ async function makeInit({
     rememberSyncIdInUrl: record("rememberSyncIdInUrl"),
     updateSyncBadge: record("updateSyncBadge"),
     startSyncPolling() {}, stopSyncPolling() {}, stopQuizTimer() {},
-    updateQuizControls() {}, flushPendingSyncPush() {}, pullWordsnapState() {},
+    updateQuizControls() {}, flushPendingSyncPush() {}, flushPendingPrefetchPersist() {}, pullWordsnapState() {},
     pushWordsnapState() {}, acceptSyncMergeOffer() {}, hideSyncMergeOffer() {},
     adoptForeignSyncId() {}, generateSyncId: () => GENERATED, issueNewSyncId() {},
     extractSyncIdFromJoinInput: () => "", forcePullReplace() {}, forcePushOverwrite() {},

@@ -106,3 +106,27 @@ test("両方の呼び出し（写真の文字起こし・例文生成）が共�
   assert.doesNotMatch(html, /model: GROQ_MODEL\b/);
   assert.match(html, /name: "Groq Qwen 3\.8 Vision（無料枠・使えないときは 3\.6）"/);
 });
+
+test("Groq: 200 でも本文が読めなければ「使えた」と覚えない（1.0.117）", async () => {
+  const storage = {};
+  const sandbox = {
+    localStorage: { getItem: (k) => (k in storage ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v); } },
+    fetch: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected token <"); } }),
+  };
+  new Script(
+    [
+      extractConst("GROQ_MODELS"),
+      extractConst("GROQ_MODEL_PREF_KEY"),
+      "let groqModelMemory = '';",
+      extractFunction("rememberedGroqModel"),
+      extractFunction("rememberGroqModel"),
+      extractFunction("groqModelOrder"),
+      extractFunction("isGroqModelUnavailable"),
+      "async " + extractFunction("groqChatCompletion"),
+      "globalThis.__g = { groqChatCompletion };",
+    ].join("\n\n"),
+    { filename: "ai-models-groq-json.js" },
+  ).runInNewContext(sandbox);
+  await assert.rejects(sandbox.__g.groqChatCompletion("gsk_x", { messages: [] }, undefined));
+  assert.equal(storage["wordsnap-groq-model:v1"], undefined);
+});
