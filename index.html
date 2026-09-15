@@ -8864,7 +8864,7 @@ const HISTORY_RAW_MAX = 50;
 // 日別に残せる解答トークンの総数の上限（1語あたり）。1トークン約5バイトなので約15KB/語。
 // 日数ではなく件数で切るのは、容量の上限を直接押さえるため（1日に何百件解く語もある）。
 // 超えたら古い日から丸ごと落とす。
-const HISTORY_DAILY_MAX_ENTRIES = 3000;
+const HISTORY_DAILY_MAX_ENTRIES = 2000;
 // 誤答した単語が通常クイズに戻れる時間ベースの保険（既存の「◯問後」SRSとOR＝早い方が優先）
 const WRONG_COOLDOWN_MS = 5 * 60 * 1000;
 // 特定の教材を転載せず、大学受験で役立つ語を本アプリ向けに独自選定したリスト。
@@ -22907,6 +22907,9 @@ function rememberSyncIdInUrl(id) {
       url.searchParams.delete("wordsnap");
       url.searchParams.delete("syncId");
       window.history.replaceState(null, "", url);
+      // 起動時は素のURLで開き、ここで初めて個人キーがURLに載る経路がある（新規発行・採用）。
+      // 起動時の判定だけでは noindex が付かないので、キーを載せた時点でも付ける。
+      if (typeof applyPrivateLinkNoindex === "function") applyPrivateLinkNoindex();
     }
   } catch {
     /* URL書き換えに失敗しても致命的ではない */

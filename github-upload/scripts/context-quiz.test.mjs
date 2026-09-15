@@ -271,7 +271,7 @@ function buildGradeQuizSandbox() {
     "function renderQuiz() {}",
     // 採点直後の履歴の切り詰めは、捨てる分を日別へ畳み込む実コードをそのまま使う
     "const HISTORY_RAW_MAX = 50;",
-    "const HISTORY_DAILY_MAX_ENTRIES = 3000;",
+    "const HISTORY_DAILY_MAX_ENTRIES = 2000;",
     extractFunction("nonNegativeNumber"),
     extractFunction("nonNegativeInteger"),
     extractFunction("normalizeHistoryEntries"),

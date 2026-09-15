@@ -100,7 +100,7 @@ const COMMON = [
   "const SAFE_CEFR_LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);",
   "const SAFE_POS_TAGS = new Set(['n', 'v', 'adj', 'adv']);",
   "const HISTORY_RAW_MAX = 50;",
-  "const HISTORY_DAILY_MAX_ENTRIES = 3000;",
+  "const HISTORY_DAILY_MAX_ENTRIES = 2000;",
   "const clearSavedReviewProgress = () => false;",
   "let __idSeq = 0; function createId() { return `id${++__idSeq}`; }",
   extractFunction("sanitizeId"),

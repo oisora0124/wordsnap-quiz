@@ -41,7 +41,7 @@ function makeRuntime() {
     "const SAFE_CEFR_LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);",
     "const SAFE_POS_TAGS = new Set(['n', 'v', 'adj', 'adv']);",
     "const HISTORY_RAW_MAX = 50;",
-    "const HISTORY_DAILY_MAX_ENTRIES = 3000;",
+    "const HISTORY_DAILY_MAX_ENTRIES = 2000;",
     // buildDailyActivity・deckSharePayload が参照する状態。テストから差し替える。
     "const appState = { words: [], decks: [], activeDeckId: 'all' };",
     extractFunction("createId"),
@@ -470,10 +470,10 @@ test("日別のトークンは秒の昇順に並べ直す（同期の指紋を�
   assert.equal(JSON.stringify(daily.days), '{"2026-07-01":"5+,5-,a+,z-","2026-07-02":"5+"}');
 });
 
-test("日別の総件数が3000を超えたら、古い日から丸ごと落とす", () => {
+test("日別の総件数が2000を超えたら、古い日から丸ごと落とす", () => {
   const days = {};
   const start = Date.parse("2024-01-01T00:00:00.000Z");
-  // 1日100件 × 40日 = 4000件。上限3000に収めるには古い10日を落とすことになる。
+  // 1日100件 × 40日 = 4000件。上限2000に収めるには古い20日を落とすことになる。
   const oneDay = Array.from({ length: 100 }, (_, index) => `${index.toString(36)}+`).join(",");
   for (let index = 0; index < 40; index += 1) {
     days[new Date(start + index * 24 * HOUR_MS).toISOString().slice(0, 10)] = oneDay;
@@ -482,20 +482,28 @@ test("日別の総件数が3000を超えたら、古い日から丸ごと落と�
   const normalized = rt.normalizeHistoryDaily({ days });
   const keys = Object.keys(normalized.days);
 
-  assert.equal(totalAnswers(normalized), 3000);
-  assert.equal(keys.length, 30);
+  assert.equal(totalAnswers(normalized), 2000);
+  assert.equal(keys.length, 20);
   assert.equal(
     keys[0],
-    new Date(start + 10 * 24 * HOUR_MS).toISOString().slice(0, 10),
+    new Date(start + 20 * 24 * HOUR_MS).toISOString().slice(0, 10),
     "古い日から落ちること",
   );
   assert.deepEqual(keys, [...keys].sort(), "キーは常に日付順");
 });
 
+test("個人キーをURLへ載せる rememberSyncIdInUrl でも noindex を付け直す", () => {
+  // 起動時は素のURLで開き、あとから ?w= が付く経路（新規発行・採用）では起動時の判定が空振りする
+  const start = html.indexOf("function rememberSyncIdInUrl(");
+  const end = html.indexOf("\nfunction removeSyncIdFromUrl(", start);
+  assert.ok(start > 0 && end > start);
+  assert.match(html.slice(start, end), /applyPrivateLinkNoindex\(\)/);
+});
+
 test("履歴の上限値はHTMLの定数とテストの前提が一致している", () => {
   // 砂場では定数を手書きしているので、本体だけ変わったときに気付けるようにする。
   assert.match(html, /const HISTORY_RAW_MAX = 50;/);
-  assert.match(html, /const HISTORY_DAILY_MAX_ENTRIES = 3000;/);
+  assert.match(html, /const HISTORY_DAILY_MAX_ENTRIES = 2000;/);
   assert.doesNotMatch(html, /foldedThrough/, "廃止した水位が残っていないこと");
 });
 
