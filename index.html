@@ -2942,6 +2942,29 @@ textarea:focus-visible {
   opacity: 0.85;
 }
 
+/* 段階4カード化: 見出し1行＋「理由と対処を見る」の折りたたみへ要約する */
+.sync-v2-notice-headline {
+  margin: 0;
+}
+
+.sync-v2-notice-details {
+  margin-top: 0.35rem;
+}
+
+.sync-v2-notice-details > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  text-decoration: underline;
+}
+
+.sync-v2-notice-details p {
+  margin: 0.4rem 0 0;
+}
+
+.sync-v2-notice-details p + p {
+  margin-top: 0.6rem;
+}
+
 .sync-v2-code {
   width: 100%;
   min-width: 0;
@@ -4660,6 +4683,113 @@ textarea:focus-visible {
   background: var(--surface-2);
 }
 
+/* 段階的開示: 最初に見えるのは「おまかせ」と「今日の復習」だけにして、
+   単語帳・範囲・他の出題モードは details に畳んでおく。 */
+#resumeQuizButton:not([hidden]) {
+  margin-bottom: 10px;
+}
+
+.quiz-start-primary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.quiz-start-primary > #startQuizButton {
+  flex: 1 1 240px;
+  min-height: 52px;
+  font-size: 1.05rem;
+}
+
+.quiz-start-primary > #generalReviewButton {
+  flex: 0 1 auto;
+}
+
+/* .settings-section の summary（シェブロン・hover）を同じ書き方で再現しつつ、
+   枝葉の設定なので一回り小さくする。 */
+.quiz-setup-more {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.quiz-setup-more + .quiz-setup-more {
+  margin-top: 8px;
+}
+
+.quiz-setup-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 10px 12px;
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 760;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.quiz-setup-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.quiz-setup-more > summary::after {
+  content: "";
+  margin-left: auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.quiz-setup-more[open] > summary::after {
+  transform: rotate(45deg);
+}
+
+.quiz-setup-more > summary:hover {
+  background: var(--surface-3);
+}
+
+.quiz-setup-more-body {
+  /* summaryの左右余白(12px)と揃える */
+  padding: 8px 12px 10px;
+}
+
+.quiz-setup-scope {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.8rem;
+}
+
+.quiz-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 480px) {
+  .quiz-mode-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .quiz-mode-row > button {
+    width: 100%;
+    margin: 0;
+  }
+
+  /* 主ボタンと横並びだと「今日の復習」だけ幅が窮屈になるため、狭い画面では全幅に揃える */
+  .quiz-start-primary > #generalReviewButton {
+    flex: 1 1 auto;
+  }
+}
+
 .quiz-setup-row {
   display: flex;
   flex-wrap: wrap;
@@ -4847,10 +4977,39 @@ textarea:focus-visible {
 }
 
 .quiz-card h3 {
-  margin: 0 0 14px;
+  /* 見出しの下余白は .quiz-word-row（発音ボタンとの横並び行）側に移した */
+  margin: 0;
   font-size: clamp(1.6rem, 5vw, 2.6rem);
   font-weight: 800;
   letter-spacing: -0.03em;
+}
+
+/* 出題単語の見出しと手動読み上げボタンを横並びにする行 */
+.quiz-word-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.quiz-word-row > #quizWord {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.quiz-speak {
+  flex: none;
+  padding: 0.5rem 0.65rem;
+  color: var(--action-fg);
+  background: var(--action-bg);
+  border-color: transparent;
+}
+
+.quiz-speak.is-speaking {
+  color: var(--action-fg);
+  background: var(--action-bg);
+  border-color: var(--action-bg);
 }
 
 /* フラッシュカードは1タップで意味を確認し、そのまま左右へ仕分けできる軽量UI。 */
@@ -5026,7 +5185,6 @@ textarea:focus-visible {
     width: 100%;
     margin: 0;
   }
-  .quiz-actions > #startQuizButton,
   .quiz-actions > #nextQuizButton,
   .quiz-actions > #exitQuizButton,
   .quiz-actions > #exitReviewButton,
@@ -5453,8 +5611,12 @@ body.tutorial-open {
   }
 
   .quiz-card h3 {
-    margin: 0 0 10px;
+    margin: 0;
     font-size: clamp(1.35rem, 6vw, 1.7rem);
+  }
+
+  .quiz-word-row {
+    margin-bottom: 10px;
   }
 
   .choices {
@@ -6170,80 +6332,101 @@ accurate 正確な"
         <div id="quizSetup" class="quiz-setup">
           <!-- リロード等で中断したクイズがあるときだけ表示される再開ボタン -->
           <button id="resumeQuizButton" class="secondary" type="button" hidden>▶ 前回の続きから</button>
-          <div class="quiz-setup-row">
-            <label class="quiz-setup-field">
-              <span>単語帳</span>
-              <select id="quizDeckSelect"></select>
-            </label>
-            <label class="quiz-setup-field">
-              <span>CEFR</span>
-              <select id="quizCefrSelect">
-                <option value="all">すべて</option>
-                <option value="A1">A1</option>
-                <option value="A2">A2</option>
-                <option value="B1">B1</option>
-                <option value="B2">B2</option>
-                <option value="C1">C1</option>
-                <option value="C2">C2</option>
-                <option value="unknown">未判定</option>
-              </select>
-            </label>
-            <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false" aria-controls="quizRangeRow">範囲</button>
-            <label class="quiz-setup-check" title="単語の出題順をランダムにします。例文問題の割合は隣の設定で選べます。">
-              <input id="quizShuffle" type="checkbox" checked />
-              シャッフル
-            </label>
-            <label class="quiz-setup-field">
-              <span>例文問題</span>
-              <select id="quizContextAmountSelect" aria-describedby="quizSetupHint">
-                <option value="none">出さない</option>
-                <option value="some">一部（約半分）</option>
-                <option value="all">全部</option>
-              </select>
-            </label>
-            <label class="quiz-setup-field" title="4択クイズ全体に適用されます（例文問題・フラッシュカードは形式が違うため対象外）">
-              <span>出題の向き</span>
-              <select id="quizDirectionSelect" aria-describedby="quizSetupHint">
-                <option value="forward">英→日（既定）</option>
-                <option value="reverse">日→英</option>
-                <option value="mix">ミックス</option>
-              </select>
-            </label>
-            <button id="quizRangeStartButton" type="button" title="上で選んだ単語帳・範囲の単語を1周だけ出題します（習得済みも含む）">この設定で出題</button>
-            <span id="quizDeckCount" class="quiz-setup-count"></span>
+          <div class="quiz-start-primary">
+            <button id="startQuizButton" class="quiz-start-main" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
+            <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
           </div>
-          <div id="quizRangeRow" class="quiz-range-row" hidden>
-            <span class="quiz-range-label">番号</span>
-            <input id="quizRangeFrom" type="number" min="1" step="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
-            <span aria-hidden="true">〜</span>
-            <input id="quizRangeTo" type="number" min="1" step="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
-            <span class="quiz-range-hint">空欄なら全部</span>
-            <span class="quiz-range-hint quiz-range-note">※番号は選択した単語帳・CEFR条件での追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
-          </div>
-          <div class="quiz-setup-help">
-            <div class="quiz-setup-summary">
-              <p id="quizSetupHint" class="settings-desc quiz-setup-hint">設定した範囲は1周、おまかせはエンドレスで出題します。</p>
-              <button
-                id="quizSetupHintToggle"
-                class="ghost mini quiz-setup-hint-toggle"
-                type="button"
-                aria-expanded="false"
-                aria-controls="quizSetupDetails"
-              >？ 詳しく</button>
+          <details id="quizSetupAdvanced" class="quiz-setup-more">
+            <summary>単語帳・範囲・出題形式を選ぶ <span id="quizSetupScope" class="quiz-setup-scope"></span></summary>
+            <div class="quiz-setup-more-body">
+              <div class="quiz-setup-row">
+                <label class="quiz-setup-field">
+                  <span>単語帳</span>
+                  <select id="quizDeckSelect"></select>
+                </label>
+                <label class="quiz-setup-field">
+                  <span>CEFR</span>
+                  <select id="quizCefrSelect">
+                    <option value="all">すべて</option>
+                    <option value="A1">A1</option>
+                    <option value="A2">A2</option>
+                    <option value="B1">B1</option>
+                    <option value="B2">B2</option>
+                    <option value="C1">C1</option>
+                    <option value="C2">C2</option>
+                    <option value="unknown">未判定</option>
+                  </select>
+                </label>
+                <button id="quizRangeToggle" class="quiz-range-toggle" type="button" aria-expanded="false" aria-controls="quizRangeRow">範囲</button>
+                <label class="quiz-setup-check" title="単語の出題順をランダムにします。例文問題の割合は隣の設定で選べます。">
+                  <input id="quizShuffle" type="checkbox" checked />
+                  シャッフル
+                </label>
+                <label class="quiz-setup-field">
+                  <span>例文問題</span>
+                  <select id="quizContextAmountSelect" aria-describedby="quizSetupHint">
+                    <option value="none">出さない</option>
+                    <option value="some">一部（約半分）</option>
+                    <option value="all">全部</option>
+                  </select>
+                </label>
+                <label class="quiz-setup-field" title="4択クイズ全体に適用されます（例文問題・フラッシュカードは形式が違うため対象外）">
+                  <span>出題の向き</span>
+                  <select id="quizDirectionSelect" aria-describedby="quizSetupHint">
+                    <option value="forward">英→日（既定）</option>
+                    <option value="reverse">日→英</option>
+                    <option value="mix">ミックス</option>
+                  </select>
+                </label>
+                <button id="quizRangeStartButton" type="button" title="上で選んだ単語帳・範囲の単語を1周だけ出題します（習得済みも含む）">この設定で出題</button>
+                <span id="quizDeckCount" class="quiz-setup-count"></span>
+              </div>
+              <div id="quizRangeRow" class="quiz-range-row" hidden>
+                <span class="quiz-range-label">番号</span>
+                <input id="quizRangeFrom" type="number" min="1" step="1" inputmode="numeric" placeholder="開始" aria-label="出題する開始番号" />
+                <span aria-hidden="true">〜</span>
+                <input id="quizRangeTo" type="number" min="1" step="1" inputmode="numeric" placeholder="終了" aria-label="出題する終了番号" />
+                <span class="quiz-range-hint">空欄なら全部</span>
+                <span class="quiz-range-hint quiz-range-note">※番号は選択した単語帳・CEFR条件での追加順です（「保存した単語」で検索・並び替え後に表示される番号とは異なります）</span>
+              </div>
+              <div class="quiz-setup-help">
+                <div class="quiz-setup-summary">
+                  <p id="quizSetupHint" class="settings-desc quiz-setup-hint">設定した範囲は1周、おまかせはエンドレスで出題します。</p>
+                  <button
+                    id="quizSetupHintToggle"
+                    class="ghost mini quiz-setup-hint-toggle"
+                    type="button"
+                    aria-expanded="false"
+                    aria-controls="quizSetupDetails"
+                  >？ 詳しく</button>
+                </div>
+                <ul id="quizSetupDetails" class="settings-desc quiz-setup-details" hidden>
+                  <li><strong>この設定で出題：</strong>上の単語帳・範囲を、習得済みも含めて1周します。例文問題は初期値では出さず、「一部」か「全部」を選んだ場合だけ含めます。</li>
+                  <li><strong>クイズを始める（おまかせ）：</strong>覚えていない単語を自動で選び、エンドレスに出題します。</li>
+                  <li><strong>苦手だけ／今日の復習：</strong>正答率80%未満の誤答歴がある単語、または復習日が来た単語だけを1周します。</li>
+                  <li><strong>やさしい順：</strong>未着手の単語をCEFRのA1→C2順で1周します。未判定の単語は最後です。</li>
+                  <li><strong>出題の向き：</strong>4択クイズ全体（おまかせ・この設定で出題・今日の復習・苦手だけ など）に適用されます。日→英は日本語の意味を見て英単語を選ぶ形式です。ミックスは、おまかせでは1問ごと、それ以外はセッション開始時に向きが決まります。例文問題とフラッシュカードは形式が違うため対象外です。また、フラッシュカードで覚えた語を確かめる回だけは、設定に関わらず英→日で出ます。</li>
+                </ul>
+              </div>
             </div>
-            <ul id="quizSetupDetails" class="settings-desc quiz-setup-details" hidden>
-              <li><strong>この設定で出題：</strong>上の単語帳・範囲を、習得済みも含めて1周します。例文問題は初期値では出さず、「一部」か「全部」を選んだ場合だけ含めます。</li>
-              <li><strong>クイズを始める（おまかせ）：</strong>覚えていない単語を自動で選び、エンドレスに出題します。</li>
-              <li><strong>苦手だけ／今日の復習：</strong>正答率80%未満の誤答歴がある単語、または復習日が来た単語だけを1周します。</li>
-              <li><strong>やさしい順：</strong>未着手の単語をCEFRのA1→C2順で1周します。未判定の単語は最後です。</li>
-              <li><strong>出題の向き：</strong>4択クイズ全体（おまかせ・この設定で出題・今日の復習・苦手だけ など）に適用されます。日→英は日本語の意味を見て英単語を選ぶ形式です。ミックスは、おまかせでは1問ごと、それ以外はセッション開始時に向きが決まります。例文問題とフラッシュカードは形式が違うため対象外です。また、フラッシュカードで覚えた語を確かめる回だけは、設定に関わらず英→日で出ます。</li>
-            </ul>
-          </div>
+          </details>
+          <details id="quizMoreModes" class="quiz-setup-more">
+            <summary>他の出題モード <span class="quiz-setup-scope">苦手だけ・やさしい順・例文・フラッシュカード</span></summary>
+            <div class="quiz-setup-more-body quiz-mode-row">
+              <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
+              <button id="easyQuizButton" class="secondary" type="button" title="まだ解いていない単語を、CEFR推定でやさしい順（A1→C2、未判定は最後）に出題します。復習の予定には影響しません。">やさしい順で解く（0語）</button>
+              <button id="contextQuizButton" class="secondary" type="button" title="例文の空所に入る英単語を4択から選ぶ問題。例文と選択肢はその場で自動生成します（設定で作り方を変更・停止できます）">例文で解く（0語）</button>
+              <button id="startFlashcardButton" class="secondary" type="button" title="選んだ単語帳・範囲を、英単語→意味のカードで1周します">フラッシュカード（0語）</button>
+            </div>
+          </details>
         </div>
 
         <div id="quizCard" class="quiz-card">
           <p class="quiz-label">出題単語</p>
-          <h3 id="quizWord">クイズを始めましょう</h3>
+          <div class="quiz-word-row">
+            <h3 id="quizWord">クイズを始めましょう</h3>
+            <button id="quizSpeakButton" class="quiz-speak" type="button" aria-label="出題単語の発音を聞く" title="発音を聞く" hidden>🔊</button>
+          </div>
           <div id="flashcardStage" class="flashcard-stage" hidden>
             <div class="flashcard-main-row">
               <button id="flashcardFlipButton" class="flashcard-flip" type="button" aria-describedby="flashcardHint">
@@ -6278,13 +6461,7 @@ accurate 正確な"
         </div>
 
         <div class="actions quiz-actions">
-          <button id="startQuizButton" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
-          <button id="difficultQuizButton" class="secondary" type="button">苦手だけ解く（0語）</button>
-          <button id="easyQuizButton" class="secondary" type="button" title="まだ解いていない単語を、CEFR推定でやさしい順（A1→C2、未判定は最後）に出題します。復習の予定には影響しません。">やさしい順で解く（0語）</button>
-          <button id="contextQuizButton" class="secondary" type="button" title="例文の空所に入る英単語を4択から選ぶ問題。例文と選択肢はその場で自動生成します（設定で作り方を変更・停止できます）">例文で解く（0語）</button>
-          <button id="startFlashcardButton" class="secondary" type="button" title="選んだ単語帳・範囲を、英単語→意味のカードで1周します">フラッシュカード（0語）</button>
           <button id="nextQuizButton" type="button" hidden>次の問題</button>
-          <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
           <button id="exitReviewButton" class="ghost" type="button" hidden>復習をやめる</button>
           <button id="exitQuizButton" class="ghost" type="button" hidden>クイズをやめる</button>
           <span id="quizKeyboardHint" class="kbd-hint">キー 1–4＝解答 / N＝次へ / 0＝わからない</span>
@@ -6542,19 +6719,18 @@ accurate 正確な"
                       aria-label="新方式の引き継ぎコード"
                     />
                     <p id="syncV2CredentialWarning" class="sync-v2-code-warning"></p>
-                    <p id="syncV2VaultNotice" class="sync-v2-recovery-notice" role="status" hidden>
-                      ⚠️ <strong>引き継ぎコードが新しくなっています。保存し直してください。</strong><br />
-                      APIキーの同期を有効にしたときに、この端末で暗号鍵を作りました。以前に保存した
-                      コードにはこの鍵が入っていないため、そのコードでは同期済みのAPIキーを復号できません。<br />
-                      <small>単語データは個人リンクからも取り出せますが、APIキーの復号にはこの新しいコードが必要です。</small>
-                    </p>
-                    <p id="syncV2RecoveryNotice" class="sync-v2-recovery-notice" role="status" hidden>
-                      ⚠️ <strong>この引き継ぎコードはまだ端末の外に保存されていません。</strong><br />
-                      単語データが増えています。サイトデータの消去や機種変更でこの端末の中身が失われると、
-                      コードが無ければ復旧できません。「テキストで保存」するか、
-                      「JSONを書き出す」で引き継ぎコードを含めて保管してください。<br />
-                      <small>コピーだけでは、貼り付け先が残っている保証がないため注意は消えません。</small>
-                    </p>
+                    <div id="syncV2NoticeCard" class="sync-v2-recovery-notice" role="status" hidden>
+                      <p id="syncV2NoticeHeadline" class="sync-v2-notice-headline">⚠️ <strong>引き継ぎコードを保存し直してください。</strong></p>
+                      <details class="sync-v2-notice-details">
+                        <summary>理由と対処を見る</summary>
+                        <p id="syncV2VaultNotice" hidden>
+                          <strong>コードが新しくなっています。</strong>APIキーの同期を有効にしたときに、この端末で暗号鍵を作りました。以前に保存したコードにはこの鍵が入っていないため、同期済みのAPIキーを復号できません。<small>単語データは個人リンクからも取り出せますが、APIキーの復号にはこの新しいコードが必要です。</small>
+                        </p>
+                        <p id="syncV2RecoveryNotice" hidden>
+                          <strong>まだ端末の外に保存されていません。</strong>サイトデータの消去や機種変更でこの端末の中身が失われると、コードが無ければ復旧できません。「テキストで保存」するか、「JSONを書き出す」で引き継ぎコードを含めて保管してください。<small>コピーだけでは、貼り付け先が残っている保証がないため注意は消えません。</small>
+                        </p>
+                      </details>
+                    </div>
                     <div class="sync-v2-actions">
                       <button id="syncV2CopyCodeButton" class="secondary" type="button">コードをコピー</button>
                       <button id="syncV2DownloadCodeButton" class="ghost" type="button">テキストで保存</button>
@@ -6658,7 +6834,7 @@ accurate 正確な"
           </details>
 
           <details class="settings-section" data-settings-section="backup">
-            <summary>💾 JSONバックアップ</summary>
+            <summary>💾 バックアップと書き出し</summary>
             <div class="settings-section-body">
               <p class="settings-desc">保存した単語・成績・単語帳を、端末にJSONファイルとして書き出します。</p>
               <label id="exportV2CredentialOption" class="settings-check" hidden>
@@ -6667,8 +6843,9 @@ accurate 正確な"
               </label>
               <div class="settings-row">
                 <button id="exportButton" class="secondary" type="button">JSONを書き出す</button>
+                <button id="exportCsvButton" class="secondary" type="button" title="単語・意味・単語帳・CEFR・品詞・成績を表計算ソフトで開ける形式で書き出します。復元には使えません（JSONを使ってください）">CSVを書き出す</button>
               </div>
-              <p class="settings-desc">復元するときは「保存した単語」にある「JSONを読み込む」を使ってください。</p>
+              <p class="settings-desc">復元するときは「保存した単語」にある「JSONを読み込む」を使ってください。CSVは表計算ソフトやほかの単語帳ツールへ渡す用で、読み込みはできません。</p>
             </div>
           </details>
 
@@ -6954,7 +7131,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.128</span>
+        <span class="app-footer-version">バージョン 1.0.129</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,13 +7269,14 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.128";
+  const APP_REV = "1.0.129";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
     "ocr-run",
     "ai-extract",
     "json-export",
+    "csv-export",
     "json-import",
     "sync-v2-upgrade",
     "sync-v2-create",
@@ -17617,10 +17795,14 @@ const elements = {
   quizProgressTrack: document.querySelector("#quizProgressTrack"),
   quizProgressFill: document.querySelector("#quizProgressFill"),
   quizSetup: document.querySelector("#quizSetup"),
+  quizSetupAdvanced: document.querySelector("#quizSetupAdvanced"),
+  quizMoreModes: document.querySelector("#quizMoreModes"),
+  quizSetupScope: document.querySelector("#quizSetupScope"),
   exitQuizButton: document.querySelector("#exitQuizButton"),
   wordSortSelect: document.querySelector("#wordSortSelect"),
   favoriteFilterButton: document.querySelector("#favoriteFilterButton"),
   quizWord: document.querySelector("#quizWord"),
+  quizSpeakButton: document.querySelector("#quizSpeakButton"),
   choices: document.querySelector("#choices"),
   flashcardStage: document.querySelector("#flashcardStage"),
   flashcardFlipButton: document.querySelector("#flashcardFlipButton"),
@@ -17675,6 +17857,7 @@ const elements = {
   deleteSelectedButton: document.querySelector("#deleteSelectedButton"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   exportButton: document.querySelector("#exportButton"),
+  exportCsvButton: document.querySelector("#exportCsvButton"),
   importJsonInput: document.querySelector("#importJsonInput"),
   importDeckShareInput: document.querySelector("#importDeckShareInput"),
   importConfirmBar: document.querySelector("#importConfirmBar"),
@@ -17727,6 +17910,8 @@ const elements = {
   syncV2Section: document.querySelector("#syncV2Section"),
   syncV2RecoveryNotice: document.querySelector("#syncV2RecoveryNotice"),
   syncV2VaultNotice: document.querySelector("#syncV2VaultNotice"),
+  syncV2NoticeCard: document.querySelector("#syncV2NoticeCard"),
+  syncV2NoticeHeadline: document.querySelector("#syncV2NoticeHeadline"),
   syncV2UpgradeButton: document.querySelector("#syncV2UpgradeButton"),
   syncV2CreateButton: document.querySelector("#syncV2CreateButton"),
   syncV2CredentialPanel: document.querySelector("#syncV2CredentialPanel"),
@@ -17802,6 +17987,8 @@ const THEME_KEY = "wordsnap-theme"; // "light" | "dark" | "auto"
 const GEO_KEY = "wordsnap-geo:v1"; // 自動テーマ用の緯度経度
 const ACTIVE_STEP_KEY = "wordsnap-active-step";
 const SETTINGS_ACCORDION_KEY = "wordsnap-settings-accordion:v1";
+// クイズ開始画面の段階的開示（単語帳・範囲／他の出題モード）の開閉状態
+const QUIZ_SETUP_OPEN_KEY = "wordsnap-quiz-setup-open:v1";
 const SOUND_KEY = "wordsnap-sound-enabled";
 const SOUND_VOLUME_KEY = "wordsnap-sound-volume";
 const SPEECH_VOICE_KEY = "wordsnap-speech-voice-uri:v1";
@@ -17946,6 +18133,44 @@ function initSettingsAccordionState() {
           .map((item) => item.dataset.settingsSection)
           .filter(Boolean);
         localStorage.setItem(SETTINGS_ACCORDION_KEY, JSON.stringify(openKeys));
+      } catch {
+        // UI操作は継続できるため、保存失敗時も開閉自体は妨げない。
+      }
+    });
+  });
+}
+
+// クイズ開始画面の段階的開示（「単語帳・範囲を選ぶ」「他の出題モード」）。
+// 設定アコーディオンと違い、初回既定は両方とも閉じる（開始画面を短く保つのが目的なので、
+// 開閉履歴が無い状態を「開いている」側へは倒さない）。
+function initQuizSetupDisclosure() {
+  const sections = [elements.quizSetupAdvanced, elements.quizMoreModes].filter(Boolean);
+  try {
+    const raw = localStorage.getItem(QUIZ_SETUP_OPEN_KEY);
+    if (raw !== null) {
+      const saved = JSON.parse(raw);
+      if (!Array.isArray(saved)) throw new Error("invalid quiz setup open state");
+      const openIds = new Set(saved.filter((id) => typeof id === "string"));
+      sections.forEach((section) => {
+        section.open = openIds.has(section.id);
+      });
+    } else {
+      sections.forEach((section) => {
+        section.open = false;
+      });
+    }
+  } catch {
+    // 保存値が壊れている／端末の保存が使えない場合も、安全側の既定（両方閉じる）へ戻す。
+    sections.forEach((section) => {
+      section.open = false;
+    });
+  }
+
+  sections.forEach((section) => {
+    section.addEventListener("toggle", () => {
+      try {
+        const openIds = sections.filter((item) => item.open).map((item) => item.id);
+        localStorage.setItem(QUIZ_SETUP_OPEN_KEY, JSON.stringify(openIds));
       } catch {
         // UI操作は継続できるため、保存失敗時も開閉自体は妨げない。
       }
@@ -20759,6 +20984,24 @@ function renderV2RecoveryNotice(identity = syncRequestRoute()) {
   if (vaultNotice) vaultNotice.hidden = !vaultPrompt;
   const prompt = shouldPromptV2CodeBackup(identity);
   if (notice) notice.hidden = !prompt;
+  // 段階4カード化: 2件の注意を1枚のカードにまとめ、見出しはどちらが当てはまるかで出し分ける。
+  const card = elements.syncV2NoticeCard;
+  if (card) card.hidden = !(prompt || vaultPrompt);
+  if (elements.syncV2NoticeHeadline && (prompt || vaultPrompt)) {
+    const strong = document.createElement("strong");
+    let tail;
+    if (prompt && vaultPrompt) {
+      strong.textContent = "引き継ぎコードが新しくなり、まだ端末の外に保存されていません。";
+      tail = "保存し直してください。";
+    } else if (vaultPrompt) {
+      strong.textContent = "引き継ぎコードが新しくなっています。";
+      tail = "保存し直してください。";
+    } else {
+      strong.textContent = "この引き継ぎコードはまだ端末の外に保存されていません。";
+      tail = "保存してください。";
+    }
+    elements.syncV2NoticeHeadline.replaceChildren("⚠️ ", strong, tail);
+  }
   if (!prompt && !vaultPrompt) return;
   // このページで最初に条件を満たした一度だけ、設定を開いて気づけるようにする。
   // 以後は注意表示が残り続けるので、繰り返し開き直さない。
@@ -27216,7 +27459,7 @@ function renderQuizIntro() {
   elements.quizWord.textContent = "クイズを始めましょう";
   elements.quizFeedback.textContent =
     availableQuizWords().length > 0
-      ? "下の「クイズを始める（おまかせ）」を押すと、保存した単語の意味クイズが始まります。"
+      ? "上の「クイズを始める（おまかせ）」を押すと、保存した単語の意味クイズが始まります。"
       : "通常出題できる単語がありません。CEFRや単語帳の条件を変えるか、一覧から選んで復習できます。";
 }
 
@@ -27294,6 +27537,21 @@ function updateQuizControls() {
     elements.quizKeyboardHint.textContent = inFlashcard
       ? "スペース＝意味を表示 / ←＝知らない / →＝知ってる"
       : "キー 1–4＝解答 / N＝次へ / 0＝わからない";
+  }
+  if (elements.quizSpeakButton) {
+    // 日→英・空所補充は解答前に英単語を読むと答えが漏れる（autoSpeakCurrentQuiz と同じ規則）
+    const leaks = Boolean(currentQuiz?.reverse || currentQuiz?.context);
+    const canSpeak =
+      hasQuestion && quizActive && !showingResult && !inFlashcard &&
+      !currentQuiz.contextPending && ("speechSynthesis" in window) &&
+      (!leaks || currentQuiz.answered);
+    elements.quizSpeakButton.hidden = !canSpeak;
+    if (canSpeak) {
+      // resetSpeechButton は再生完了時に直前の単語でaria-labelを上書きする（flashcardSpeakButton
+      // と同じ挙動）。次の問題に進んだときここで貼り直さないと、古い単語名が読み上げられ続ける。
+      elements.quizSpeakButton.dataset.speechTerm = currentQuiz.answer.term;
+      elements.quizSpeakButton.setAttribute("aria-label", `${currentQuiz.answer.term} の発音を聞く`);
+    }
   }
   // フラッシュカードは自己評価の高速周回であり、思い出してから裏返す時間を急かさないため
   // クイズの制限時間を適用しない。4択・例文問題だけを既存タイマーの対象にする。
@@ -27878,6 +28136,63 @@ function quizSelectedDeckWords() {
   return words.filter((word) => cefrMatches(word, cefr));
 }
 
+// 折りたたんだ「単語帳・範囲・出題形式を選ぶ」の summary に出す一行要約。
+// 既定値（すべての単語帳・CEFR全部・範囲なし・シャッフルON・例文出さない・英→日）
+// のときだけ「すべての単語帳」とし、それ以外は変更した項目だけを・区切りで並べる。
+function describeQuizSetupScope({
+  deckId,
+  deckLabel,
+  cefr,
+  from,
+  to,
+  shuffle,
+  contextAmount,
+  direction,
+} = {}) {
+  // 単語帳名で比較すると、単語帳自体に「すべて」という名前を付けられたときに誤判定する。
+  // 既定かどうかは表示名ではなくIDで判定する（deckLabelは表示用のみ）。
+  const hasDeck = Boolean(deckId) && deckId !== "all";
+  const hasCefr = Boolean(cefr) && cefr !== "all";
+  const hasRange = Boolean(from) || Boolean(to);
+  const hasOrder = shuffle === false;
+  const hasContext = Boolean(contextAmount) && contextAmount !== "none";
+  const hasDirection = Boolean(direction) && direction !== "forward";
+
+  if (!hasDeck && !hasCefr && !hasRange && !hasOrder && !hasContext && !hasDirection) {
+    return "すべての単語帳";
+  }
+
+  const parts = [];
+  if (hasDeck) parts.push(deckLabel);
+  if (hasCefr) parts.push(cefr === "unknown" ? "CEFR 未判定" : `CEFR ${cefr}`);
+  if (hasRange) {
+    if (from && to) parts.push(`番号 ${from}〜${to}`);
+    else if (from) parts.push(`番号 ${from}〜`);
+    else parts.push(`番号 〜${to}`);
+  }
+  if (hasOrder) parts.push("順番どおり");
+  if (hasContext) parts.push(contextAmount === "all" ? "例文 全部" : "例文 一部");
+  if (hasDirection) parts.push(direction === "reverse" ? "日→英" : "ミックス");
+  return parts.join("・");
+}
+
+// #quizSetupScope（折りたたんだ summary の要約）を今の設定欄の値で描き直す
+function updateQuizSetupScope() {
+  if (!elements.quizSetupScope) return;
+  const deckId = elements.quizDeckSelect ? elements.quizDeckSelect.value : "all";
+  const deckLabel = deckId === "all" ? "すべて" : deckName(deckId);
+  elements.quizSetupScope.textContent = describeQuizSetupScope({
+    deckId,
+    deckLabel,
+    cefr: elements.quizCefrSelect ? elements.quizCefrSelect.value : "all",
+    from: elements.quizRangeFrom ? elements.quizRangeFrom.value : "",
+    to: elements.quizRangeTo ? elements.quizRangeTo.value : "",
+    shuffle: elements.quizShuffle ? elements.quizShuffle.checked : true,
+    contextAmount: elements.quizContextAmountSelect ? elements.quizContextAmountSelect.value : "none",
+    direction: elements.quizDirectionSelect ? elements.quizDirectionSelect.value : "forward",
+  });
+}
+
 function updateQuizDeckCount() {
   if (!elements.quizDeckCount) return;
   const n = quizSelectedDeckWords().length;
@@ -27885,6 +28200,15 @@ function updateQuizDeckCount() {
   for (const input of [elements.quizRangeFrom, elements.quizRangeTo]) {
     if (input) input.max = String(Math.max(1, n));
   }
+  updateQuizSetupScope();
+}
+
+// 範囲入力（#quizRangeFrom・#quizRangeTo）は #quizSetupAdvanced の中にある。
+// この details が閉じたままだと、フォーカスもブラウザ標準の reportValidity() の吹き出しも
+// 実質無言になる（非表示要素はフォーカスできない）。フラッシュカード開始など、別の details
+// （#quizMoreModes）から呼ばれる経路もあるため、focus() の直前で必ず開く。
+function ensureQuizSetupAdvancedOpen() {
+  if (elements.quizSetupAdvanced) elements.quizSetupAdvanced.open = true;
 }
 
 function validatedQuizRangeValue(input, label, total) {
@@ -27898,6 +28222,7 @@ function validatedQuizRangeValue(input, label, total) {
     input.setCustomValidity(message);
     setStatus(message);
     input.reportValidity?.();
+    ensureQuizSetupAdvancedOpen();
     input.focus();
     return { valid: false, value: null };
   }
@@ -27906,6 +28231,7 @@ function validatedQuizRangeValue(input, label, total) {
     input.setCustomValidity(message);
     setStatus(message);
     input.reportValidity?.();
+    ensureQuizSetupAdvancedOpen();
     input.focus();
     return { valid: false, value: null };
   }
@@ -27937,6 +28263,7 @@ function startQuizFromRange() {
     elements.quizRangeFrom?.setCustomValidity(message);
     setStatus(message);
     elements.quizRangeFrom?.reportValidity?.();
+    ensureQuizSetupAdvancedOpen();
     elements.quizRangeFrom?.focus();
     return;
   }
@@ -28005,6 +28332,7 @@ function selectedFlashcardWords() {
     elements.quizRangeFrom?.setCustomValidity(message);
     setStatus(message);
     elements.quizRangeFrom?.reportValidity?.();
+    ensureQuizSetupAdvancedOpen();
     elements.quizRangeFrom?.focus();
     return null;
   }
@@ -28354,7 +28682,13 @@ function restoreLastQuizSettings() {
       elements.quizRangeToggle?.setAttribute("aria-expanded", "true");
       if (elements.quizRangeFrom) elements.quizRangeFrom.value = String(saved.from || "");
       if (elements.quizRangeTo) elements.quizRangeTo.value = String(saved.to || "");
+      // 閉じたまま範囲だけ復元されると見えないため、範囲を復元したときは詳細を開いておく。
+      // これは toggle 経由で保存された開閉状態（initQuizSetupDisclosure）を意図的に上書きする
+      // ——保存済みの範囲設定が画面に出ないまま「この設定で出題」を押せてしまう方が問題なので、
+      // 前回閉じていたとしてもここでは開く。
+      if (elements.quizSetupAdvanced) elements.quizSetupAdvanced.open = true;
     }
+    updateQuizSetupScope();
   } catch {
     /* 壊れた保存値は無視する */
   }
@@ -34913,6 +35247,10 @@ elements.flashcardUnknownButton?.addEventListener("click", () => gradeFlashcard(
 elements.flashcardSpeakButton?.addEventListener("click", () => {
   if (currentQuiz?.flashcard) speakWord(currentQuiz.answer.term, elements.flashcardSpeakButton);
 });
+// 4択・例文クイズのカードから、出題単語の発音を手動で聞き直せるようにする
+elements.quizSpeakButton?.addEventListener("click", () => {
+  if (currentQuiz?.answer?.term) speakWord(currentQuiz.answer.term, elements.quizSpeakButton);
+});
 
 // モバイルは裏面表示後の横スワイプで即仕分け。右=知ってる、左=知らない。
 let flashcardPointerStartX = null;
@@ -35295,6 +35633,12 @@ elements.quizContextAmountSelect?.addEventListener("change", () => {
     delete button.dataset.armed;
     button.textContent = button.dataset.originalLabel || "この設定で出題";
   }
+  updateQuizSetupScope();
+});
+// シャッフルは他の設定と違って開始時にしか参照しないため専用ハンドラが無かった。
+// 折りたたんだ summary の要約は変更した瞬間に反映させたいのでここで追加する。
+elements.quizShuffle?.addEventListener("change", () => {
+  updateQuizSetupScope();
 });
 elements.quizRangeToggle?.addEventListener("click", () => {
   const show = elements.quizRangeRow.hidden;
@@ -35308,6 +35652,7 @@ elements.quizRangeToggle?.addEventListener("click", () => {
     if (elements.quizRangeTo) elements.quizRangeTo.value = "";
   }
   renderQuiz();
+  updateQuizSetupScope();
 });
 elements.quizSetupHintToggle?.addEventListener("click", () => {
   const show = Boolean(elements.quizSetupDetails?.hidden);
@@ -35326,6 +35671,7 @@ elements.quizSetupHintToggle?.addEventListener("keydown", (event) => {
   input?.addEventListener("input", () => {
     input.setCustomValidity("");
     renderQuiz();
+    updateQuizSetupScope();
   });
   input?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
@@ -35729,6 +36075,68 @@ elements.exportButton.addEventListener("click", () => {
     setStatus("JSONバックアップを書き出しました。安全な場所に保管してください。");
   } catch {
     setStatus("JSONバックアップを書き出せませんでした。空き容量を確認して、もう一度お試しください。");
+  }
+});
+
+// CSVのセルが「=」「+」「-」「@」やタブ・CR・LFで始まると、表計算ソフトが数式として
+// 実行してしまうことがある（数式注入）。先頭に ' を付けて文字列として固定する。
+function csvEscapeCell(value) {
+  let text = String(value === null || value === undefined ? "" : value);
+  if (/^[=+\-@\t\r\n]/.test(text)) {
+    text = `'${text}`;
+  }
+  text = text.replace(/"/g, '""');
+  if (/[,"\r\n]/.test(text)) {
+    text = `"${text}"`;
+  }
+  return text;
+}
+
+// 単語一覧を、表計算ソフトで開けるCSV文字列に変換する。復元には使わない書き出し専用の形式。
+// BOM付きUTF-8・CRLF区切りにして、Excel等で文字化けや改行崩れが起きないようにする。
+function buildCsvExport(words, decks) {
+  const STATUS_LABELS = { new: "未着手", review: "復習中", mastered: "習得済み" };
+  const rows = [
+    ["英単語", "意味", "単語帳", "CEFR", "品詞", "お気に入り", "正解数", "不正解数", "学習状態", "次の復習日", "追加日"],
+  ];
+  for (const word of words || []) {
+    if (!word) continue; // 破損データ等でnullが混ざっていても書き出しは続ける
+    const deck = (decks || []).find((d) => d.id === word.deckId);
+    const nextReviewAt = Number(word.learning?.nextReviewAt || 0);
+    // addedAtはISO文字列で保存されている（数値ミリ秒ではない）。削除時刻の新旧比較で
+    // 使っている既存のwordAddedMsと同じ変換を通さないと、全行が不正日付になる。
+    const addedMs = wordAddedMs(word);
+    rows.push([
+      word.term,
+      word.meaning,
+      deck?.name || "",
+      word.cefr?.level || "",
+      word.pos?.tag ? posLabel(word.pos.tag) : "",
+      word.favorite ? "★" : "",
+      String(word.stats?.correct ?? 0),
+      String(word.stats?.wrong ?? 0),
+      STATUS_LABELS[word.learning?.status] || "",
+      nextReviewAt > 0 ? localDateString(new Date(nextReviewAt)) : "",
+      addedMs > 0 ? localDateString(new Date(addedMs)) : "",
+    ]);
+  }
+  const csvBody = rows.map((row) => row.map(csvEscapeCell).join(",")).join("\r\n");
+  return `﻿${csvBody}`;
+}
+
+elements.exportCsvButton?.addEventListener("click", () => {
+  try {
+    if (appState.words.length === 0) {
+      setStatus("書き出す単語がありません。");
+      return;
+    }
+    const csv = buildCsvExport(appState.words, appState.decks);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    downloadBlob(blob, `wordbank-words-${localDateString()}.csv`);
+    trackUsage("csv-export");
+    setStatus("CSVを書き出しました。表計算ソフトで開けます（学習履歴の復元にはJSONを使ってください）。");
+  } catch {
+    setStatus("CSVを書き出せませんでした。空き容量を確認して、もう一度お試しください。");
   }
 });
 
@@ -36229,6 +36637,7 @@ elements.quizDirectionSelect?.addEventListener("change", () => {
     // 保存できない環境ではその場限りで動く（他の設定と同様、例外は漏らさない）
   }
   playSound("tap");
+  updateQuizSetupScope();
 });
 
 elements.adaptiveSrsToggle?.addEventListener("change", () => {
@@ -36727,7 +37136,7 @@ function initServiceWorker() {
 
 // テーマ・設定の読み出しは保存領域に触る。ensureWebStorage の代替が効かない環境で例外が出ても、
 // 既定の見え方で起動を続ける（ここで止まると以降の描画・同期まで始まらない）。
-for (const init of [initTheme, initSettingsAccordionState, initSettings, initContextGenSettings]) {
+for (const init of [initTheme, initSettingsAccordionState, initQuizSetupDisclosure, initSettings, initContextGenSettings]) {
   try {
     init();
   } catch {

@@ -62,9 +62,20 @@ function makeRecoveryUx({
     elements: {
       syncV2RecoveryNotice: { hidden: true },
       syncV2VaultNotice: { hidden: true },
+      syncV2NoticeCard: { hidden: true },
+      syncV2NoticeHeadline: {
+        textContent: "",
+        replaceChildren(...args) {
+          this.textContent = args.map((a) => (typeof a === "string" ? a : a.textContent || "")).join("");
+        },
+      },
       syncV2Section: { open: false },
     },
-    document: { querySelector: () => null },
+    document: {
+      querySelector: () => null,
+      // renderV2RecoveryNotice が見出しの<strong>をDOM APIで組み立てるためのスタブ
+      createElement: (tag) => ({ tagName: tag, textContent: "" }),
+    },
     syncRequestRoute: () => identity,
     // 部屋IDだけを渡す呼び出しは、現在の資格情報から vault key を引く。
     getActiveV2Credential: () => activeCredential,
@@ -150,6 +161,57 @@ test("localStorageが書けない環境でも落ちず、未保存のまま注�
   };
   context.markV2CodeSavedFor(ROOM_A);
   assert.equal(context.shouldPromptV2CodeBackup(), true);
+});
+
+// --- 段階4カード化（1.0.129 B）: HTML構造 ---
+// 2つの注意は1枚のカード（#syncV2NoticeCard）にまとめ、role="status"はカード自身にだけ
+// 付ける（重複したstatusロールをスクリーンリーダーへ二重に読ませないため）。
+test("HTML構造: 2つの<p>は#syncV2NoticeCard内にあり、role=\"status\"はカードに1つだけ", () => {
+  const cardStart = html.indexOf('<div id="syncV2NoticeCard"');
+  assert.ok(cardStart >= 0, "#syncV2NoticeCard が見つかること");
+  const detailsEnd = html.indexOf("</details>", cardStart);
+  const cardEnd = html.indexOf("</div>", detailsEnd);
+  assert.ok(detailsEnd > cardStart && cardEnd > detailsEnd, "カードの終端が見つかること");
+  const cardBody = html.slice(cardStart, cardEnd);
+  assert.match(cardBody, /<p id="syncV2VaultNotice" hidden>/, "vault側の<p>がカード内にあること");
+  assert.match(cardBody, /<p id="syncV2RecoveryNotice" hidden>/, "recovery側の<p>がカード内にあること");
+  const roleMatches = cardBody.match(/role="status"/g) || [];
+  assert.equal(roleMatches.length, 1, 'role="status" はカードに1つだけであること');
+  assert.doesNotMatch(cardBody, /id="syncV2VaultNotice" class=/, "内側の<p>からclassは外したこと");
+  assert.doesNotMatch(cardBody, /id="syncV2RecoveryNotice" class=/, "内側の<p>からclassは外したこと");
+});
+
+// 見出し文の4分岐（両方／vaultのみ／recoveryのみ／どちらもなし）のうち、vaultのみは既存の
+// 「upgrade済みV2でも、金庫鍵を発行したら再保存を促す」で検証済み。残る2つをここで固定する。
+test("見出し: recoveryのみのときは単語データ側の文言になる", () => {
+  const { context } = makeRecoveryUx({ identity: NATIVE, words: 3, verifiedSyncTarget: ROOM_A });
+  context.renderV2RecoveryNotice();
+  assert.equal(context.shouldPromptV2CodeBackup(), true);
+  assert.equal(context.shouldPromptVaultKeyBackup(), false);
+  assert.equal(context.elements.syncV2NoticeCard.hidden, false, "recoveryのみでもカードは出すこと");
+  assert.match(
+    context.elements.syncV2NoticeHeadline.textContent,
+    /まだ端末の外に保存されていません。/,
+    "recoveryのみのときの見出し文であること",
+  );
+});
+
+test("見出し: vaultとrecoveryが両方該当するときは両方に触れる文言になる", () => {
+  const { context } = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    activeCredential: { roomId: ROOM_A, vaultKey: VAULT_A },
+  });
+  context.renderV2RecoveryNotice();
+  assert.equal(context.shouldPromptV2CodeBackup(), true);
+  assert.equal(context.shouldPromptVaultKeyBackup(), true);
+  assert.equal(context.elements.syncV2NoticeCard.hidden, false);
+  assert.match(
+    context.elements.syncV2NoticeHeadline.textContent,
+    /引き継ぎコードが新しくなり、まだ端末の外に保存されていません。/,
+    "両方該当するときの見出し文であること",
+  );
 });
 
 // --- 「保存済み」とみなす操作を実コードで固定する ---
@@ -564,6 +626,13 @@ test("upgrade済みV2でも、金庫鍵を発行したら再保存を促す", ()
     "単語データ側の通知は従来どおり出さないこと（個人リンクがある）",
   );
   assert.equal(context.elements.syncV2RecoveryNotice.hidden, true);
+  // 段階4カード化: 金庫鍵側だけが該当するので、カードは表示され見出しはvault用の文言になる
+  assert.equal(context.elements.syncV2NoticeCard.hidden, false, "1カードにまとめて表示すること");
+  assert.match(
+    context.elements.syncV2NoticeHeadline.textContent,
+    /引き継ぎコードが新しくなっています。/,
+    "vaultのみのときの見出し文であること",
+  );
 });
 
 test("金庫鍵を保存し直せば注意は消える", () => {
@@ -577,6 +646,8 @@ test("金庫鍵を保存し直せば注意は消える", () => {
   context.renderV2RecoveryNotice();
   assert.equal(context.shouldPromptVaultKeyBackup(), false);
   assert.equal(context.elements.syncV2VaultNotice.hidden, true);
+  // 保存し直したので、どちらの注意も出ない＝カードごと消える
+  assert.equal(context.elements.syncV2NoticeCard.hidden, true);
 });
 
 test("金庫鍵を持たない資格情報では金庫鍵の注意を出さない", () => {
@@ -589,4 +660,5 @@ test("金庫鍵を持たない資格情報では金庫鍵の注意を出さな�
   context.renderV2RecoveryNotice();
   assert.equal(context.shouldPromptVaultKeyBackup(), false);
   assert.equal(context.elements.syncV2VaultNotice.hidden, true);
+  assert.equal(context.elements.syncV2NoticeCard.hidden, true, "金庫鍵が無ければカードも出さないこと");
 });

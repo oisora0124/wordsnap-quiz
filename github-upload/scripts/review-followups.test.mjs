@@ -101,19 +101,21 @@ function makeEl() {
     setAttribute: (k, v) => {
       attrs[k] = String(v);
     },
+    getAttribute: (k) => (Object.hasOwn(attrs, k) ? attrs[k] : null),
     removeAttribute: (k) => {
       delete attrs[k];
     },
     hasAttribute: (k) => Object.hasOwn(attrs, k),
     style: {},
+    dataset: {},
   };
 }
 
-function controlsSandbox() {
+function controlsSandbox({ withSpeechSynthesis = true } = {}) {
   const names = [
     "quizSetup", "startQuizButton", "difficultQuizButton", "easyQuizButton", "contextQuizButton",
     "startFlashcardButton", "generalReviewButton", "nextQuizButton", "quizNextHint", "dontKnowButton",
-    "exitReviewButton", "exitQuizButton", "quizKeyboardHint",
+    "exitReviewButton", "exitQuizButton", "quizKeyboardHint", "quizSpeakButton",
   ];
   const elements = {};
   for (const n of names) elements[n] = makeEl();
@@ -121,6 +123,8 @@ function controlsSandbox() {
   const sandbox = {
     elements,
     document: { body: bodyEl },
+    // 4択クイズカードの手動読み上げボタン（updateQuizControls内で "speechSynthesis" in window を見る）
+    window: withSpeechSynthesis ? { speechSynthesis: {} } : {},
   };
   const pieces = [
     "let reviewSession = null;",
@@ -145,12 +149,18 @@ function controlsSandbox() {
 
 test("次の問題: おまかせで解答前は is-skip＋理由の title、解答後は主ボタンに戻る", () => {
   const { c, el } = controlsSandbox();
-  c.set({ quizStarted: true, currentQuiz: { answered: false, choices: [1, 2, 3, 4] } });
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: false, choices: [1, 2, 3, 4], answer: { term: "apple" } },
+  });
   c.run();
   assert.equal(el.nextQuizButton.hidden, false, "飛ばす用途は残す（隠さない）");
   assert.equal(el.nextQuizButton.classList.contains("is-skip"), true);
   assert.match(el.nextQuizButton.title, /採点されません/);
-  c.set({ quizStarted: true, currentQuiz: { answered: true, choices: [1, 2, 3, 4] } });
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: true, choices: [1, 2, 3, 4], answer: { term: "apple" } },
+  });
   c.run();
   assert.equal(el.nextQuizButton.classList.contains("is-skip"), false);
   assert.equal(el.nextQuizButton.hasAttribute("title"), false, "解答後は理由を消す");
@@ -170,7 +180,10 @@ test("次の問題: 復習の完了時（問題なし・キュー空）は主ボ
 
 test("次の問題: 復習中の解答前も弱める（同じ語を作り直すだけの操作）", () => {
   const { c, el } = controlsSandbox();
-  c.set({ reviewSession: { queue: ["a", "b"] }, currentQuiz: { answered: false, choices: [1, 2, 3, 4] } });
+  c.set({
+    reviewSession: { queue: ["a", "b"] },
+    currentQuiz: { answered: false, choices: [1, 2, 3, 4], answer: { term: "apple" } },
+  });
   c.run();
   assert.equal(el.nextQuizButton.classList.contains("is-skip"), true);
 });
@@ -184,6 +197,94 @@ test("次の問題: is-skip の見た目は選択肢より弱い（透明背景�
   // ライト・ダーク両方でトークンが定義されている
   assert.ok((html.match(/^  --ink: /gm) || []).length >= 2);
   assert.ok((html.match(/^  --line: /gm) || []).length >= 2);
+});
+
+// ============================================================================
+// 1.0.129 D: 4択クイズカードの手動読み上げボタン
+// ============================================================================
+test("読み上げボタン: 英→日は解答前から表示する", () => {
+  const { c, el } = controlsSandbox();
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: false, choices: [1, 2, 3, 4], answer: { term: "apple" } },
+  });
+  c.run();
+  assert.equal(el.quizSpeakButton.hidden, false);
+});
+
+test("読み上げボタン: 日→英は解答前は隠す（答えが漏れるため）", () => {
+  const { c, el } = controlsSandbox();
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: false, reverse: true, choices: [1, 2, 3, 4] },
+  });
+  c.run();
+  assert.equal(el.quizSpeakButton.hidden, true);
+});
+
+test("読み上げボタン: 日→英でも解答後は表示する", () => {
+  const { c, el } = controlsSandbox();
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: true, reverse: true, choices: [1, 2, 3, 4], answer: { term: "apple" } },
+  });
+  c.run();
+  assert.equal(el.quizSpeakButton.hidden, false);
+});
+
+test("読み上げボタン: フラッシュカードでは隠す（専用ボタンが別にある）", () => {
+  const { c, el } = controlsSandbox();
+  c.set({
+    flashcardSession: { index: 0 },
+    currentQuiz: { flashcard: true, answered: false },
+  });
+  c.run();
+  assert.equal(el.quizSpeakButton.hidden, true);
+});
+
+test("読み上げボタン: 例文モードは解答前は隠す（空所の答えが漏れるため）", () => {
+  const { c, el } = controlsSandbox();
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: false, context: true, choices: [1, 2, 3, 4] },
+  });
+  c.run();
+  assert.equal(el.quizSpeakButton.hidden, true);
+});
+
+test("読み上げボタン: 例文生成待ち（contextPending）は隠す", () => {
+  const { c, el } = controlsSandbox();
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: false, contextPending: true, choices: [] },
+  });
+  c.run();
+  assert.equal(el.quizSpeakButton.hidden, true);
+});
+
+test("読み上げボタン: window.speechSynthesisが無い端末では隠す", () => {
+  const { c, el } = controlsSandbox({ withSpeechSynthesis: false });
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: false, choices: [1, 2, 3, 4], answer: { term: "apple" } },
+  });
+  c.run();
+  assert.equal(el.quizSpeakButton.hidden, true);
+});
+
+test("読み上げボタン: 表示するたびaria-labelとdata-speech-termを出題単語へ貼り直す", () => {
+  const { c, el } = controlsSandbox();
+  // resetSpeechButton（speakWord完了時）が直前に読んだ単語名でaria-labelを上書きするため、
+  // 次の問題に進んだらここで貼り直さないと古い単語名が残ったままになる。
+  el.quizSpeakButton.setAttribute("aria-label", "banana の発音を再生しました。");
+  el.quizSpeakButton.dataset.speechTerm = "banana";
+  c.set({
+    quizStarted: true,
+    currentQuiz: { answered: false, choices: [1, 2, 3, 4], answer: { term: "apple" } },
+  });
+  c.run();
+  assert.equal(el.quizSpeakButton.dataset.speechTerm, "apple");
+  assert.equal(el.quizSpeakButton.getAttribute("aria-label"), "apple の発音を聞く");
 });
 
 // ============================================================================
