@@ -6857,7 +6857,7 @@ accurate 正確な"
                 <li data-sync-identity-ui="legacy">逆に、<strong>個人キー（＝個人リンク）を知っている人はデータを読み書きできます</strong>。「個人リンクをコピー」で得られるリンクにはこのキーが含まれるため、他人に教えたり公開の場に貼ったりしないでください。</li>
                 <li data-sync-identity-ui="v2-native" hidden>単語と成績は、このアプリ専用のV2サーバー領域に保存されます。他の人のデータとは分離され、秘密の引き継ぎコードで保護されます。</li>
                 <li data-sync-identity-ui="v2-native" hidden><strong>引き継ぎコードを知っている人はデータを読み書きできます</strong>。コードはURLには含まれませんが、他人に教えたり公開の場に貼ったりしないでください。</li>
-                <li><strong>外部辞書への通信：</strong>保存一覧で未判定のCEFR・品詞を補う際は英単語だけをDatamuseへ送ります。「詳しく」で辞書情報を開いた際は英単語をDatamuse・dictionaryapi.dev（応答しないときは予備の freedictionaryapi.com・en.wiktionary.org）へ、取得した英文の和訳をGoogle翻訳・MyMemoryへ送る場合があります。個人キー・成績・単語帳全体はこれらのサービスへ送りません。</li>
+                <li><strong>外部辞書への通信：</strong>保存一覧で未判定のCEFR・品詞を補う際は英単語だけをDatamuseへ送ります。「詳しく」で辞書情報を開いた際は英単語をDatamuse・dictionaryapi.dev（応答しないときは予備の freedictionaryapi.com・en.wiktionary.org）へ、語源は en.wiktionary.org へ英単語を送り、取得した英文の和訳をGoogle翻訳・MyMemoryへ送る場合があります。個人キー・成績・単語帳全体はこれらのサービスへ送りません。</li>
                 <li><strong>例文問題の外部通信：</strong>「出さない」では新しい例文を作るための通信はしません。「一部」「全部」または「例文で解く」で新規生成が必要な場合は、開始前の確認後に対象の単語と意味を辞書APIへ、APIキー設定時は選択したAIサービスへ直接送ります。APIキーはWordBankのサーバーへは送りません。</li>
                 <li><strong>古いバージョンが表示されるとき：</strong>アプリを一度終了して開き直してください（スマホならタスク一覧からスワイプで終了、ブラウザならタブを閉じて開き直す）。オフライン用に保存した古い本体が残っていると、通信が一瞬途切れた回にそれが表示されることがあります。開き直せば最新版に入れ替わり、古い保存分は自動で削除されます。単語データや学習の記録には影響しません。</li>
                 <li data-sync-identity-ui="legacy">全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこの個人キーで保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
@@ -7131,7 +7131,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.129</span>
+        <span class="app-footer-version">バージョン 1.0.130</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7269,7 +7269,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.129";
+  const APP_REV = "1.0.130";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7930,6 +7930,8 @@ window.Translate = Translate;
 //   2. freedictionaryapi.com（Wiktionary 由来。発音記号・例文・定義を1回で返す。CC BY-SA 4.0）
 //   3. en.wiktionary.org REST（Wikimedia 運営で最も堅牢。例文・定義は豊富だが発音記号は無い）
 // 発音記号がどの辞書からも取れなければ、Datamuse の IPA（CMU 発音辞書からの機械変換。目安）を最後の予備にする。
+// 語源だけは別経路: 上の源はほぼ origin を返さないため、en.wiktionary.org の MediaWiki API（action=parse）で
+// English 節内の Etymology 節を直接取り、最初の段落を使う（wiktionaryEtymology）。
 const Enrich = (() => {
   const DM = "https://api.datamuse.com/words";
 
@@ -8015,6 +8017,11 @@ const Enrich = (() => {
       .replace(/&quot;/g, '"')
       .replace(/&#39;|&apos;/g, "'")
       .replace(/&nbsp;/g, " ")
+      // Wiktionary の節 HTML は [ ] * を &#91; &#93; &#42; のような数値参照で返す（脚注 [1] の判定にも要る）
+      .replace(/&#x([0-9a-f]+);|&#(\d+);/gi, (whole, hex, dec) => {
+        const code = hex ? parseInt(hex, 16) : Number(dec);
+        return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+      })
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -8394,11 +8401,114 @@ const Enrich = (() => {
     };
   }
 
+  // ---------- 語源（Wiktionary の MediaWiki API） ----------
+  // dictionaryapi.dev 等の origin はほぼ空なので、語源だけは en.wiktionary.org の
+  // action=parse で English 節配下の Etymology 節を直接取りに行く。
+
+  // sections（{ index, toclevel, line }[]）から、English 節の中にある最初の
+  // Etymology（Etymology 1 等も含む）節の index を返す。無ければ null。
+  function pickEnglishEtymologySection(sections) {
+    const list = Array.isArray(sections) ? sections : [];
+    const englishIndex = list.findIndex((s) => Number(s?.toclevel) === 1 && s?.line === "English");
+    if (englishIndex < 0) return null;
+    for (let i = englishIndex + 1; i < list.length; i += 1) {
+      const section = list[i];
+      if (Number(section?.toclevel) === 1) break; // 次の言語の節に来たら English 節は終わり
+      if (Number(section?.toclevel) === 2 && /^Etymology( \d+)?$/.test(String(section?.line || ""))) {
+        return String(section.index);
+      }
+    }
+    return null;
+  }
+
+  // 節の HTML（parse.text）から語源の最初の段落を取り出す。
+  // 下位見出し（Verb 等）以降にある <p> は対象外。脚注 [1] は除き、600字を超えたら文区切りで切る。
+  function extractEtymologyParagraph(html) {
+    const str = String(html || "");
+    // action=parse&section=N の HTML は、その節自身の見出し（<h3>Etymology 1</h3>）から始まる。
+    // 見出しで止める前に、先頭の見出しは読み飛ばす（最初の <p> より前にある見出しだけが対象）。
+    const firstParagraph = str.search(/<p[ >]/i);
+    const ownHeading = str.match(/<\/h[2-6]>/i);
+    const start =
+      ownHeading && firstParagraph >= 0 && ownHeading.index < firstParagraph
+        ? ownHeading.index + ownHeading[0].length
+        : 0;
+    const body = str.slice(start);
+    const stopMatch = body.match(/<(h[2-6]|section)[ >]/i);
+    const relevant = stopMatch ? body.slice(0, stopMatch.index) : body;
+    // Wiktionary の節は空の <p class="mw-empty-elt"> から始まることが多いので、中身のある最初の段落を採る
+    let text = "";
+    for (const match of relevant.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
+      text = stripHtml(match[1]).replace(/\[\d+\]/g, "").replace(/\s+/g, " ").trim();
+      if (text) break;
+    }
+    if (!text) return null;
+    if (text.length > 600) {
+      const cut = text.slice(0, 600);
+      const boundary = cut.lastIndexOf(". ");
+      text = `${boundary > 0 ? cut.slice(0, boundary + 1) : cut}…`;
+    }
+    return text;
+  }
+
+  async function wiktionaryEtymology(term) {
+    const w = clean(term);
+    if (!w) return null;
+    try {
+      const sectionsUrl = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(w)}&prop=sections&format=json&formatversion=2&origin=*&redirects=1`;
+      const sectionsData = await getJson(sectionsUrl, 8000);
+      if (sectionsData === null) return null; // 実際の404（MediaWikiは通常missingtitleをHTTP 200で返す）
+      if (sectionsData?.error) {
+        if (sectionsData.error.code === "missingtitle") return null; // 未収録として確定
+        throw transientError("server");
+      }
+      const sectionIndex = pickEnglishEtymologySection(sectionsData?.parse?.sections);
+      if (sectionIndex === null) return null; // English節 or Etymology節が無い
+
+      const textUrl = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(w)}&section=${encodeURIComponent(sectionIndex)}&prop=text&format=json&formatversion=2&origin=*&redirects=1&disablelimitreport=1&disableeditsection=1&disabletoc=1`;
+      const textData = await getJson(textUrl, 8000);
+      if (textData === null) return null;
+      if (textData?.error) {
+        if (textData.error.code === "missingtitle") return null;
+        throw transientError("server");
+      }
+      const text = extractEtymologyParagraph(textData?.parse?.text);
+      if (!text) return null;
+      clearDegraded(WIKTIONARY.id);
+      return { text, source: { id: "wiktionary", label: "Wiktionary", url: wiktionaryUrl(w), license: "CC BY-SA 4.0" } };
+    } catch (error) {
+      if (error?.transient) markDegraded(WIKTIONARY.id);
+      throw error;
+    }
+  }
+
   async function etymology(term) {
-    const rec = await record(term);
-    const text = rec?.origin || null;
-    // 和訳は表示後に後追い（undefined が「取得中」の印。無ければ訳す対象もないので null）
-    return { text, ja: text ? undefined : null };
+    // 辞書の origin はほぼ空なので、record() の完了を待ってから Wiktionary に行くと
+    // 「辞書の待ち（不調時は6秒）＋Wiktionary 2往復」で10秒を超える。両方を同時に始め、
+    // origin があればそれを優先し、無ければ並行して取っていた Wiktionary の結果を使う。
+    // 語源はこの源しか無いので、後回し（degraded）中でも待たずに試す。
+    const wiktPromise = wiktionaryEtymology(term).then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
+    let rec = null;
+    let recordError = null;
+    try {
+      rec = await record(term);
+    } catch (error) {
+      if (!error?.transient) throw error;
+      recordError = error; // record が一時的に失敗しても、語源はWiktionaryから別途試す
+    }
+    if (rec?.origin) {
+      return { text: rec.origin, ja: undefined, source: attribution(rec) };
+    }
+    const wikt = await wiktPromise;
+    if (wikt.error) {
+      if (recordError) throw recordError; // record・Wiktionary 両方失敗したら元の一時的失敗を投げ直す
+      throw wikt.error;
+    }
+    if (wikt.value) return { text: wikt.value.text, ja: undefined, source: wikt.value.source };
+    return { text: null, ja: null };
   }
 
   function fetchType(type, term, posTag = null) {
@@ -8444,6 +8554,8 @@ const Enrich = (() => {
     isEmpty,
     record,
     sourceOrder: () => sourceOrder().map((source) => source.id),
+    pickEnglishEtymologySection,
+    extractEtymologyParagraph,
   };
 })();
 
@@ -34027,7 +34139,7 @@ function normalizeExamplesData(data) {
 // 語源データを新形式に正規化する。旧キャッシュ（ja無し）にも対応。
 function normalizeEtymologyData(data) {
   if (!data) return { text: null, ja: undefined };
-  return { text: data.text || null, ja: data.ja };
+  return { text: data.text || null, ja: data.ja, source: normalizeEnrichSource(data.source) };
 }
 
 // 類義語データを新形式に正規化する。旧キャッシュ（itemが文字列やja無し）にも対応。
@@ -34083,8 +34195,8 @@ function enrichBody(type, data, term) {
   if (type === "etymology") {
     const norm = normalizeEtymologyData(data);
     const note = norm.text
-      ? `<p class="enrich-text">${escapeHtml(norm.text)}</p>${jaLine(norm.ja)}`
-      : enrichEmpty("辞書APIには語源が未収録でした。下のリンクから調べられます。");
+      ? `<p class="enrich-text">${escapeHtml(norm.text)}</p>${jaLine(norm.ja)}${enrichSourceLine(norm.source)}`
+      : enrichEmpty("辞書に語源が未収録でした。下のリンクから調べられます。");
     return `${note}${etymologyLinks(term)}`;
   }
 
