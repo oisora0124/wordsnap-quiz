@@ -6018,7 +6018,7 @@ body.tutorial-open {
           <div id="streakCalendar" class="streak-cal" role="group" aria-label="学習カレンダー"></div>
           <div id="streakDayDetail" class="streak-day-detail" role="status"></div>
           <p class="streak-note">
-            学習の記録は単語ごとに直近50回まで保存されます。それより前の古い履歴は表示されないことがあります。
+            学習の記録は、単語ごとに直近50回の解答を個別に保存し、それより前の解答は日ごとの記録に集約して残します。学習カレンダーと、学習量・正答率の推移は、直近50回より前の解答も日別の記録として数えます（単語ごとの保存上限あり）。
           </p>
         </div>
         <!-- 成績（統計）: 既存データだけから描く読み取り専用の可視化。renderStatsCharts() が中身を差し込む。 -->
@@ -6806,7 +6806,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section">
+          <details class="settings-section" data-settings-section="review-log">
             <summary>📈 学習の記録（任意）</summary>
             <div class="settings-section-body">
               <p class="settings-desc">
@@ -7170,7 +7170,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.132</span>
+        <span class="app-footer-version">バージョン 1.0.133</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7308,7 +7308,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.132";
+  const APP_REV = "1.0.133";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -8858,6 +8858,13 @@ const MAX_TIMED_ANSWER_MS = 60000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DELETION_TTL_MS = 90 * DAY_MS; // 90日で掃除
 const TRASH_TTL_MS = 30 * DAY_MS; // 30日で削除済みから掃除
+// 履歴の定数も同じ理由でここに置く（normalizeWord が foldHistoryIntoDaily を呼ぶ）。
+// 1語あたりに生のまま残す解答の件数。容量と同期の都合で従来どおり直近50件。
+const HISTORY_RAW_MAX = 50;
+// 日別に残せる解答トークンの総数の上限（1語あたり）。1トークン約5バイトなので約15KB/語。
+// 日数ではなく件数で切るのは、容量の上限を直接押さえるため（1日に何百件解く語もある）。
+// 超えたら古い日から丸ごと落とす。
+const HISTORY_DAILY_MAX_ENTRIES = 2000;
 // 誤答した単語が通常クイズに戻れる時間ベースの保険（既存の「◯問後」SRSとOR＝早い方が優先）
 const WRONG_COOLDOWN_MS = 5 * 60 * 1000;
 // 特定の教材を転載せず、大学受験で役立つ語を本アプリ向けに独自選定したリスト。
@@ -19563,16 +19570,28 @@ function initStepTabs() {
 // 「まだ import タブのまま」「単語は実は既にある」の3条件がそろったときだけ quiz へ進める。
 // 保存が有る・別タブへ移動済み・単語が無い、のいずれかなら何もしない（利用者の選択や
 // 「無ければ取り込みから」を上書きしない）。
+// 判定だけを純関数に切り出す（保存領域もDOMも触らないので、そのまま試験できる）。
+// savedStep は localStorage の生の値（未保存なら null）。
+function shouldPromoteInitialStep(savedStep, activeStep, wordCount) {
+  if (savedStep !== null) return false;
+  if (activeStep !== "import") return false;
+  return Number(wordCount) > 0;
+}
+
 function promoteInitialStepAfterRecovery() {
   try {
-    if (localStorage.getItem(ACTIVE_STEP_KEY) !== null) return;
-    if (activeStepId !== "import") return;
-    if (!(appState.words.length > 0)) return;
+    const saved = localStorage.getItem(ACTIVE_STEP_KEY);
+    if (!shouldPromoteInitialStep(saved, activeStepId, appState.words.length)) return;
     setActiveStep("quiz", { persist: false, sound: false });
   } catch {
     /* 保存領域が読めなくても起動は続ける */
   }
 }
+
+// 起動後に最初のリモート状態を取り込んだかどうか。単語がサーバーにしか無い端末
+// （個人リンクで新しく開いた場合）では、recoverPersisted の時点ではまだ0語で、
+// 昇格の機会が「初回の同期で単語が戻った直後」しか無いため、そこでも一度だけ試す。
+let remoteStatePromotionDone = false;
 
 function storageKeyFor(id) {
   return `wordsnap-quiz:v1:${id}`;
@@ -20123,6 +20142,9 @@ function normalizeState(state) {
 function normalizeWord(word) {
   // 配列内に null 等が混ざっていても例外にしない（term空になり後段の filter で除外される）
   const w = word && typeof word === "object" ? word : {};
+  // 50件を超える分は、切り捨てる前に日別の記録へ畳み込む。旧データ（historyDaily 無し）は
+  // ここで空から始まり、以後あふれた解答だけが日別に積まれる。
+  const folded = foldHistoryIntoDaily(w.history, w.historyDaily);
   return {
     id: sanitizeId(w.id),
     term: String(w.term || "").trim(),
@@ -20143,7 +20165,8 @@ function normalizeWord(word) {
       correct: nonNegativeInteger(w.stats?.correct),
       wrong: nonNegativeInteger(w.stats?.wrong),
     },
-    history: normalizeHistory(w.history),
+    history: folded.history,
+    historyDaily: folded.historyDaily,
     learning: normalizeLearning(w),
   };
 }
@@ -20366,10 +20389,14 @@ async function resolvePos(term) {
   }
 }
 
-function normalizeHistory(history) {
+// 履歴の正規化のうち、直近50件へ切り詰める手前まで。切り捨てる分を日別へ畳み込む
+// foldHistoryIntoDaily は、切り詰める前の全件を同じ規則（時刻の正規化と昇順）で
+// 見る必要があるため、正規化と切り詰めを分けている。
+// 切り詰めは foldHistoryIntoDaily だけが行う＝捨てる解答は必ず日別に残る。
+function normalizeHistoryEntries(history) {
   if (!Array.isArray(history)) return [];
   const fallbackAt = new Date().toISOString();
-  return history
+  const entries = history
     .map((entry) => {
       let at = fallbackAt;
       try {
@@ -20382,9 +20409,169 @@ function normalizeHistory(history) {
         // 壊れた時刻は現在時刻へ倒し、インポート・同期経路へ例外を漏らさない
       }
       return { at, correct: Boolean(entry?.correct) };
-    })
-    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
-    .slice(-50);
+    });
+  return dedupeHistoryEntries(entries);
+}
+
+// 生の履歴の全順序。時刻が同じなら誤答→正解の順に決め打ちする。
+// 決めておかないと、同一時刻・正誤違いの2件の並びが `[...a, ...b]` の与え方で変わり、
+// 50件目から押し出されるのがどちらかも変わる＝マージが可換でなくなる。
+function compareHistoryEntries(a, b) {
+  const at = String(a.at).localeCompare(String(b.at));
+  if (at !== 0) return at;
+  return (a.correct ? 1 : 0) - (b.correct ? 1 : 0);
+}
+
+// 生の履歴の同一性。日別の記録（historyDaily）とそろえて **(UTC日, 秒, 正誤)** で見る。
+// ミリ秒まで区別すると、同じ秒の2件のうち片方だけが50件からあふれて日別へ移ったとき、
+// 生では2件・日別では1件と数えられ、カレンダーの解答数と正解数が食い違う。
+// at は ISO（UTC）に正規化済みなので、先頭19文字が「日＋秒」になる。
+function historyEntryKey(entry) {
+  return `${String(entry.at).slice(0, 19)}:${entry.correct ? 1 : 0}`;
+}
+
+// 並べてから重複を落とす（同一秒・同一正誤なら最も早いミリ秒の1件が残る）。
+// 先に並べるので、入力の与え方に依らず必ず同じ結果になる。at 自体は元のミリ秒を保つ。
+function dedupeHistoryEntries(entries) {
+  const sorted = [...entries].sort(compareHistoryEntries);
+  const seen = new Set();
+  const kept = [];
+  for (const entry of sorted) {
+    const key = historyEntryKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(entry);
+  }
+  return kept;
+}
+
+// 50件からあふれた解答を捨てずに残すための、語ごと・日ごとの学習の記録。
+// days は "YYYY-MM-DD"（**UTC日付**）→ その日の解答をカンマで並べたトークン列。
+//   トークン = その日の秒(0〜86399)を36進 + ("+" 正解 / "-" 誤答)   例: "1k3+,2ab-"
+// 値を [解答数, 正解数] の**数**にすると、マージで max を採るしかなくなり、
+// max は結合的でない（3端末を突き合わせる順番で最終値が変わる）。ここでは1解答を
+// 「日・秒・正誤」で区別できるトークンに落とし、マージを**集合の和**にすることで、
+// 可換・結合・冪等（＝順番に依らず同じ値へ収束する）を成り立たせている。
+// 日キーをUTCで確定するのは、端末のローカル日付だと時差の違う端末が同じ解答を
+// 別のキーへ積み、和を採っても二重に数えてしまうため。表示側でローカル日へ寄せる。
+function emptyHistoryDaily() {
+  return { days: {} };
+}
+
+// トークンの並び順。秒の昇順で、同じ秒なら文字列順（"+" が先）。
+// 端末間で並びがそろわないと stateSignature が一致せず、中身が同じでも
+// 同期のたびに全量PUTが走り続けるので、保存する形をここで一意に決める。
+function compareHistoryDailyTokens(a, b) {
+  const diff = parseInt(a.slice(0, -1), 36) - parseInt(b.slice(0, -1), 36);
+  if (diff !== 0) return diff;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// 1日ぶんのトークン列を検証・重複排除・整列して作り直す。文字列以外（旧形式の配列など）は
+// 「無かったこと」にする。数え間違いをそのまま持ち回ると、カレンダーの回数が永久に
+// ずれたまま同期で他端末へも広がるため。
+function normalizeHistoryDailyTokens(value) {
+  if (typeof value !== "string" || !value) return "";
+  const seen = new Set();
+  const tokens = [];
+  for (const raw of value.split(",")) {
+    const token = raw.trim();
+    if (!/^[0-9a-z]{1,4}[+-]$/.test(token)) continue;
+    const seconds = parseInt(token.slice(0, -1), 36);
+    // 1日は86400秒。それ以上は壊れた値なので捨てる（36進4桁は 1,679,615 まで表せる）
+    if (!(seconds >= 0) || seconds >= 86400) continue;
+    // 必ず正規形（先頭ゼロなし）へ書き戻してから見る。文字列のまま比べると
+    // "0+" と "00+" が別のトークンとして両方残り、同じ解答を2回数えてしまう。
+    const canonical = seconds.toString(36) + token.slice(-1);
+    if (seen.has(canonical)) continue;
+    seen.add(canonical);
+    tokens.push(canonical);
+  }
+  return tokens.sort(compareHistoryDailyTokens).join(",");
+}
+
+// 日キーの検証。正規表現だけだと 2026-02-31 のような存在しない日を通してしまい、
+// 表示側の Date が別の日へ繰り上がってカレンダーがずれるので、UTCで往復して確かめる。
+function validHistoryDailyKey(key) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return false;
+  const time = Date.UTC(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)));
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === key;
+}
+
+function historyDailyDayCount(tokens) {
+  return tokens ? tokens.split(",").length : 0;
+}
+
+// 総トークン数が上限を超えたら、古い日から丸ごと落とす。新しい日ほどカレンダーで
+// 見られるため残す。上限未満でも必ず日付順に作り直す（上のトークン整列と同じ理由）。
+// 1日だけで上限を超える語でも、最後の1日は必ず残す（全部消すより残す方が実害が小さい）。
+function trimHistoryDailyDays(days) {
+  const keys = Object.keys(days).sort();
+  let total = 0;
+  for (const key of keys) total += historyDailyDayCount(days[key]);
+  let start = 0;
+  while (total > HISTORY_DAILY_MAX_ENTRIES && start < keys.length - 1) {
+    total -= historyDailyDayCount(days[keys[start]]);
+    start += 1;
+  }
+  const trimmed = {};
+  for (const key of keys.slice(start)) trimmed[key] = days[key];
+  return trimmed;
+}
+
+// 形の検証。壊れた日・壊れたトークンは落とし、旧フォーマット（値が配列の [解答数, 正解数]）も
+// ここで捨てる。旧フォーマットは本番未リリースなので、変換せず捨てる方が単純で安全。
+function normalizeHistoryDaily(daily) {
+  const base = emptyHistoryDaily();
+  if (!daily || typeof daily !== "object") return base;
+  const days = daily.days && typeof daily.days === "object" ? daily.days : {};
+  for (const key of Object.keys(days)) {
+    if (!validHistoryDailyKey(key)) continue;
+    const tokens = normalizeHistoryDailyTokens(days[key]);
+    if (!tokens) continue;
+    base.days[key] = tokens;
+  }
+  base.days = trimHistoryDailyDays(base.days);
+  return base;
+}
+
+// 1件の解答を「UTC日付 ＋ その日の秒 ＋ 正誤」のトークンへ落とす。
+// 同じ秒・同じ正誤の解答は区別できず1件に畳まれる（旧実装が同一ミリ秒を1件と見ていたのと
+// 同じ種類の限界で、1語を同一秒に2回採点した場合にだけ起きる）。
+function historyDailyTokenFor(entry) {
+  const time = Date.parse(entry?.at);
+  if (!Number.isFinite(time)) return null;
+  const date = new Date(time);
+  const seconds = date.getUTCHours() * 3600 + date.getUTCMinutes() * 60 + date.getUTCSeconds();
+  return {
+    key: date.toISOString().slice(0, 10),
+    token: seconds.toString(36) + (entry.correct ? "+" : "-"),
+  };
+}
+
+// 直近50件からあふれる解答を、捨てる前に日別の記録へ畳み込む純関数。
+// 入力は変異させず `{ history: 直近50件, historyDaily: 更新後 }` を返す。
+// 追加は集合への和なので、同じ履歴を何度通しても増えない（冪等）。水位のような
+// 状態を持たないので、どの端末がどの順に畳み込んでも結果が一致する。
+function foldHistoryIntoDaily(history, daily) {
+  const entries = normalizeHistoryEntries(history);
+  const base = normalizeHistoryDaily(daily);
+  if (entries.length <= HISTORY_RAW_MAX) return { history: entries, historyDaily: base };
+  const days = { ...base.days };
+  const touched = new Set();
+  // 昇順なので、あふれるのは常に古い側から
+  for (const entry of entries.slice(0, entries.length - HISTORY_RAW_MAX)) {
+    const folded = historyDailyTokenFor(entry);
+    if (!folded) continue;
+    days[folded.key] = days[folded.key] ? `${days[folded.key]},${folded.token}` : folded.token;
+    touched.add(folded.key);
+  }
+  // 触った日だけ作り直す（重複排除と整列。語数×日数を毎回なめると1万語で効く）
+  for (const key of touched) days[key] = normalizeHistoryDailyTokens(days[key]);
+  return {
+    history: entries.slice(-HISTORY_RAW_MAX),
+    historyDaily: { days: trimHistoryDailyDays(days) },
+  };
 }
 
 // 実現しえないほど先の復習予定を 0（SRS未開始）へ戻す。段階（srsStage）は保つので
@@ -21944,7 +22131,16 @@ function mergeDeckPlacement(localWord, remoteWord, source) {
 }
 
 function mergeWord(localWord, remoteWord, source) {
-  const history = mergeHistory(localWord.history, remoteWord.history);
+  // 生の履歴は両端末の和集合から直近50件。あふれた分は捨てずに日別の記録へ畳み込む。
+  // 畳み込み先は両端末の日別を和集合でマージしたもので、同じ解答は同じトークンになるため、
+  // 両端末が別々に畳み込んでいても二重には数えない。
+  // 生 ∪ 日別 が「両端末が持っていた解答の和」に等しく、かつ生から落ちた分は必ず日別へ
+  // 入るので、マージの順番を変えても最終結果が変わらない（(A⊔B)⊔C = A⊔(B⊔C)）。
+  const merged = foldHistoryIntoDaily(
+    mergeHistoryEntries(localWord.history, remoteWord.history),
+    mergeHistoryDaily(localWord.historyDaily, remoteWord.historyDaily),
+  );
+  const history = merged.history;
   const historyCorrect = history.filter((entry) => entry.correct).length;
   const historyWrong = history.length - historyCorrect;
   const remoteFavoriteIsNewer =
@@ -21975,22 +22171,36 @@ function mergeWord(localWord, remoteWord, source) {
     ),
     stats,
     history,
+    historyDaily: merged.historyDaily,
     learning: mergeLearningState(localWord.learning, remoteWord.learning),
   };
 }
 
-function mergeHistory(a = [], b = []) {
-  const entries = new Map();
-  [...a, ...b].forEach((entry) => {
-    if (!entry?.at) return;
-    entries.set(`${entry.at}:${entry.correct ? 1 : 0}`, {
-      at: entry.at,
-      correct: Boolean(entry.correct),
-    });
-  });
-  return [...entries.values()]
-    .sort((x, y) => String(x.at).localeCompare(String(y.at)))
-    .slice(-50);
+// 両端末の履歴の和集合を時刻順に返す（切り詰めはしない）。
+// あふれた分は呼び出し側が foldHistoryIntoDaily に通して日別へ残してから落とす。
+// 重複排除と並び順は dedupeHistoryEntries に任せる。同一性が日別とそろい、
+// 並びが入力順に依らないので、mergeWord(A,B) と mergeWord(B,A) が一致する。
+function mergeHistoryEntries(a = [], b = []) {
+  const entries = [...(a || []), ...(b || [])]
+    .filter((entry) => entry?.at)
+    .map((entry) => ({ at: String(entry.at), correct: Boolean(entry.correct) }));
+  return dedupeHistoryEntries(entries);
+}
+
+// 日別の記録は日ごとに**トークン集合の和**を採る。和は可換・結合・冪等なので、
+// 何台の端末をどの順に突き合わせても同じ値に収束する。
+// 以前は日ごとに [解答数, 正解数] の max を採っていたが、max は結合的でなく、
+// 3端末が同じ語を同じ日にオフラインで解くと突き合わせ順で最終値が変わっていた。
+function mergeHistoryDaily(a, b) {
+  const left = normalizeHistoryDaily(a);
+  const right = normalizeHistoryDaily(b);
+  const days = { ...left.days };
+  for (const key of Object.keys(right.days)) {
+    days[key] = days[key]
+      ? normalizeHistoryDailyTokens(`${days[key]},${right.days[key]}`)
+      : right.days[key];
+  }
+  return { days: trimHistoryDailyDays(days) };
 }
 
 function mergeEnrichData(a, b) {
@@ -22125,6 +22335,13 @@ function applyMergedRemoteState(remoteState, suppliedOptions) {
       syncState.applyingRemote = false;
     }
     renderAll();
+  }
+  // 初回だけ、起動時と同じ条件でタブ昇格を試す（条件は promoteInitialStepAfterRecovery 側）。
+  // 2回目以降は呼ばない。利用者が自分で「取り込み」へ戻したのを、10秒ごとの同期が
+  // 届くたびに黙って「クイズ」へ押し戻してしまうため。
+  if (!remoteStatePromotionDone) {
+    remoteStatePromotionDone = true;
+    promoteInitialStepAfterRecovery();
   }
   return changed;
 }
@@ -22723,6 +22940,9 @@ function rememberSyncIdInUrl(id) {
       url.searchParams.delete("wordsnap");
       url.searchParams.delete("syncId");
       window.history.replaceState(null, "", url);
+      // 起動時は素のURLで開き、ここで初めて個人キーがURLに載る経路がある（新規発行・採用）。
+      // 起動時の判定だけでは noindex が付かないので、キーを載せた時点でも付ける。
+      if (typeof applyPrivateLinkNoindex === "function") applyPrivateLinkNoindex();
     }
   } catch {
     /* URL書き換えに失敗しても致命的ではない */
@@ -23773,7 +23993,10 @@ function undoSignature(state) {
     const w = normalizeWord(raw);
     return [
       w.id, w.term, w.meaning, w.deckId, w.deckUpdatedAt, w.favorite, w.favoriteUpdatedAt,
-      w.progressUpdatedAt, w.stats, w.history, w.learning,
+      // 日別の記録も見る（stateSignature と同じ範囲にそろえる）。含めないと、
+      // 日別だけが増えたリモート状態を取り込んだ直後に「変更なし」と判定され、
+      // 直前の操作のUndoが残り続けて、押すと日別の記録まで巻き戻ってしまう。
+      w.progressUpdatedAt, w.stats, w.history, w.historyDaily, w.learning,
     ];
   });
   return JSON.stringify({
@@ -31706,24 +31929,44 @@ function renderStreakBadge() {
 let streakCalMonth = null;
 let streakCalSelected = "";
 
-// 単語ごとの history から日別の学習量を集計する。専用の日次ログを持たない代わりに、
-// 既にある履歴を遡って使えるので、この機能を入れた時点より前の学習も表示できる。
+// 単語ごとの history と historyDaily から日別の学習量を集計する。
+// 生の履歴（直近50件）だけでは、よく解いた語の古い解答がカレンダーから消えるので、
+// あふれた分を畳み込んだ historyDaily を同じ日へ足し合わせて全期間を数える。
 // 既定は全単語。成績の単語帳フィルタが効いているときだけ、絞った集合を渡す。
 // カレンダー（renderStreakCalendar）は成績の絞り込みとは無関係なので、既定のまま使う。
 function buildDailyActivity(words = appState.words || []) {
   const byDay = new Map();
+  const dayFor = (key) => {
+    let day = byDay.get(key);
+    if (!day) {
+      day = { answers: 0, correct: 0, terms: new Set() };
+      byDay.set(key, day);
+    }
+    return day;
+  };
   for (const word of words) {
     for (const entry of word.history || []) {
       const time = Date.parse(entry?.at);
       if (!Number.isFinite(time)) continue;
-      const key = localDateString(new Date(time));
-      let day = byDay.get(key);
-      if (!day) {
-        day = { answers: 0, correct: 0, terms: new Set() };
-        byDay.set(key, day);
-      }
+      const day = dayFor(localDateString(new Date(time)));
       day.answers += 1;
       if (entry.correct) day.correct += 1;
+      if (word.term) day.terms.add(word.term);
+    }
+    // 生の履歴から押し出された古い解答分。1解答＝1トークンなので、トークン数がその日の
+    // 解答数、"+" の数が正解数になる。その日に学習した語としても term を数える。
+    // キーはUTC日付なので、その日の正午(12:00Z)をローカル日付へ直して寄せる。
+    // 端から取ると時差でほぼ必ず1日ずれるが、正午なら±11時間までは同じ暦日に落ちる。
+    const days = word.historyDaily?.days;
+    for (const key of Object.keys(days || {})) {
+      const tokens = days[key];
+      // 正規化を通っていない語（取り込み直後など）が混じっても、壊れた日を作らない
+      if (typeof tokens !== "string" || !tokens || !/^\d{4}-\d{2}-\d{2}$/.test(key)) continue;
+      const day = dayFor(localDateString(new Date(`${key}T12:00:00Z`)));
+      for (const token of tokens.split(",")) {
+        day.answers += 1;
+        if (token.endsWith("+")) day.correct += 1;
+      }
       if (word.term) day.terms.add(word.term);
     }
   }
@@ -33362,7 +33605,11 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
   if (!currentQuiz.flashcard) {
     verifyConfidenceOnAnswer(word.id, isCorrect, currentQuizPromptMode(currentQuiz));
   }
-  if (word.history.length > 50) word.history = word.history.slice(-50);
+  // 50件からあふれた解答は、捨てる前に日別の記録へ畳み込む。
+  // こうしないと古い解答がカレンダー・連続記録から消える（生の履歴の上限は従来どおり）。
+  const foldedHistory = foldHistoryIntoDaily(word.history, word.historyDaily);
+  word.history = foldedHistory.history;
+  word.historyDaily = foldedHistory.historyDaily;
   // 不正解（「わからない」も含む）は5分後を記録しておく。「◯問後」より前に出したくなった
   // 場合の保険で、実際には◯問後の条件が先に成立することが多い（OR判定はavailableQuizWords側）
   const answeredAt = Date.now();
@@ -37354,6 +37601,30 @@ function initServiceWorker() {
     // Service Worker は任意機能。ここで落ちても初期化を止めない
   }
 }
+
+// 個人キー付きURL（?w=... / ?wordsnap= / ?syncId=）で開いた回だけ、検索エンジンへ
+// 「載せない」指示を足す。この形のURLは同期部屋そのものの鍵なので、共有・ブックマークの
+// 公開ページなどから1本でも漏れてクロールされると、他人の単語と成績が検索結果に出る。
+// robots.txt は認証境界ではない（そもそもURLを知っている相手は止められない）ので、
+// 認証の代わりではなく、露出を1段減らすためだけの対策。
+// HTMLに固定で書かずJSで足すのは、鍵の付かない通常のURL（アプリの紹介ページとして
+// 検索に出てよい）まで noindex にしてしまわないため。
+function applyPrivateLinkNoindex() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (!(params.get("w") || params.get("wordsnap") || params.get("syncId"))) return;
+    // 二重に足さない（起動経路が増えても1つだけ）
+    if (document.querySelector('meta[name="robots"]')) return;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "robots");
+    meta.setAttribute("content", "noindex,nofollow,noarchive");
+    document.head.appendChild(meta);
+  } catch {
+    /* URLが解析できなくても起動は続ける */
+  }
+}
+
+applyPrivateLinkNoindex();
 
 // テーマ・設定の読み出しは保存領域に触る。ensureWebStorage の代替が効かない環境で例外が出ても、
 // 既定の見え方で起動を続ける（ここで止まると以降の描画・同期まで始まらない）。
