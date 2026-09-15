@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.114</span>
+        <span class="app-footer-version">バージョン 1.0.115</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.114";
+  const APP_REV = "1.0.115";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7953,6 +7953,7 @@ const Enrich = (() => {
   }
 
   // ---------- 辞書データの取得 ----------
+  const HEDGE_MS = 1500; // 先頭の源がこれだけ返らなければ次の源も並行して叩く
   const recordCache = {}; // 確定した結果（項目あり / どの源にも無い）。一時的な失敗は入れない
   const sourceMiss = new Set(); // `${id}|${w}`: その源に項目が無いことが確定
 
@@ -7966,26 +7967,65 @@ const Enrich = (() => {
     const w = clean(term);
     if (!w) return null;
     if (w in recordCache) return recordCache[w];
+    // 順番どおりに始めるが、先頭の源が HEDGE_MS 返らなければ次の源も並行して叩き、先に取れた方を使う
+    // （ヘッジ）。健全なときは1回の通信で済み、遅い源に付き合って待ち続けることもない。
+    // 途中で「無い」と分かった源は次へ進み、応答しなかった源は後回しの印を付ける。
     const attempt = async (sources) => {
       let misses = 0;
       let transient = null;
-      for (const source of sources) {
-        const missKey = `${source.id}|${w}`;
-        if (sourceMiss.has(missKey)) {
-          misses += 1;
+      let next = 0;
+      const pending = new Map(); // key → 進行中の取得
+      const launch = () => {
+        while (next < sources.length) {
+          const source = sources[next++];
+          const missKey = `${source.id}|${w}`;
+          if (sourceMiss.has(missKey)) {
+            misses += 1;
+            continue;
+          }
+          const key = source.id;
+          pending.set(
+            key,
+            fetchSource(source, w).then(
+              (rec) => {
+                clearDegraded(source.id);
+                if (!rec) sourceMiss.add(missKey);
+                return { key, rec };
+              },
+              (error) => {
+                if (error?.transient) markDegraded(source.id);
+                return { key, error };
+              },
+            ),
+          );
+          return true;
+        }
+        return false;
+      };
+      launch();
+      while (pending.size > 0) {
+        let timer = 0;
+        const hedge =
+          next < sources.length
+            ? new Promise((resolve) => {
+                timer = setTimeout(() => resolve({ hedge: true }), HEDGE_MS);
+              })
+            : null;
+        const outcome = await Promise.race(hedge ? [...pending.values(), hedge] : [...pending.values()]);
+        clearTimeout(timer);
+        if (outcome.hedge) {
+          launch(); // 遅いので次の源も並行して叩く
           continue;
         }
-        try {
-          const rec = await fetchSource(source, w);
-          clearDegraded(source.id);
-          if (rec) return { rec };
-          sourceMiss.add(missKey);
+        pending.delete(outcome.key);
+        if (outcome.rec) return { rec: outcome.rec };
+        if (outcome.error) {
+          if (!outcome.error.transient) throw outcome.error;
+          transient = outcome.error;
+        } else {
           misses += 1;
-        } catch (error) {
-          if (!error?.transient) throw error;
-          markDegraded(source.id);
-          transient = error;
         }
+        if (pending.size === 0) launch(); // 何も進行していなければ次の源へ
       }
       return { misses, transient };
     };
@@ -8131,26 +8171,21 @@ const Enrich = (() => {
       }
     }
     const slicedExamples = exampleList.slice(0, 5);
-
-    // 例文と定義の和訳をそれぞれ1回のAPIコールにまとめて取得し、キャッシュに一緒に保存する。
-    const exampleJa = slicedExamples.length
-      ? await window.Translate.translateBatch(slicedExamples)
-      : [];
-    const examplesWithJa = slicedExamples.map((en, i) => ({ en, ja: exampleJa[i] || null }));
-
-    const defJa = definitions.length
-      ? await window.Translate.translateBatch(definitions.map((d) => d.def))
-      : [];
-    const definitionsWithJa = definitions.map((d, i) => ({ ...d, ja: defJa[i] || null }));
-
-    return { examples: examplesWithJa, definitions: definitionsWithJa, source: attribution(rec) };
+    // 和訳はここで待たない（英文を先に出し、表示後に backfillTranslations が例文と定義をまとめて1回で訳す）。
+    // ja: undefined が「取得中」の印。従来は翻訳を2回順番に待ってから表示していて、例文が出るまで
+    // 2〜3秒余計にかかっていた。
+    return {
+      examples: slicedExamples.map((en) => ({ en, ja: undefined })),
+      definitions: definitions.map((d) => ({ ...d, ja: undefined })),
+      source: attribution(rec),
+    };
   }
 
   async function etymology(term) {
     const rec = await record(term);
     const text = rec?.origin || null;
-    const ja = text ? await window.Translate.translateOne(text) : null;
-    return { text, ja };
+    // 和訳は表示後に後追い（undefined が「取得中」の印。無ければ訳す対象もないので null）
+    return { text, ja: text ? undefined : null };
   }
 
   function fetchType(type, term, posTag = null) {
@@ -33561,6 +33596,8 @@ async function handleEnrichChip(chip) {
     }
     if (chip.getAttribute("aria-pressed") !== "true") return;
     section.innerHTML = enrichSectionShell(type, enrichBody(type, data, word.term));
+    // 例文・語源は英文を先に出しているので、和訳をここから後追いで埋める（1回の翻訳にまとめる）
+    if (word.enrich[type]) backfillTranslations(type, word, section, chip);
   } catch (error) {
     if (chip.getAttribute("aria-pressed") === "true") {
       chip.dataset.enrichError = "1";

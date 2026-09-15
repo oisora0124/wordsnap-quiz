@@ -51,6 +51,7 @@ function enrichSandbox(respond, { storage } = {}) {
       calls.push(url);
       const r = respond(url, calls.length);
       if (r instanceof Error) throw r;
+      if (r && typeof r.then === "function") return r; // 返ってこない fetch の再現（pending のまま）
       return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => r.body };
     },
   };
@@ -142,6 +143,35 @@ test("辞書が全部応答しないときも、発音記号は Datamuse の IPA
   const ex = await Enrich.fetch("examples", "apple");
   assert.equal(ex.examples[0].en, "I ate an apple.");
   assert.ok(calls.length >= 4);
+});
+
+test("速さ: 先頭の源が1.5秒返らなければ次の源も並行して叩き、先に取れた方で出す（1.0.115）", async () => {
+  const { Enrich, calls } = enrichSandbox((url) => {
+    if (host(url) === "api.dictionaryapi.dev") return new Promise(() => {}); // 返ってこない（不調の再現）
+    if (host(url) === "freedictionaryapi.com") return { status: 200, body: FREEDICT_ENTRY };
+    return { status: 500, body: null };
+  });
+  const t0 = Date.now();
+  const pron = await Enrich.fetch("pronunciation", "apple");
+  const elapsed = Date.now() - t0;
+  assert.equal(json(pron.texts), json(["/ˈæp.əl/", "/ˈa.pɘl/"]));
+  assert.ok(elapsed >= 1400 && elapsed < 4000, `ヘッジ（1.5秒）で切り替わる: ${elapsed}ms`);
+  assert.equal(json(calls.map(host)), json(["api.dictionaryapi.dev", "freedictionaryapi.com"]), "先頭を待ってから次を並行に");
+  assert.match(html, /const HEDGE_MS = 1500;/);
+});
+
+test("速さ: 例文・語源は和訳を待たずに返し（ja は取得中の印）、新規取得の直後に後追いの翻訳を走らせる（1.0.115）", async () => {
+  let translateCalls = 0;
+  const { Enrich } = enrichSandbox((url) => (host(url) === "api.dictionaryapi.dev" ? { status: 200, body: DICTAPI_ENTRY } : { status: 500, body: null }));
+  const ex = await Enrich.fetch("examples", "apple");
+  assert.equal(ex.examples[0].en, "I ate an apple.");
+  assert.equal(ex.examples[0].ja, undefined, "和訳は表示後に後追い");
+  assert.equal(ex.definitions[0].ja, undefined);
+  const ety = await Enrich.fetch("etymology", "apple");
+  assert.equal(ety.ja, undefined);
+  assert.equal(translateCalls, 0);
+  // 新規取得の直後に backfillTranslations を呼ぶ配線（例文が出たあと和訳が埋まる）
+  assert.match(html, /section\.innerHTML = enrichSectionShell\(type, enrichBody\(type, data, word\.term\)\);\s*[^]*?if \(word\.enrich\[type\]\) backfillTranslations\(type, word, section, chip\);/);
 });
 
 test("未収録: 元気な源がそろって「無い」と答えたら、後回し中の源を待たずに未収録（null）とし、その結果はキャッシュする", async () => {
