@@ -743,6 +743,28 @@ const mergeStateStart = publicHtml.indexOf("function mergeAppStates(");
 const mergeStateEnd = publicHtml.indexOf("\nfunction applyMergedRemoteState(", mergeStateStart);
 assert.ok(mergeStateStart >= 0 && mergeStateEnd > mergeStateStart,
   "application-state merge source is missing");
+// 履歴の畳み込みも同様。マージで「捨てる解答を日別へ残す」部分をスタブにすると、
+// 学習量が静かに消える回帰をこの検査が見逃す。
+// 範囲で切り出すと、間に別の関数が増えたときに黙って一緒に取り込む（あるいは
+// 取りこぼす）ので、必要な関数だけを名前で1つずつ取り出す。
+const htmlFunctionSource = (name) => {
+  const start = publicHtml.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `source for ${name} is missing`);
+  const open = publicHtml.indexOf("{", publicHtml.indexOf(")", start));
+  let depth = 0;
+  for (let index = open; index < publicHtml.length; index += 1) {
+    if (publicHtml[index] === "{") depth += 1;
+    if (publicHtml[index] !== "}") continue;
+    depth -= 1;
+    if (depth === 0) return publicHtml.slice(start, index + 1);
+  }
+  assert.fail(`end of ${name} is missing`);
+};
+const historyCompactionSource = [
+  "normalizeHistoryEntries", "emptyHistoryDaily", "trimHistoryDailyDays",
+  "normalizeHistoryDaily", "foldHistoryIntoDaily",
+].map(htmlFunctionSource).join("\n");
+
 // 進捗時刻の判定は削除の巻き添えを防ぐ要なので、スタブを書かず公開HTMLの実装をそのまま持ち込む。
 const progressMsStart = publicHtml.indexOf("function wordProgressMs(");
 const progressMsEnd = publicHtml.indexOf("\nfunction deletionKeyForWord(", progressMsStart);
@@ -765,8 +787,13 @@ new Script(
     "const mergeStreaks = (a, b) => a || b || {};\n" +
     "const emptyEnrich = () => ({ examples: null, etymology: null, synonyms: null, collocations: null });\n" +
     "const normalizeState = (value) => value;\n" +
+    "const HISTORY_RAW_MAX = 50;\n" +
+    "const HISTORY_DAILY_MAX_DAYS = 730;\n" +
+    `${historyCompactionSource}\n` +
     `${publicHtml.slice(mergeStateStart, mergeStateEnd)}\n` +
-    "globalThis.__mergeAppStates = mergeAppStates;",
+    "globalThis.__mergeAppStates = mergeAppStates;\n" +
+    "globalThis.__mergeWord = mergeWord;\n" +
+    "globalThis.__foldHistoryIntoDaily = foldHistoryIntoDaily;",
   { filename: "application-state-merge-check.js" },
 ).runInNewContext(mergeStateSandbox);
 const mergeDeckA = { id: "deck-a", name: "A", updatedAt: 0 };
@@ -812,6 +839,25 @@ const oneDeckDeletedMerge = mergeStates(
 );
 assert.equal(oneDeckDeletedMerge.words.map((word) => word.deckId).join(","), "deck-b",
   "a composite tombstone must delete only the matching deck's word");
+
+// 50件を超えた解答が、マージで生の履歴からも日別からも消えないこと。
+// 「畳み込み済みの端末」と「まだ生60件を持つ端末」を突き合わせても、合計は増えも減りもしない。
+const sixtyAnswers = Array.from({ length: 60 }, (_, index) => ({
+  at: new Date(Date.parse("2026-07-01T00:00:00.000Z") + index * 3_600_000).toISOString(),
+  correct: index % 2 === 0,
+}));
+const foldedSixty = mergeStateSandbox.__foldHistoryIntoDaily(sixtyAnswers, null);
+const foldedWord = {
+  ...mergeWordFixture("fold-a", "deck-a", oldAddedAt),
+  history: foldedSixty.history,
+  historyDaily: foldedSixty.historyDaily,
+};
+const rawSixtyWord = { ...mergeWordFixture("fold-a", "deck-a", oldAddedAt), history: sixtyAnswers };
+const foldMerged = mergeStateSandbox.__mergeWord(foldedWord, rawSixtyWord, "remote");
+const foldMergedDailyAnswers = Object.values(foldMerged.historyDaily.days)
+  .reduce((sum, counts) => sum + counts[0], 0);
+assert.equal(foldMerged.history.length + foldMergedDailyAnswers, 60,
+  "merging a compacted word with a raw one must neither drop nor double-count answers");
 
 const readdedMerge = mergeStates(
   mergeStateFixture([mergeWordFixture("new-a", "deck-a", newAddedAt)], [mergeDeckA]),

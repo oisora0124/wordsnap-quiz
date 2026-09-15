@@ -42,6 +42,8 @@ function makeWordRuntime() {
     "const TRASH_TTL_MS = 30 * DAY_MS;",
     "const SAFE_CEFR_LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);",
     "const SAFE_POS_TAGS = new Set(['n', 'v', 'adj', 'adv']);",
+    "const HISTORY_RAW_MAX = 50;",
+    "const HISTORY_DAILY_MAX_DAYS = 730;",
     "const selectedIds = new Set();",
     "const clearSavedReviewProgress = () => false;",
     extractFunction("createId"),
@@ -54,7 +56,11 @@ function makeWordRuntime() {
     extractFunction("safeCefrLevel"),
     extractFunction("normalizeCefr"),
     extractFunction("normalizePos"),
-    extractFunction("normalizeHistory"),
+    extractFunction("normalizeHistoryEntries"),
+    extractFunction("emptyHistoryDaily"),
+    extractFunction("trimHistoryDailyDays"),
+    extractFunction("normalizeHistoryDaily"),
+    extractFunction("foldHistoryIntoDaily"),
     extractFunction("repairFarFutureReviewAt"),
     extractFunction("normalizeLearning"),
     extractFunction("normalizeWord"),
@@ -75,13 +81,15 @@ function makeWordRuntime() {
     extractFunction("mergeTrashEntries"),
     extractFunction("mergeDeckPlacement"),
     extractFunction("mergeWord"),
-    extractFunction("mergeHistory"),
+    extractFunction("mergeHistoryEntries"),
+    extractFunction("mergeHistoryDaily"),
     extractFunction("mergeEnrichData"),
     extractFunction("mergeLearningState"),
     extractFunction("minPositiveNumber"),
     "globalThis.__wordRuntime = {" +
-      " normalizeHistory, normalizeLearning, normalizeWord, normalizeState, stateSignature," +
-      " mergeHistory, mergeLearningState, mergeEnrichData, mergeWord, mergeAppStates," +
+      " normalizeHistoryEntries, foldHistoryIntoDaily, normalizeHistoryDaily," +
+      " normalizeLearning, normalizeWord, normalizeState, stateSignature," +
+      " mergeHistoryEntries, mergeHistoryDaily, mergeLearningState, mergeEnrichData, mergeWord, mergeAppStates," +
       " repairFarFutureReviewAt, normalizeStreak, mergeStreaks, mergeDeckPlacement, localDateString };",
   ];
   const context = {};
@@ -502,7 +510,7 @@ test("順序が崩れた履歴も時刻順に並べてから最新50件を残す
     at: new Date(base + index * 1_000).toISOString(),
     correct: index % 2 === 0,
   })).reverse();
-  const normalized = runtime.normalizeHistory(unordered);
+  const normalized = runtime.foldHistoryIntoDaily(unordered, null).history;
 
   assert.equal(normalized.length, 50);
   assert.equal(normalized[0].at, new Date(base + 10_000).toISOString());
