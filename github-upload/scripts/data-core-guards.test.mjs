@@ -1618,3 +1618,18 @@ test("品詞の問い合わせ: HTTP エラー（429・5xx・404）は一時的�
   const none = await run(200, []);
   assert.equal(none.tag, null, "API が応答して該当なしなら「品詞なし」として確定できる");
 });
+
+test("フラッシュカード（確信度）: 採点済みの現在カードは語が消えても落とさず、作り直されても採点済みに戻す。復習の再挑戦で対象が無ければ案内する（1.0.126）", () => {
+  const sandbox = { flashcardSession: { order: ["a", "b", "c"], allIds: ["a", "b", "c"], index: 1, answeredId: "b" } };
+  new Script(`${extractFunction("dropWordFromFlashcardSession")}\nglobalThis.__d = dropWordFromFlashcardSession;`, { filename: "fc.js" }).runInNewContext(sandbox);
+  sandbox.__d("b");
+  assert.equal(JSON.stringify(sandbox.flashcardSession.order), JSON.stringify(["a", "b", "c"]), "採点済みの現在カードは残す");
+  sandbox.__d("c");
+  assert.equal(JSON.stringify(sandbox.flashcardSession.order), JSON.stringify(["a", "b"]), "未回答の語は落とす");
+  const rf = extractFunction("renderFlashcard");
+  assert.match(rf, /!currentQuiz\.answered &&[\s\S]*?dropWordFromFlashcardSession\(currentQuiz\.answer\.id\);/);
+  assert.match(rf, /flashcardSession\.answeredId === currentQuiz\.answer\?\.id\) \{\s*currentQuiz\.answered = true;\s*flashcardRevealed = true;/);
+  assert.match(extractFunction("gradeFlashcardConfidence"), /flashcardSession\.answeredId = wordId;\s*flashcardRevealed = true;/);
+  assert.match(extractFunction("advanceFlashcard"), /flashcardSession\.index \+= 1;\s*flashcardSession\.answeredId = null;/);
+  assert.match(extractFunction("startReview"), /if \(valid\.length === 0\) \{[\s\S]*?setStatus\("出題できる単語がありません（対象の単語が削除されました）。"\);\s*renderQuiz\(\);\s*return;/);
+});
