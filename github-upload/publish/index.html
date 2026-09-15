@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.124</span>
+        <span class="app-footer-version">バージョン 1.0.125</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.124";
+  const APP_REV = "1.0.125";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -19940,6 +19940,10 @@ async function resolvePos(term) {
         `https://api.datamuse.com/words?sp=${encodeURIComponent(word)}&md=p&max=1`,
         { signal: controller.signal },
       );
+      // 429・5xx・404 は一時的な失敗として null（呼び出し側は保存せず、起動中だけ再問い合わせを止める）。
+      // Datamuse は HTTP エラーでも JSON 本文を返すため、見ないと配列でない本文が「判定済み・品詞なし」
+      // として保存され、二度と取り直されなかった（CEFR 側の resolve は既に ok を見ている）。
+      if (!res.ok) return null;
       data = await res.json();
     } finally {
       clearTimeout(timer);
@@ -26313,18 +26317,24 @@ async function recognizeOcrCanvas(worker, canvas, layout, variantLabel, run) {
 
   const results = [];
   const regions = ocrRegions(canvas, layout);
-  for (let index = 0; index < regions.length; index += 1) {
-    ensureOcrRunActive(run);
-    const regionLabel = regions.length > 1 ? `・${index === 0 ? "左列" : "右列"}` : "";
-    ocrPhaseLabel = `文字を読んでいます（${variantLabel}${regionLabel}）`;
-    try {
-      const { data } = await worker.recognize(regions[index]);
+  try {
+    for (let index = 0; index < regions.length; index += 1) {
       ensureOcrRunActive(run);
-      results.push(data || {});
-    } finally {
-      // 2列モードの切り出しCanvasは片列を読み終えた時点で解放する。
-      releaseTemporaryCanvas(regions[index], canvas);
+      const regionLabel = regions.length > 1 ? `・${index === 0 ? "左列" : "右列"}` : "";
+      ocrPhaseLabel = `文字を読んでいます（${variantLabel}${regionLabel}）`;
+      try {
+        const { data } = await worker.recognize(regions[index]);
+        ensureOcrRunActive(run);
+        results.push(data || {});
+      } finally {
+        // 2列モードの切り出しCanvasは片列を読み終えた時点で解放する。
+        releaseTemporaryCanvas(regions[index], canvas);
+      }
     }
+  } finally {
+    // 片列を読む前に中断されたときは、まだ読んでいない列の切り出しCanvasも即時解放する
+    // （releaseTemporaryCanvas は二重に呼んでも安全）。
+    for (const region of regions) releaseTemporaryCanvas(region, canvas);
   }
 
   const text = results.map((data) => String(data.text || "").trim()).filter(Boolean).join("\n");
@@ -34100,7 +34110,15 @@ elements.ocrButton.addEventListener("click", async () => {
         setStatus("端末内OCRを中止しました。入力欄の内容は変更していません。");
       }
     } else {
-      setStatus(`${error.message} 下の欄に単語と意味を貼り付ければ続けられます。`);
+      // 高精度モードの言語データ（12MB×2）は外部から取るので、オフラインや配信元の不調では読み込めない。
+      // 生のエラー文だけでは原因も対処も分からないので、その場合だけ一言添える。
+      const hiAcc = Boolean(elements.hiAccToggle?.checked);
+      const looksLikeLoadFailure = /traineddata|lang|fetch|network|load|http/i.test(String(error?.message || ""));
+      const hint =
+        hiAcc && looksLikeLoadFailure
+          ? " 高精度モードは言語データを外部から取得します。通信を確認するか、高精度をオフにすると端末内のデータで読み取れます。"
+          : "";
+      setStatus(`${error.message}${hint} 下の欄に単語と意味を貼り付ければ続けられます。`);
     }
   } finally {
     finishOcrUiRun(run);

@@ -460,3 +460,10 @@ test("補完の保存をまとめても、最後の変更はキューが空に�
   assert.ok(words.every((w) => w.cefr && w.pos), "全語が埋まる");
   assert.equal(sandbox.__q.persisted(), 1, "12語（3バッチ）なら、キューが空になった時点の1回だけ保存する");
 });
+
+test("端末内OCR: 2列モードで中断しても未処理の切り出しCanvasを解放する。高精度の言語データが取れないときは対処を添える（1.0.125）", () => {
+  const rec = extractFunction("recognizeOcrCanvas");
+  assert.match(rec, /const regions = ocrRegions\(canvas, layout\);\s*try \{[\s\S]*?\} finally \{[\s\S]*?for \(const region of regions\) releaseTemporaryCanvas\(region, canvas\);/);
+  const ocr = extractHandlerBody('elements.ocrButton.addEventListener("click", async () => {');
+  assert.match(ocr, /const hiAcc = Boolean\(elements\.hiAccToggle\?\.checked\);[\s\S]*?高精度モードは言語データを外部から取得します/);
+});

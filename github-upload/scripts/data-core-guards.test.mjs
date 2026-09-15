@@ -1597,3 +1597,24 @@ test("手順2とエラー監視: 入力中は候補を作り直さない／消�
   const postAt = ce.indexOf("postEvents(");
   assert.ok(postAt > 0 && ce.indexOf("localStorage.setItem(ERROR_STATE_KEY") > postAt, "記録は送信の受け付け後（onAccepted の中）");
 });
+
+test("品詞の問い合わせ: HTTP エラー（429・5xx・404）は一時的な失敗（null）とし、「品詞なし」として保存しない（1.0.125）", async () => {
+  const run = async (status, body) => {
+    const sandbox = {
+      AbortController,
+      setTimeout,
+      clearTimeout,
+      builtinPosTags: () => [],
+      fetch: async () => ({ ok: status >= 200 && status < 300, status, json: async () => body }),
+    };
+    new Script(`${"async " + extractFunction("resolvePos")}\nglobalThis.__r = resolvePos;`, { filename: "pos.js" }).runInNewContext(sandbox);
+    return sandbox.__r("serendipity");
+  };
+  assert.equal(await run(429, { code: 429, message: "Too Many Requests" }), null, "上限は一時失敗");
+  assert.equal(await run(503, { code: 503 }), null);
+  assert.equal(await run(404, { code: 404, message: "HTTP 404 Not Found" }), null);
+  const ok = await run(200, [{ word: "serendipity", tags: ["n"] }]);
+  assert.equal(ok.tag, "n");
+  const none = await run(200, []);
+  assert.equal(none.tag, null, "API が応答して該当なしなら「品詞なし」として確定できる");
+});
