@@ -59,6 +59,22 @@ const appRevVersion = publicHtml.match(/const APP_REV = "([^"]+)";/)?.[1];
 assert.equal(appRevVersion, packageVersion,
   "telemetry APP_REV must match the displayed version so reports can be filtered by it");
 
+// ===== scripts.test に全テストファイルが列挙されているか =====
+// scripts/*.test.mjs を追加しただけで `npm run test`（scripts.test）へ足し忘れると、
+// そのテストは npm test でもCIでも一度も実行されないまま「有る」ことになってしまう。
+// 実際に sync-ui-v2-default.test.mjs で一度これが起きたため、機械的に検査する。
+const packageJson = JSON.parse(read(packageJsonPath));
+const testScript = packageJson.scripts?.test ?? "";
+const scriptsDirPath = join(projectDir, "scripts");
+const testFiles = readdirSync(scriptsDirPath)
+  .filter((name) => name.endsWith(".test.mjs"))
+  .sort();
+const missingFromTestScript = testFiles.filter(
+  (name) => !testScript.includes(`scripts/${name}`),
+);
+assert.deepEqual(missingFromTestScript, [],
+  `scripts.test (package.json) is missing these test files: ${missingFromTestScript.join(", ")}`);
+
 const versionsDoc = read(versionsDocPath);
 const versionRows = [...versionsDoc.matchAll(/^\| (\d+\.\d+\.\d+) \|/gm)].map((m) => m[1]);
 assert.ok(versionRows.length > 0, "docs/VERSIONS.md must list at least one version");
