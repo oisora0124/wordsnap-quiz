@@ -1569,7 +1569,7 @@ test("JSON の置き換え読み込み: ゴミ箱を引き継ぎ、保存を確�
 
 test("クイズ描画: 採点済みの問題は再描画で描き直さない（正誤の色と完成文を保つ）。例文モードの補充は語で重複排除する（1.0.122）", () => {
   assert.match(extractFunction("renderQuiz"), /if \(currentQuiz\.answered\) \{[\s\S]*?updateQuizControls\(\);\s*return;\s*\}\s*renderQuizPromptWord\(currentQuiz\);/);
-  assert.match(extractFunction("renderReviewQuiz"), /if \(currentQuiz\.answered\) return;[\s\S]*?renderQuizPromptWord\(currentQuiz\);/);
+  assert.match(extractFunction("renderReviewQuiz"), /reviewScopeText\(\);\s*\/\/[^\n]*\n(\s*\/\/[^\n]*\n)*\s*if \(currentQuiz\?\.answered\) return;\s*if \(reviewSession\.queue\.length === 0\)/, "採点済みガードは「復習完了」分岐より前（1.0.128）");
   assert.match(extractFunction("buildContextChoices"), /pickDistractors\(basePool, answer, 3 - generated\.length, \[\], \{\s*preferDifferentPos: true,\s*dedupeBy: "term",\s*\}\)/);
 });
 
@@ -1583,13 +1583,14 @@ test("同期の送信: サーバーの 413 は自動再送しない。現行サ�
 
 test("同期の反映: 一覧の選択は丸ごと消さず、消えた語の分だけ外す（1.0.124）", () => {
   const src = extractFunction("applyMergedRemoteState");
-  assert.match(src, /appState = merged;[\s\S]*?pruneSelection\(\);\s*persistAppState\(\{ sync: options\.sync !== false \}\);/);
+  assert.match(src, /appState = merged;[\s\S]*?pruneSelection\(\);[\s\S]*?const scope = new Set\(scopedWords\(\)\.map\(\(word\) => word\.id\)\);[\s\S]*?persistAppState\(\{ sync: options\.sync !== false \}\);/);
   assert.equal(src.includes("selectedIds.clear()"), false);
 });
 
 test("手順2とエラー監視: 入力中は候補を作り直さない／消えた保存先の「選んだ」印を下ろす／エラーは受け付けられてから記録（1.0.124）", () => {
   const rc = extractFunction("renderCandidates");
-  assert.match(rc, /elements\.candidateList\?\.contains\?\.\(document\.activeElement\)[\s\S]*?dirtyPanels\.add\("candidates"\);\s*return;/);
+  assert.match(rc, /\(active\.tagName === "INPUT" \|\| active\.tagName === "TEXTAREA"\)[\s\S]*?if \(!options\.force && candidates\.length > 0 && editing\) \{\s*dirtyPanels\.add\("candidates"\);\s*return;/, "入力欄に焦点があるときだけ止め、force なら描く（1.0.128）");
+  assert.match(html, /candidates\.splice\(index, 1\);\s*renderCandidates\(\{ force: true \}\);/, "削除は必ず描く");
   assert.match(html, /elements\.candidateList\.addEventListener\("focusout", \(event\) => \{[\s\S]*?renderDirtyActivePanel\(\);/);
   const sd = extractFunction("renderSaveDeckSelect");
   assert.match(sd, /if \(saveDeckChosenByUser && chosen && !chosenExists\) saveDeckChosenByUser = false;/);
@@ -1664,8 +1665,8 @@ test("焦点管理: 一覧の再描画で焦点を同じ語の同じ操作へ戻
   assert.equal(newBtnA.focused, 1, "作り直した同じ語の★へ焦点を戻す");
   assert.match(extractFunction("renderSavedWords"), /const focusMemo = rememberSavedListFocus\(\);[\s\S]*?restoreSavedListFocus\(focusMemo\);/);
   // 同じ文の通知
-  const st = { elements: { status: { textContent: "" } }, window: { setTimeout: (f) => { f(); return 1; } } };
-  new Script(`${extractFunction("setStatus")}\nglobalThis.__s = setStatus;`, { filename: "status.js" }).runInNewContext(st);
+  const st = { elements: { status: { textContent: "" } }, window: { setTimeout: (f) => { f(); return 1; }, clearTimeout() {} } };
+  new Script(`let statusRepeatTimer = 0;\n${extractFunction("setStatus")}\nglobalThis.__s = setStatus;`, { filename: "status.js" }).runInNewContext(st);
   st.__s("削除します。もう一度押すと確定");
   const cleared = [];
   st.elements.status = { set textContent(v) { cleared.push(v); }, get textContent() { return cleared.at(-1) ?? ""; } };
@@ -1674,4 +1675,19 @@ test("焦点管理: 一覧の再描画で焦点を同じ語の同じ操作へ戻
   // 確認バーのタイマー
   assert.match(extractFunction("showImportedV2CredentialConfirm"), /window\.clearTimeout\(importConfirmHoldTimer\);\s*importConfirmHoldTimer = window\.setTimeout\(/);
   assert.match(extractFunction("resetImportConfirmUi"), /window\.clearTimeout\(importConfirmHoldTimer\);[\s\S]*?delete elements\.importConfirmButton\.dataset\.holdDisabled;/);
+});
+
+test("通知: 同じ文の入れ直し待ちの間に別の文が来たら、入れ直しを取り消して新しい文を残す（1.0.128）", () => {
+  let pending = null;
+  const st = {
+    elements: { status: { textContent: "" } },
+    window: { setTimeout: (f) => { pending = f; return 7; }, clearTimeout: (id) => { if (id === 7) pending = null; } },
+  };
+  new Script(`let statusRepeatTimer = 0;\n${extractFunction("setStatus")}\nglobalThis.__s = setStatus;`, { filename: "status2.js" }).runInNewContext(st);
+  st.__s("文A");
+  st.__s("文A"); // 同じ文 → 空にして入れ直しを予約
+  assert.equal(st.elements.status.textContent, "");
+  st.__s("文B"); // 別の文 → 予約を取り消す
+  assert.equal(pending, null, "入れ直しは取り消される");
+  assert.equal(st.elements.status.textContent, "文B");
 });
