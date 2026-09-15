@@ -4551,6 +4551,17 @@ textarea:focus-visible {
   font-style: italic;
 }
 
+.enrich-source,
+.enrich-caption {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.enrich-source a {
+  color: inherit;
+}
+
 .enrich-loading {
   margin: 0;
   color: var(--muted);
@@ -6669,7 +6680,7 @@ accurate 正確な"
                 <li data-sync-identity-ui="legacy">逆に、<strong>個人キー（＝個人リンク）を知っている人はデータを読み書きできます</strong>。「個人リンクをコピー」で得られるリンクにはこのキーが含まれるため、他人に教えたり公開の場に貼ったりしないでください。</li>
                 <li data-sync-identity-ui="v2-native" hidden>単語と成績は、このアプリ専用のV2サーバー領域に保存されます。他の人のデータとは分離され、秘密の引き継ぎコードで保護されます。</li>
                 <li data-sync-identity-ui="v2-native" hidden><strong>引き継ぎコードを知っている人はデータを読み書きできます</strong>。コードはURLには含まれませんが、他人に教えたり公開の場に貼ったりしないでください。</li>
-                <li><strong>外部辞書への通信：</strong>保存一覧で未判定のCEFR・品詞を補う際は英単語だけをDatamuseへ送ります。「詳しく」で辞書情報を開いた際は英単語をDatamuse・dictionaryapi.devへ、取得した英文の和訳をGoogle翻訳・MyMemoryへ送る場合があります。個人キー・成績・単語帳全体はこれらのサービスへ送りません。</li>
+                <li><strong>外部辞書への通信：</strong>保存一覧で未判定のCEFR・品詞を補う際は英単語だけをDatamuseへ送ります。「詳しく」で辞書情報を開いた際は英単語をDatamuse・dictionaryapi.dev（応答しないときは予備の freedictionaryapi.com・en.wiktionary.org）へ、取得した英文の和訳をGoogle翻訳・MyMemoryへ送る場合があります。個人キー・成績・単語帳全体はこれらのサービスへ送りません。</li>
                 <li><strong>例文問題の外部通信：</strong>「出さない」では新しい例文を作るための通信はしません。「一部」「全部」または「例文で解く」で新規生成が必要な場合は、開始前の確認後に対象の単語と意味を辞書APIへ、APIキー設定時は選択したAIサービスへ直接送ります。APIキーはWordBankのサーバーへは送りません。</li>
                 <li><strong>古いバージョンが表示されるとき：</strong>アプリを一度終了して開き直してください（スマホならタスク一覧からスワイプで終了、ブラウザならタブを閉じて開き直す）。オフライン用に保存した古い本体が残っていると、通信が一瞬途切れた回にそれが表示されることがあります。開き直せば最新版に入れ替わり、古い保存分は自動で削除されます。単語データや学習の記録には影響しません。</li>
                 <li data-sync-identity-ui="legacy">全データを消すには「全データ削除」（この設定タブの「危険な操作」内）を実行してください。<strong>サーバー側の保存分もあわせて削除状態へ置き換えます。</strong>削除した単語の意味・成績・履歴は30日間「削除済み」として復元用に残ります。長期間オフラインだった別端末から削除語が復活するのを防ぐため、正規化した単語・単語帳ID・削除時刻だけの削除記録は最長90日保持します。これらの期限切れデータは、次にこの個人キーで保存・同期した際に削除されます。長期間まったくアクセスされないサーバー保存分を定期削除する機能は、現在はありません。</li>
@@ -6943,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.113</span>
+        <span class="app-footer-version">バージョン 1.0.114</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7081,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.113";
+  const APP_REV = "1.0.114";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7711,16 +7722,18 @@ const Translate = (() => {
 
 window.Translate = Translate;
 
-// Fetches word enrichment (collocations, examples, etymology, synonyms) from
-// free dictionary APIs: Datamuse for synonyms/collocations and
-// dictionaryapi.dev for definitions, examples, and (when available) origin.
+// Fetches word enrichment (pronunciation, examples, definitions, etymology, synonyms, collocations)
+// from free dictionary APIs. Datamuse for synonyms/collocations.
+//
+// 辞書データ（発音記号・例文・定義・語源）は次の順で取り、応答しなかった源は30分ほど後回しにする。
+// 2026-08-26 から dictionaryapi.dev が長期不調（全応答に約20秒・522）で、発音記号も例文も
+// 「全然出ない」状態になったため、1つの源に依存しない形にした。
+//   1. dictionaryapi.dev（従来。学習者向けに読みやすい発音表記で、語源も返す）
+//   2. freedictionaryapi.com（Wiktionary 由来。発音記号・例文・定義を1回で返す。CC BY-SA 4.0）
+//   3. en.wiktionary.org REST（Wikimedia 運営で最も堅牢。例文・定義は豊富だが発音記号は無い）
+// 発音記号がどの辞書からも取れなければ、Datamuse の IPA（CMU 発音辞書からの機械変換。目安）を最後の予備にする。
 const Enrich = (() => {
   const DM = "https://api.datamuse.com/words";
-  const DICT = "https://api.dictionaryapi.dev/api/v2/entries/en/";
-  const dictCache = {};
-  // 辞書サービスは混雑時に応答が20秒近くかかる。8秒では健全な語まで打ち切られていた。
-  // 語彙サービス（Datamuse）は速いので従来の8秒のまま。
-  const DICT_TIMEOUT_MS = 15000;
 
   // 取れなかった理由を区別する。404（辞書にその語の項目が無い）は確定した結果として null を返し
   // キャッシュする。タイムアウト・5xx/429・通信断・壊れた応答は一時的な失敗として投げる（キャッシュ
@@ -7759,14 +7772,269 @@ const Enrich = (() => {
     }
   }
 
-  async function dict(term) {
+  // ---------- 辞書の源（順番どおりに試す） ----------
+  // 各源の応答を共通の形に直す:
+  //   { pronunciations: string[], meanings: [{ partOfSpeech, definitions: [{ definition, examples: string[] }] }],
+  //     origin: string|null, source: { id, label, url, license } }
+  // 項目が無ければ null。
+  const DICT_SOURCES = [
+    {
+      id: "dictionaryapi",
+      // 予備があるので待ちは短めにする（不調時は1回だけ6秒待ち、以後30分は後回し）
+      timeoutMs: 6000,
+      url: (w) => `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(w)}`,
+      parse: parseDictionaryApi,
+    },
+    {
+      id: "freedictionaryapi",
+      timeoutMs: 8000,
+      url: (w) => `https://freedictionaryapi.com/api/v1/entries/en/${encodeURIComponent(w)}`,
+      parse: parseFreeDictionaryApi,
+    },
+    {
+      id: "wiktionary",
+      timeoutMs: 8000,
+      url: (w) => `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(w)}`,
+      parse: parseWiktionaryRest,
+    },
+  ];
+  const WIKTIONARY = DICT_SOURCES[2];
+
+  function pushText(list, value, limit = 12) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text || list.length >= limit) return;
+    const key = text.replace(/^\/+|\/+$/g, "").trim().toLowerCase();
+    if (list.some((item) => item.replace(/^\/+|\/+$/g, "").trim().toLowerCase() === key)) return;
+    list.push(text);
+  }
+
+  function stripHtml(value) {
+    return String(value || "")
+      .replace(/<[^>]*>/g, "")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function wiktionaryUrl(w) {
+    return `https://en.wiktionary.org/wiki/${encodeURIComponent(w)}`;
+  }
+
+  function parseDictionaryApi(data) {
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const pronunciations = [];
+    const meanings = [];
+    let origin = null;
+    let sourceUrl = null;
+    let license = null;
+    for (const entry of data) {
+      pushText(pronunciations, entry?.phonetic);
+      for (const item of entry?.phonetics || []) pushText(pronunciations, item?.text);
+      if (!origin && typeof entry?.origin === "string" && entry.origin.trim()) origin = entry.origin.trim();
+      if (!sourceUrl && Array.isArray(entry?.sourceUrls) && entry.sourceUrls[0]) sourceUrl = String(entry.sourceUrls[0]);
+      if (!license && entry?.license?.name) license = String(entry.license.name);
+      for (const meaning of entry?.meanings || []) {
+        const definitions = [];
+        for (const def of meaning?.definitions || []) {
+          const definition = String(def?.definition || "").trim();
+          const examples = [];
+          pushText(examples, def?.example);
+          if (definition || examples.length) definitions.push({ definition, examples });
+        }
+        meanings.push({ partOfSpeech: String(meaning?.partOfSpeech || "").toLowerCase(), definitions });
+      }
+    }
+    // dictionaryapi.dev のデータも Wiktionary 由来（応答の sourceUrls / license がそれを示す）
+    return { pronunciations, meanings, origin, source: { id: "dictionaryapi", label: "Wiktionary", url: sourceUrl, license } };
+  }
+
+  function parseFreeDictionaryApi(data, w) {
+    const entries = Array.isArray(data?.entries) ? data.entries : [];
+    if (entries.length === 0) return null;
+    const pronunciations = [];
+    const meanings = [];
+    for (const entry of entries) {
+      for (const item of entry?.pronunciations || []) {
+        if (!item?.type || item.type === "ipa") pushText(pronunciations, item?.text);
+      }
+      const definitions = [];
+      const addSense = (sense) => {
+        if (!sense || typeof sense !== "object") return;
+        const definition = String(sense.definition || "").trim();
+        const examples = [];
+        for (const ex of sense.examples || []) pushText(examples, typeof ex === "string" ? ex : ex?.text);
+        if (definition || examples.length) definitions.push({ definition, examples });
+        for (const sub of sense.subsenses || []) addSense(sub);
+      };
+      for (const sense of entry?.senses || []) addSense(sense);
+      meanings.push({ partOfSpeech: String(entry?.partOfSpeech || "").toLowerCase(), definitions });
+    }
+    return {
+      pronunciations,
+      meanings,
+      origin: null,
+      source: {
+        id: "freedictionaryapi",
+        label: "Wiktionary",
+        url: String(data?.source?.url || "") || wiktionaryUrl(w),
+        license: String(data?.source?.license?.name || "") || "CC BY-SA 4.0",
+      },
+    };
+  }
+
+  function parseWiktionaryRest(data, w) {
+    const parts = Array.isArray(data?.en) ? data.en : [];
+    if (parts.length === 0) return null;
+    const meanings = [];
+    for (const part of parts) {
+      const definitions = [];
+      for (const def of part?.definitions || []) {
+        const definition = stripHtml(def?.definition);
+        const examples = [];
+        for (const ex of def?.parsedExamples || []) pushText(examples, stripHtml(ex?.example));
+        if (examples.length === 0) for (const ex of def?.examples || []) pushText(examples, stripHtml(ex));
+        if (definition || examples.length) definitions.push({ definition, examples });
+      }
+      meanings.push({ partOfSpeech: String(part?.partOfSpeech || "").toLowerCase(), definitions });
+    }
+    return {
+      pronunciations: [],
+      meanings,
+      origin: null,
+      source: { id: "wiktionary", label: "Wiktionary", url: wiktionaryUrl(w), license: "CC BY-SA 4.0" },
+    };
+  }
+
+  // ---------- 応答しなかった源の後回し ----------
+  // 起動をまたいでも効くよう端末に控える（iPhone の file:// 起動など保存領域が無い環境では起動中だけ）。
+  const DEGRADED_KEY = "wordsnap-dict-degraded:v1";
+  const DEGRADED_TTL_MS = 30 * 60 * 1000;
+  const degradedAt = {};
+  (function loadDegraded() {
+    try {
+      const raw = localStorage.getItem(DEGRADED_KEY);
+      const saved = raw ? JSON.parse(raw) : null;
+      if (saved && typeof saved === "object") {
+        for (const [id, at] of Object.entries(saved)) if (Number.isFinite(at)) degradedAt[id] = at;
+      }
+    } catch {
+      // 保存領域が無い・壊れている → 起動中の記憶だけで動く
+    }
+  })();
+  function saveDegraded() {
+    try {
+      localStorage.setItem(DEGRADED_KEY, JSON.stringify(degradedAt));
+    } catch {
+      // ignore
+    }
+  }
+  function isDegraded(id, now = Date.now()) {
+    const at = degradedAt[id];
+    return Number.isFinite(at) && now - at < DEGRADED_TTL_MS;
+  }
+  function markDegraded(id) {
+    degradedAt[id] = Date.now();
+    saveDegraded();
+  }
+  function clearDegraded(id) {
+    if (!(id in degradedAt)) return;
+    delete degradedAt[id];
+    saveDegraded();
+  }
+  function sourceOrder() {
+    const fresh = DICT_SOURCES.filter((source) => !isDegraded(source.id));
+    const tired = DICT_SOURCES.filter((source) => isDegraded(source.id));
+    return [...fresh, ...tired];
+  }
+
+  // ---------- 辞書データの取得 ----------
+  const recordCache = {}; // 確定した結果（項目あり / どの源にも無い）。一時的な失敗は入れない
+  const sourceMiss = new Set(); // `${id}|${w}`: その源に項目が無いことが確定
+
+  async function fetchSource(source, w) {
+    const data = await getJson(source.url(w), source.timeoutMs);
+    return data === null ? null : source.parse(data, w);
+  }
+
+  // 応答しない源は後回し。元気な源がそろって「無い」と答えたら、後回しの源を待たずに未収録とする。
+  async function record(term) {
     const w = clean(term);
-    if (w in dictCache) return dictCache[w];
-    // 一時的な失敗はここで投げるので、確定した結果（項目あり／404）だけがキャッシュに残る
-    const data = await getJson(DICT + encodeURIComponent(w), DICT_TIMEOUT_MS);
-    const result = Array.isArray(data) ? data : null;
-    dictCache[w] = result;
-    return result;
+    if (!w) return null;
+    if (w in recordCache) return recordCache[w];
+    const attempt = async (sources) => {
+      let misses = 0;
+      let transient = null;
+      for (const source of sources) {
+        const missKey = `${source.id}|${w}`;
+        if (sourceMiss.has(missKey)) {
+          misses += 1;
+          continue;
+        }
+        try {
+          const rec = await fetchSource(source, w);
+          clearDegraded(source.id);
+          if (rec) return { rec };
+          sourceMiss.add(missKey);
+          misses += 1;
+        } catch (error) {
+          if (!error?.transient) throw error;
+          markDegraded(source.id);
+          transient = error;
+        }
+      }
+      return { misses, transient };
+    };
+    const fresh = DICT_SOURCES.filter((source) => !isDegraded(source.id));
+    const tired = DICT_SOURCES.filter((source) => isDegraded(source.id));
+    const first = await attempt(fresh);
+    if (first.rec) return (recordCache[w] = first.rec);
+    if (first.misses > 0 && !first.transient) return (recordCache[w] = null);
+    const second = await attempt(tired);
+    if (second.rec) return (recordCache[w] = second.rec);
+    const misses = first.misses + second.misses;
+    const transient = second.transient || first.transient;
+    // 2つ以上の源が「無い」と確定したなら、残りが応答しなくても未収録とみなす
+    if (!transient || misses >= 2) return (recordCache[w] = null);
+    throw transient;
+  }
+
+  function attribution(rec) {
+    if (!rec?.source) return null;
+    return { label: rec.source.label, url: rec.source.url || null, license: rec.source.license || null };
+  }
+
+  function collectExamples(rec) {
+    const list = [];
+    for (const meaning of rec?.meanings || []) {
+      for (const def of meaning.definitions || []) for (const ex of def.examples || []) pushText(list, ex, 30);
+    }
+    return list;
+  }
+
+  function collectDefinitions(rec, limit = 3) {
+    const list = [];
+    for (const meaning of rec?.meanings || []) {
+      for (const def of meaning.definitions || []) {
+        if (def.definition && list.length < limit) list.push({ pos: meaning.partOfSpeech || "", def: def.definition });
+      }
+    }
+    return list;
+  }
+
+  // ---------- Datamuse ----------
+  async function datamuseIpa(term) {
+    const w = clean(term);
+    const data = await getJson(`${DM}?sp=${encodeURIComponent(w)}&md=r&ipa=1&max=1`);
+    const hit = Array.isArray(data) ? data[0] : null;
+    if (!hit || clean(hit.word) !== w) return null;
+    const tag = (hit.tags || []).find((item) => String(item).startsWith("ipa_pron:"));
+    const ipa = tag ? String(tag).slice("ipa_pron:".length).trim() : "";
+    return ipa ? `/${ipa}/` : null;
   }
 
   async function synonyms(term, posTag = null) {
@@ -7810,38 +8078,48 @@ const Enrich = (() => {
     };
   }
 
+  // ---------- 種類ごとの取得 ----------
   async function pronunciation(term) {
-    const data = await dict(term);
-    const seen = new Set();
-    const texts = [];
-    const add = (value) => {
-      const text = String(value || "").replace(/\s+/g, " ").trim();
-      const key = text.replace(/^\/+|\/+$/g, "").trim().toLowerCase();
-      if (!key || seen.has(key) || texts.length >= 3) return;
-      seen.add(key);
-      texts.push(text);
-    };
-    for (const entry of data || []) {
-      add(entry?.phonetic);
-      for (const item of entry?.phonetics || []) add(item?.text);
+    let rec = null;
+    let failure = null;
+    try {
+      rec = await record(term);
+    } catch (error) {
+      if (!error?.transient) throw error;
+      failure = error; // 辞書が全部応答しないときも、Datamuse の IPA なら出せるかもしれない
     }
-    return { texts };
+    const texts = (rec?.pronunciations || []).slice(0, 3);
+    if (texts.length) return { texts, source: attribution(rec) };
+    // 発音記号がどの辞書からも取れない（Wiktionary REST は返さない・辞書が応答しない）ときは
+    // Datamuse の IPA を目安として出す。表記が学習者向け辞書と違うので、その旨を添える。
+    const ipa = await datamuseIpa(term);
+    if (ipa) {
+      return {
+        texts: [ipa],
+        approx: true,
+        source: { label: "Datamuse（CMU発音辞書からの機械変換）", url: null, license: null },
+      };
+    }
+    if (failure) throw failure;
+    return { texts: [] };
   }
 
   async function examples(term) {
-    const data = await dict(term);
-    const exampleList = [];
-    const definitions = [];
-    if (data) {
-      for (const entry of data) {
-        for (const meaning of entry.meanings || []) {
-          for (const def of meaning.definitions || []) {
-            if (def.example) exampleList.push(def.example);
-            if (def.definition && definitions.length < 3) {
-              definitions.push({ pos: meaning.partOfSpeech || "", def: def.definition });
-            }
-          }
+    let rec = await record(term);
+    let exampleList = collectExamples(rec);
+    let definitions = collectDefinitions(rec);
+    // 最初に当たった辞書に例文が無ければ、例文の多い Wiktionary で補う（補えなければそのまま）
+    if (rec && exampleList.length === 0 && rec.source?.id !== "wiktionary") {
+      try {
+        const alt = await fetchSource(WIKTIONARY, clean(term));
+        const more = collectExamples(alt);
+        if (more.length) {
+          exampleList = more;
+          if (definitions.length === 0) definitions = collectDefinitions(alt);
+          rec = { ...rec, source: alt.source };
         }
+      } catch {
+        // 補えないだけ。取れた分で出す
       }
     }
     const slicedExamples = exampleList.slice(0, 5);
@@ -7850,27 +8128,19 @@ const Enrich = (() => {
     const exampleJa = slicedExamples.length
       ? await window.Translate.translateBatch(slicedExamples)
       : [];
-    const examples = slicedExamples.map((en, i) => ({ en, ja: exampleJa[i] || null }));
+    const examplesWithJa = slicedExamples.map((en, i) => ({ en, ja: exampleJa[i] || null }));
 
     const defJa = definitions.length
       ? await window.Translate.translateBatch(definitions.map((d) => d.def))
       : [];
     const definitionsWithJa = definitions.map((d, i) => ({ ...d, ja: defJa[i] || null }));
 
-    return { examples, definitions: definitionsWithJa };
+    return { examples: examplesWithJa, definitions: definitionsWithJa, source: attribution(rec) };
   }
 
   async function etymology(term) {
-    const data = await dict(term);
-    let text = null;
-    if (data) {
-      for (const entry of data) {
-        if (entry.origin && entry.origin.trim()) {
-          text = entry.origin.trim();
-          break;
-        }
-      }
-    }
+    const rec = await record(term);
+    const text = rec?.origin || null;
     const ja = text ? await window.Translate.translateOne(text) : null;
     return { text, ja };
   }
@@ -7913,7 +8183,12 @@ const Enrich = (() => {
     }
   }
 
-  return { fetch: fetchType, isEmpty };
+  return {
+    fetch: fetchType,
+    isEmpty,
+    record,
+    sourceOrder: () => sourceOrder().map((source) => source.id),
+  };
 })();
 
 window.Enrich = Enrich;
@@ -29266,65 +29541,49 @@ async function fetchContextFromDictionary(word) {
   const term = String(word?.term || "").trim();
   const re = termWordRegex(term, "i");
   if (!term || !re) return null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CONTEXT_GEN_TIMEOUT_MS);
-  try {
-    const res = await fetch(
-      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`,
-      { signal: controller.signal },
-    );
-    // 404 は「その語の項目が無い」＝作り直しても結果は変わらない。
-    // 429（レート制限）・5xx は時間をおけば直る失敗なので、恒久的な「例文なし」として
-    // 焼き付けず、あとで取り直せるよう印を付けて投げる。通信断・タイムアウトも同じ扱い
-    // （fetch 自体が例外を投げるため、呼び出し側が transient として拾う）。
-    if (!res.ok) {
-      if (res.status === 404) return null;
-      throw Object.assign(new Error(`dictionary ${res.status}`), { transient: true });
-    }
-    const data = await res.json();
-    // 多義語で語義違いの例文を出さないよう、登録済みの品詞に一致する定義の例文を優先する。
-    // （品詞が分からない語は従来どおり全定義から選ぶ。辞書だけで語義までは特定できない）
-    const posMap = { n: "noun", v: "verb", adj: "adjective", adv: "adverb" };
-    const wantPos = posMap[word?.pos?.tag] || null;
-    // 辞書の応答には品詞が入っている。例文を取りに来たついでに拾えば、
-    // 品詞を別途Datamuseへ問い合わせずに済み、その語の出題根拠が早く揃う。
-    if (!word?.pos) {
-      const firstPos = String(
-        (Array.isArray(data) ? data : [])[0]?.meanings?.[0]?.partOfSpeech || "",
-      ).toLowerCase();
-      const tag = { noun: "n", verb: "v", adjective: "adj", adverb: "adv" }[firstPos] || null;
-      const live = appState.words.find((item) => item.id === word?.id);
-      if (tag && live) live.pos = { tag };
-    }
-    const matched = [];
-    const others = [];
-    for (const entry of Array.isArray(data) ? data : []) {
-      for (const meaning of entry?.meanings || []) {
-        const partOfSpeech = String(meaning?.partOfSpeech || "").toLowerCase();
-        for (const def of meaning?.definitions || []) {
-          const ex = String(def?.example || "").trim();
-          if (!ex || !re.test(ex)) continue;
-          if (wantPos && partOfSpeech === wantPos) matched.push(ex);
-          else others.push(ex);
-        }
+  // 辞書データは「詳しく」と同じ取得経路（dictionaryapi.dev → 予備の Wiktionary 系。応答しない源は
+  // 後回し）を共用する。どの源にも項目が無ければ null（作り直しても結果は変わらない）。応答しなければ
+  // transient 付きの例外が投げられ、呼び出し側が15分後の取り直しにつなぐ（恒久的な「例文なし」にしない）。
+  const rec = await window.Enrich.record(term);
+  if (!rec) return null;
+  // 多義語で語義違いの例文を出さないよう、登録済みの品詞に一致する定義の例文を優先する。
+  // （品詞が分からない語は従来どおり全定義から選ぶ。辞書だけで語義までは特定できない）
+  const posMap = { n: "noun", v: "verb", adj: "adjective", adv: "adverb" };
+  const wantPos = posMap[word?.pos?.tag] || null;
+  // 辞書の応答には品詞が入っている。例文を取りに来たついでに拾えば、
+  // 品詞を別途Datamuseへ問い合わせずに済み、その語の出題根拠が早く揃う。
+  if (!word?.pos) {
+    const firstPos = String(rec.meanings?.[0]?.partOfSpeech || "").toLowerCase();
+    const tag = { noun: "n", verb: "v", adjective: "adj", adverb: "adv" }[firstPos] || null;
+    const live = appState.words.find((item) => item.id === word?.id);
+    if (tag && live) live.pos = { tag };
+  }
+  const matched = [];
+  const others = [];
+  for (const meaning of rec.meanings || []) {
+    const partOfSpeech = String(meaning?.partOfSpeech || "").toLowerCase();
+    for (const def of meaning?.definitions || []) {
+      for (const raw of def?.examples || []) {
+        const ex = String(raw || "").trim();
+        if (!ex || !re.test(ex)) continue;
+        if (wantPos && partOfSpeech === wantPos) matched.push(ex);
+        else others.push(ex);
       }
     }
-    // 品詞が一致する定義の例文を優先する。一致が無い場合は、ユーザー自身が保存した例文が
-    // あればそちらを使いたい（語義が合っている可能性が高い）ので、ここでは諦めて null を返す。
-    // 保存例文も無ければ呼び出し側が改めて品詞不一致の例文を使う（出題機会は落とさない）。
-    if (matched.length) {
-      return { en: pickExample(matched), distractors: [], src: "dict" };
-    }
-    if (!others.length) return null;
-    return {
-      en: pickExample(others),
-      distractors: [],
-      src: "dict",
-      posMismatch: true, // 登録品詞と違う定義の例文＝優先度が低いことを示す
-    };
-  } finally {
-    clearTimeout(timer);
   }
+  // 品詞が一致する定義の例文を優先する。一致が無い場合は、ユーザー自身が保存した例文が
+  // あればそちらを使いたい（語義が合っている可能性が高い）ので、ここでは諦めて null を返す。
+  // 保存例文も無ければ呼び出し側が改めて品詞不一致の例文を使う（出題機会は落とさない）。
+  if (matched.length) {
+    return { en: pickExample(matched), distractors: [], src: "dict" };
+  }
+  if (!others.length) return null;
+  return {
+    en: pickExample(others),
+    distractors: [],
+    src: "dict",
+    posMismatch: true, // 登録品詞と違う定義の例文＝優先度が低いことを示す
+  };
 }
 
 // 1語分の例文＋誤答を用意する。auto: AI→辞書→保存済み / dict: 辞書→保存済み / off: 保存済みのみ。
@@ -29768,12 +30027,12 @@ function renderContextGenSettings() {
       "例文は作りません。詳細画面ですでに取得した例文がある単語だけを空所補充で出題します。通信は発生しません。";
   } else if (mode === "dict") {
     hint.textContent =
-      "辞書API（dictionaryapi.dev）にある実際の例文を使い、その語を空所にします。誤答は同じ語の別の品詞（datamuse.com）を優先し、足りなければ登録済みの単語から選びます。APIキーは不要です。例文が見つからない語は通常の単語出題になります。";
+      "辞書API（dictionaryapi.dev。応答しないときは Wiktionary 系の予備）にある実際の例文を使い、その語を空所にします。誤答は同じ語の別の品詞（datamuse.com）を優先し、足りなければ登録済みの単語から選びます。APIキーは不要です。例文が見つからない語は通常の単語出題になります。";
   } else if (provider) {
     hint.textContent =
       `AI（${provider.name}）が例文と誤答をまとめて作り、誤答が正解になっていないかをAI自身に確認させます。` +
       `${cachePersistenceNote} ` +
-      "AIが使えないときは辞書API（dictionaryapi.dev）に切り替わります。無料枠の1分あたりの上限に当たった語は、その回だけ辞書の例文で出題し、あとで作り直します。";
+      "AIが使えないときは辞書API（dictionaryapi.dev。応答しないときは Wiktionary 系の予備）に切り替わります。無料枠の1分あたりの上限に当たった語は、その回だけ辞書の例文で出題し、あとで作り直します。";
   } else {
     hint.textContent =
       // 外部AI設定はこの案内と同じ設定タブ内（すぐ下のセクション）にある。
@@ -29812,7 +30071,7 @@ function startContextQuiz() {
           ? "AIキーを設定すると例文と選択肢の品質が上がります（未設定のままでも辞書で利用できます）。"
           : "";
       setStatus(
-        `例文モード（空所補充）は、出題する単語とその意味を外部サービス（辞書API dictionaryapi.dev / 語彙API datamuse.com、AIキー設定時はGeminiまたはGroq）へ送って例文と選択肢を作ります。AI利用時は、1回の応答内で4択を自己検証します。${keyGuide ? `${keyGuide} ` : ""}よければもう一度押してください。設定の「例文モード（空所補充）の例文・誤答の作り方」で「作らない」にすれば送信しません。`,
+        `例文モード（空所補充）は、出題する単語とその意味を外部サービス（辞書API dictionaryapi.dev と予備の freedictionaryapi.com・en.wiktionary.org / 語彙API datamuse.com、AIキー設定時はGeminiまたはGroq）へ送って例文と選択肢を作ります。AI利用時は、1回の応答内で4択を自己検証します。${keyGuide ? `${keyGuide} ` : ""}よければもう一度押してください。設定の「例文モード（空所補充）の例文・誤答の作り方」で「作らない」にすれば送信しません。`,
       );
       return;
     }
@@ -32936,6 +33195,27 @@ function enrichEmpty(message) {
   return `<p class="enrich-empty">${escapeHtml(message)}</p>`;
 }
 
+// 出典の1行。Wiktionary 由来の内容（CC BY-SA）は出典表示が必要なので、発音記号・例文の下に付ける。
+function enrichSourceLine(source) {
+  if (!source || !source.label) return "";
+  const label = escapeHtml(source.label);
+  const link = source.url
+    ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">${label} ↗</a>`
+    : label;
+  const license = source.license ? `（${escapeHtml(source.license)}）` : "";
+  return `<p class="enrich-source">出典: ${link}${license}</p>`;
+}
+
+// 保存した出典情報を安全な形に直す（旧キャッシュには無いので undefined のまま）
+function normalizeEnrichSource(source) {
+  if (!source || typeof source !== "object" || !source.label) return undefined;
+  return {
+    label: String(source.label),
+    url: source.url ? String(source.url) : null,
+    license: source.license ? String(source.license) : null,
+  };
+}
+
 // dictionaryapi.dev由来の品詞表記(英語)を日本語に変換する。
 const DICT_POS_JA = {
   noun: "名詞",
@@ -33058,7 +33338,7 @@ function normalizeExamplesData(data) {
         ja: item?.ja,
       }))
     : [];
-  return { examples, definitions };
+  return { examples, definitions, source: normalizeEnrichSource(data.source) };
 }
 
 // 語源データを新形式に正規化する。旧キャッシュ（ja無し）にも対応。
@@ -33108,9 +33388,13 @@ function enrichBody(type, data, term) {
       })
       .slice(0, 3);
     if (!texts.length) return enrichEmpty("発音記号が見つかりませんでした。");
+    // 辞書に発音記号が無く Datamuse の IPA で代えたときは、表記が違うことを添える
+    const note = data?.approx
+      ? `<p class="enrich-caption">辞書に発音記号が無いため、CMU発音辞書からの機械変換を目安として出しています。記号や強勢の位置が学習者向け辞書と違うことがあります。</p>`
+      : "";
     return `<div class="enrich-links">${texts
       .map((text) => `<span class="enrich-link">${escapeHtml(text)}</span>`)
-      .join("")}</div>`;
+      .join("")}</div>${note}${enrichSourceLine(data?.source)}`;
   }
 
   if (type === "etymology") {
@@ -33161,6 +33445,7 @@ function enrichBody(type, data, term) {
         )
         .join("")}</div>`;
     }
+    if (html) html += enrichSourceLine(norm.source); // 出典は中身があるときだけ（空のときは下の案内）
     return html || enrichEmpty("例文が見つかりませんでした。");
   }
 
@@ -33202,7 +33487,7 @@ function enrichBody(type, data, term) {
 // 辞書サービスの不調（応答なし・5xx）は利用者の通信状態とは無関係なので、「通信状態を確認」とは言わない。
 function enrichFailureMessage(type, error, label) {
   const source =
-    type === "synonyms" || type === "collocations" ? "語彙サービス（datamuse.com）" : "辞書サービス（dictionaryapi.dev）";
+    type === "synonyms" || type === "collocations" ? "語彙サービス（datamuse.com）" : "辞書サービス（dictionaryapi.dev と予備の Wiktionary 系）";
   if (error?.reason === "timeout" || error?.reason === "server") {
     return `${source}が応答しませんでした（混雑か障害の可能性があります）。この語が無いわけではありません。しばらくしてから「${label}」をもう一度押してください。`;
   }
