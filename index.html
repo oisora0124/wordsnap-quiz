@@ -2808,6 +2808,11 @@ textarea:focus-visible {
   align-items: center;
 }
 
+/* .sync-legacy-tools内では直後に説明文とdetailsが続くため、詰まって見えないよう空ける。 */
+.sync-legacy-tools .sync-controls {
+  margin-bottom: 10px;
+}
+
 .sync-field {
   display: inline-grid;
   gap: 0.25rem;
@@ -6828,7 +6833,7 @@ accurate 正確な"
               <!-- 要点を先に2行で示し、長い説明は「詳しい説明」に畳む（文言整理のみ・機能は不変） -->
               <p id="syncTitle" data-sync-identity-ui="legacy">
                 <strong>単語と成績は自動でサーバー保存されます。</strong><br />
-                別の端末では「個人リンク」を開くと引き継げます。
+                別の端末へは「引き継ぎコード」で引き継ぐのがおすすめです（移行後も個人リンクはそのまま使えます）。
               </p>
               <p id="syncNativeTitle" data-sync-identity-ui="v2-native" hidden>
                 <strong>単語と成績は自動でサーバー保存されます。</strong><br />
@@ -6839,7 +6844,7 @@ accurate 正確な"
                 <p>追加した単語とクイズの記録は、<strong>自動でサーバーにも保存</strong>されます。あなた専用のキーで保管されるので、他の人のデータと混ざりません。新しい個人キーはブラウザの安全な乱数機能で自動発行されます。</p>
                 <ol class="sync-steps">
                   <li><strong>ホーム画面に追加して使う</strong>：このページを「ホーム画面に追加」するとワンタップで起動でき、通常のブラウザ利用より端末内データが消えにくくなります。ただし、サイトデータ消去や機種変更後の復元には個人リンクまたはJSONバックアップが必要です。個人リンクは公開せず、自分だけが開ける安全な場所へ保管してください。</li>
-                  <li><strong>別の端末で続ける</strong>：「個人リンクをコピー」して別の端末で開くと、同じデータを引き継げます（このリンクは自分だけの秘密にしてください）。リンクを開けないときは、下の「<strong>別の端末と同じキーで同期</strong>」にリンクやキーを貼り付けても同じことができます。</li>
+                  <li><strong>別の端末で続ける</strong>：引き継ぎコード（下の「新方式へ移行」で発行）を使うのがおすすめです。従来の個人リンクでも引き継げます。</li>
                 </ol>
               </details>
               <details class="sync-detail-more" data-sync-identity-ui="v2-native" hidden>
@@ -6850,50 +6855,29 @@ accurate 正確な"
                   <li><strong>別の端末で続ける</strong>：別端末の「別の端末で引き継ぎコードを使う」へコードを貼り付けると、同じデータに合流できます。コードは自分だけの秘密にしてください。</li>
                 </ol>
               </details>
-              <div class="sync-controls" data-sync-identity-ui="legacy">
-                <label class="sync-field">
-                  あなたの個人キー
-                  <span class="sync-key-row">
-                    <input id="syncIdInput" type="password" inputmode="latin" autocomplete="off" maxlength="64" pattern="[A-Za-z0-9_-]{1,64}" placeholder="安全な個人キーを自動発行" readonly />
-                    <button id="syncKeyToggleButton" class="ghost mini" type="button" aria-pressed="false">表示</button>
-                  </span>
-                </label>
-                <button id="syncCopyLinkButton" class="secondary danger" type="button" title="このページのリンク（個人キー入り）をクリップボードにコピーします。別の端末で開くと同じデータになります。自分以外には渡さないでください。">個人リンクをコピー</button>
-                <button id="syncPullButton" class="secondary" type="button" title="サーバーから最新のデータを取得して、この端末に反映します。">今すぐ読み込む</button>
-                <button id="syncNewKeyButton" class="ghost" type="button" title="新しい個人キーを発行し、今のデータをそのまま引き継ぎます。">新しい個人キーを発行</button>
-              </div>
               <p id="syncKeySecurityWarning" class="sync-status is-error" role="alert" hidden>
-                この個人キーは旧形式です。同期はそのまま使えますが、短いキーは推測されやすいため、JSONバックアップ後に「新しい個人キーを発行」で安全な形式へ移すことを推奨します。
-              </p>
-              <p class="settings-desc" data-sync-identity-ui="legacy">
-                <strong>個人リンクをコピー</strong>＝このページのリンクをコピー（別端末で開くと同じデータに）。
-                <strong>今すぐ読み込む</strong>＝サーバーの最新をこの端末に取り込み。どちらも現在の単語は消えません。
-              </p>
-              <p class="settings-desc" data-sync-identity-ui="legacy">
-                <strong>新しい個人キーを発行</strong>＝キーが他人に知られたときに使います。
-                今の単語と成績はそのまま新しいキーへ引き継がれ、消えません。ただし
-                <strong>古いリンクを知っている人は、切り替え時点までのデータを引き続き見られます</strong>
-                （サーバー上の古い保存分は残るため）。<strong>他の端末は古いキーのまま</strong>なので、
-                新しい個人リンクを開き直してください。
+                この個人キーは旧形式です。同期はそのまま使えますが、短いキーは推測されやすいため、JSONバックアップ後に、下の「旧方式（個人キー・個人リンク）の操作」にある「新しい個人キーを発行」で安全な形式へ移すことを推奨します。
               </p>
               <p id="syncStatus" class="sync-status" role="status">サーバー保存の状態をここに表示します。</p>
-              <details id="syncV2Section" class="sync-fix">
-                <summary>新方式（V2）の同期と引き継ぎ</summary>
+              <details id="syncV2Section" class="sync-fix" open>
+                <summary>🔑 引き継ぎコード（おすすめの引き継ぎ方法）</summary>
                 <div class="sync-fix-body sync-v2-panel">
-                  <h3 data-sync-identity-ui="legacy">秘密をURLに載せない新しい同期方式</h3>
-                  <p data-sync-identity-ui="legacy">
-                    現在の個人キーのデータを新方式へ移行するか、新しい保存先を新方式で発行できます。
-                    既定の同期方式はこれまでどおりです。
+                  <h3 data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">秘密をURLに載せない新しい同期方式</h3>
+                  <p data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
+                    今の個人キーのデータをそのまま引き継ぎコード方式へ移行できます（移行後も個人リンクはそのまま使えます）。
                   </p>
-                  <p data-sync-identity-ui="legacy">
+                  <p data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
+                    別の保存先を新しく作る場合は「新方式（V2）で発行」。発行するとこの端末は新しい保存先へ切り替わり、個人リンクへの保存は止まります。
+                  </p>
+                  <p data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
                     「新方式へ移行」は引き継ぎ方法を追加する操作で、漏れた個人キーを無効化するものではありません。
-                    個人キーを知られた可能性がある場合は、上の「新しい個人キーを発行」を使ってください。
+                    個人キーを知られた可能性がある場合は、下の「旧方式（個人キー・個人リンク）の操作」にある「新しい個人キーを発行」を使ってください。
                   </p>
-                  <div class="sync-v2-actions" data-sync-identity-ui="legacy">
+                  <div class="sync-v2-actions" data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
                     <button id="syncV2UpgradeButton" class="secondary" type="button">新方式へ移行</button>
                     <button id="syncV2CreateButton" class="ghost" type="button">新方式（V2）で発行</button>
                   </div>
-                  <div data-sync-identity-ui="v2-native" hidden>
+                  <div data-sync-v2-state="migrated" hidden>
                     <h3>引き継ぎコードで他の端末と合流</h3>
                     <p>この端末は、秘密をURLに載せないV2方式で同期しています。下のコードを安全に保管し、別の端末で同じデータへ合流するときに使ってください。</p>
                   </div>
@@ -6948,6 +6932,64 @@ accurate 正確な"
                   </button>
                 </div>
               </details>
+              <details class="sync-fix sync-legacy-tools" data-sync-identity-ui="legacy">
+                <summary>旧方式（個人キー・個人リンク）の操作</summary>
+                <div class="sync-fix-body">
+                  <p class="settings-desc">以前からの引き継ぎ方法です。個人リンクにはあなたの個人キーが含まれるため、共有には使わないでください。</p>
+                  <div class="sync-controls" data-sync-identity-ui="legacy">
+                    <label class="sync-field">
+                      あなたの個人キー
+                      <span class="sync-key-row">
+                        <input id="syncIdInput" type="password" inputmode="latin" autocomplete="off" maxlength="64" pattern="[A-Za-z0-9_-]{1,64}" placeholder="安全な個人キーを自動発行" readonly />
+                        <button id="syncKeyToggleButton" class="ghost mini" type="button" aria-pressed="false">表示</button>
+                      </span>
+                    </label>
+                    <button id="syncCopyLinkButton" class="secondary danger" type="button" title="このページのリンク（個人キー入り）をクリップボードにコピーします。別の端末で開くと同じデータになります。自分以外には渡さないでください。">個人リンクをコピー</button>
+                    <button id="syncPullButton" class="secondary" type="button" title="サーバーから最新のデータを取得して、この端末に反映します。">今すぐ読み込む</button>
+                    <button id="syncNewKeyButton" class="ghost" type="button" title="新しい個人キーを発行し、今のデータをそのまま引き継ぎます。">新しい個人キーを発行</button>
+                  </div>
+                  <p class="settings-desc" data-sync-identity-ui="legacy">
+                    <strong>個人リンクをコピー</strong>＝このページのリンクをコピー（別端末で開くと同じデータに）。
+                    <strong>今すぐ読み込む</strong>＝サーバーの最新をこの端末に取り込み。どちらも現在の単語は消えません。
+                  </p>
+                  <p class="settings-desc" data-sync-identity-ui="legacy">
+                    <strong>新しい個人キーを発行</strong>＝キーが他人に知られたときに使います。
+                    今の単語と成績はそのまま新しいキーへ引き継がれ、消えません。ただし
+                    <strong>古いリンクを知っている人は、切り替え時点までのデータを引き続き見られます</strong>
+                    （サーバー上の古い保存分は残るため）。<strong>他の端末は古いキーのまま</strong>なので、
+                    新しい個人リンクを開き直してください。
+                  </p>
+                  <details class="sync-fix" data-sync-identity-ui="legacy">
+                    <summary>別の端末と同じキーで同期（キーを貼り付け）</summary>
+                    <div class="sync-fix-body">
+                      <p>
+                        別の端末の「<strong>個人リンクをコピー</strong>」で得たリンク（または個人キー）を貼り付けると、
+                        この端末をその端末と同じデータに揃えられます。
+                      </p>
+                      <div class="sync-fix-actions sync-join-row">
+                        <input
+                          id="syncJoinInput"
+                          type="text"
+                          inputmode="latin"
+                          autocomplete="off"
+                          autocapitalize="off"
+                          spellcheck="false"
+                          placeholder="個人キー または 個人リンクを貼り付け"
+                          aria-label="別の端末の個人キーまたは個人リンク"
+                        />
+                        <button id="syncJoinButton" class="secondary danger" type="button">このキーに接続</button>
+                      </div>
+                      <p class="sync-fix-hint">
+                        接続すると、表示は貼り付けたキーのデータに切り替わります（この端末の単語が勝手に送信されることはありません）。
+                        切り替え後に、この端末にあった単語を合流させるか選べます。
+                      </p>
+                    </div>
+                  </details>
+                  <!-- 上の#syncStatusは折りたたみの外にあり、スマホ幅ではこの中の操作結果が見えないことがある。
+                       同じ文・同じクラスをここにも複製する（読み上げの二重化を避けるためaria-hidden）。 -->
+                  <p id="syncStatusLegacyMirror" class="sync-status" aria-hidden="true"></p>
+                </div>
+              </details>
               <div class="share-tool">
                 <button id="shareToolButton" type="button">🤝 このツールを他の人に共有</button>
                 <p class="share-url-warning" data-sync-identity-ui="legacy">
@@ -6961,32 +7003,6 @@ accurate 正確な"
                   引き継ぎコードを含まない共有用リンクをコピー／共有します。相手は<strong>空の状態</strong>から始まり、あなたの単語データは渡りません。
                 </p>
               </div>
-              <details class="sync-fix" data-sync-identity-ui="legacy">
-                <summary>別の端末と同じキーで同期（キーを貼り付け）</summary>
-                <div class="sync-fix-body">
-                  <p>
-                    別の端末の「<strong>個人リンクをコピー</strong>」で得たリンク（または個人キー）を貼り付けると、
-                    この端末をその端末と同じデータに揃えられます。
-                  </p>
-                  <div class="sync-fix-actions sync-join-row">
-                    <input
-                      id="syncJoinInput"
-                      type="text"
-                      inputmode="latin"
-                      autocomplete="off"
-                      autocapitalize="off"
-                      spellcheck="false"
-                      placeholder="個人キー または 個人リンクを貼り付け"
-                      aria-label="別の端末の個人キーまたは個人リンク"
-                    />
-                    <button id="syncJoinButton" class="secondary danger" type="button">このキーに接続</button>
-                  </div>
-                  <p class="sync-fix-hint">
-                    接続すると、表示は貼り付けたキーのデータに切り替わります（この端末の単語が勝手に送信されることはありません）。
-                    切り替え後に、この端末にあった単語を合流させるか選べます。
-                  </p>
-                </div>
-              </details>
               <details class="sync-fix">
                 <summary>端末ごとに単語が違うとき（手動で揃える）</summary>
                 <div class="sync-fix-body">
@@ -7099,7 +7115,7 @@ accurate 正確な"
                 <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲選択し、選んだ単語をまとめて出題・削除できます。</li>
                 <li><strong>設定</strong>：「JSONバックアップ」から単語・成績・単語帳を書き出せます。</li>
                 <li data-sync-identity-ui="legacy"><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
-                <li data-sync-identity-ui="v2-native" hidden><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末では、設定の「新方式（V2）の同期と引き継ぎ」にある引き継ぎコードで合流します。</li>
+                <li data-sync-identity-ui="v2-native" hidden><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末では、設定の「🔑 引き継ぎコード（おすすめの引き継ぎ方法）」にある引き継ぎコードで合流します。</li>
               </ol>
               <p class="usage-tip">💡 Safariで開いて「ホーム画面に追加」しておくと、データが消えにくく、ワンタップで起動できます。</p>
               <div class="settings-row">
@@ -7154,7 +7170,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.131</span>
+        <span class="app-footer-version">バージョン 1.0.132</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7292,7 +7308,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.131";
+  const APP_REV = "1.0.132";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -18043,6 +18059,7 @@ const elements = {
   syncBadge: document.querySelector("#syncBadge"),
   syncBadgeText: document.querySelector("#syncBadge .sync-badge-text"),
   syncStatus: document.querySelector("#syncStatus"),
+  syncStatusLegacyMirror: document.querySelector("#syncStatusLegacyMirror"),
   syncV2Section: document.querySelector("#syncV2Section"),
   syncV2RecoveryNotice: document.querySelector("#syncV2RecoveryNotice"),
   syncV2VaultNotice: document.querySelector("#syncV2VaultNotice"),
@@ -20974,6 +20991,13 @@ function setSyncStatus(message, mode = "") {
     elements.syncStatus.classList.toggle("is-live", mode === "live");
     elements.syncStatus.classList.toggle("is-error", mode === "error");
   }
+  // 旧方式の操作（今すぐ読み込む・新しい個人キーを発行・このキーに接続）はdetailsの中にあり、
+  // その結果は上の#syncStatusにしか出ない。details内の操作直後にスクロール位置が動かない
+  // スマホ幅では見えないため、同じ文とクラスを本文末尾にも複製する（読み上げの二重化は
+  // aria-hiddenで避ける。ミラー要素が無い環境＝テスト砂場でも落ちないようoptional chaining）。
+  elements.syncStatusLegacyMirror?.classList.toggle("is-live", mode === "live");
+  elements.syncStatusLegacyMirror?.classList.toggle("is-error", mode === "error");
+  if (elements.syncStatusLegacyMirror) elements.syncStatusLegacyMirror.textContent = message;
   updateSyncBadge();
 }
 
@@ -21202,6 +21226,17 @@ function renderV2CredentialUi() {
   }
   if (elements.syncV2UpgradeButton) elements.syncV2UpgradeButton.disabled = syncState.v2Busy || Boolean(active);
   if (elements.syncV2CreateButton) elements.syncV2CreateButton.disabled = syncState.v2Busy || Boolean(active);
+  // 移行済み利用者（V2資格情報あり＋legacyIdあり）はisV2Nativeが偽のまま（legacy扱い）だが、
+  // 「これから移行できます」の見出し・勧誘文・ボタンはもう出す意味が無い。isV2Native単独では
+  // この状態を区別できないため、Boolean(active)で個別に出し分ける
+  // （isV2Nativeが真のときは必ずactiveも真なので、下のapplySyncIdentityUiのlegacy一括切替と
+  // 矛盾しない。移行済み側の「引き継ぎコードで他の端末と合流」は逆にactiveがあるときだけ出す）。
+  document.querySelectorAll('[data-sync-v2-state="unmigrated"]').forEach((element) => {
+    element.hidden = Boolean(active);
+  });
+  document.querySelectorAll('[data-sync-v2-state="migrated"]').forEach((element) => {
+    element.hidden = !active;
+  });
   renderV2RecoveryNotice();
 }
 
@@ -21209,10 +21244,13 @@ function applySyncIdentityUi(identity = syncRequestRoute()) {
   // 新規ユーザーの自動発行はここより前に終わっている。発行できた場合だけトグルが増える。
   refreshAiKeySyncToggleVisibility();
   const isV2Native = Boolean(identity?.isV2Native);
-  document.querySelectorAll('[data-sync-identity-ui="legacy"]').forEach((element) => {
+  // data-sync-v2-state付きの要素はrenderV2CredentialUi()がactiveの有無で出し分けるため、
+  // ここでのlegacy/v2-native一括切替からは除く（移行済み利用者はlegacy扱いのままだが、
+  // 「これから移行できます」の勧誘は出したくない＝ここで一律にhidden=falseへ戻されると困る）。
+  document.querySelectorAll('[data-sync-identity-ui="legacy"]:not([data-sync-v2-state])').forEach((element) => {
     element.hidden = isV2Native;
   });
-  document.querySelectorAll('[data-sync-identity-ui="v2-native"]').forEach((element) => {
+  document.querySelectorAll('[data-sync-identity-ui="v2-native"]:not([data-sync-v2-state])').forEach((element) => {
     element.hidden = !isV2Native;
   });
   const syncBody = document.querySelector("#syncSettingsBody");
@@ -21576,7 +21614,17 @@ function initV2SyncUi() {
     setV2Status("前回の操作を再試行できます。「新方式へ移行」または「新方式（V2）で発行」を押してください。");
   }
   elements.syncV2UpgradeButton?.addEventListener("click", () => upgradeToV2());
-  elements.syncV2CreateButton?.addEventListener("click", () => createV2Room());
+  // 発行すると以後この端末は個人リンクへ保存しなくなる（新しい保存先への切り替え）ため、
+  // 新しい個人キーの発行（syncNewKeyButton）と同じ2段階確認にする。
+  elements.syncV2CreateButton?.addEventListener("click", () => {
+    if (!armDangerButton(elements.syncV2CreateButton, "もう一度押すと発行")) {
+      setV2Status(
+        "今のデータを新しい保存先へ複製し、以後この端末は個人リンクへは保存しません。よければもう一度押してください（4秒で取り消し）。",
+      );
+      return;
+    }
+    createV2Room();
+  });
   elements.syncV2JoinButton?.addEventListener("click", () => joinV2Room());
   elements.syncV2JoinInput?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
