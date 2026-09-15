@@ -152,7 +152,7 @@ assert.match(distribution, /公開版では自動発行される個人キーに�
   "distribution guide must disclose automatic server sync");
 assert.doesNotMatch(distribution, /同期を使わなければ、データはその端末から出ません/,
   "distribution guide still claims that public data stays only on the device");
-for (const model of ["gemini-3.6-flash", "qwen/qwen3.6-27b"]) {
+for (const model of ["gemini-3.8-flash", "gemini-2.5-flash", "qwen/qwen3.8-27b", "qwen/qwen3.6-27b"]) {
   assert.ok(publicHtml.includes(model), `app model configuration is missing ${model}`);
   assert.ok(distribution.includes(model), `distribution guide is out of sync for ${model}`);
 }
