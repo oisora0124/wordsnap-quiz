@@ -6943,7 +6943,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.112</span>
+        <span class="app-footer-version">バージョン 1.0.113</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7081,7 +7081,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.112";
+  const APP_REV = "1.0.113";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7718,6 +7718,18 @@ const Enrich = (() => {
   const DM = "https://api.datamuse.com/words";
   const DICT = "https://api.dictionaryapi.dev/api/v2/entries/en/";
   const dictCache = {};
+  // 辞書サービスは混雑時に応答が20秒近くかかる。8秒では健全な語まで打ち切られていた。
+  // 語彙サービス（Datamuse）は速いので従来の8秒のまま。
+  const DICT_TIMEOUT_MS = 15000;
+
+  // 取れなかった理由を区別する。404（辞書にその語の項目が無い）は確定した結果として null を返し
+  // キャッシュする。タイムアウト・5xx/429・通信断・壊れた応答は一時的な失敗として投げる（キャッシュ
+  // しない。押し直せば取り直す）。従来は全部 null に畳んで「情報が見つかりませんでした」と出し、同じ
+  // 起動中は二度と取りに行かなかったため、辞書サービスが遅い・落ちているとき（応答20秒・522）に、
+  // 発音記号も例文も「この語には無い」ように見えていた。
+  function transientError(reason) {
+    return Object.assign(new Error(`enrich ${reason}`), { transient: true, reason });
+  }
 
   function clean(term) {
     return String(term || "")
@@ -7725,15 +7737,23 @@ const Enrich = (() => {
       .toLowerCase();
   }
 
-  async function getJson(url) {
+  async function getJson(url, timeoutMs = 8000) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
+      let res;
+      try {
+        res = await fetch(url, { signal: controller.signal });
+      } catch (error) {
+        throw transientError(error?.name === "AbortError" ? "timeout" : "network");
+      }
+      if (res.status === 404) return null;
+      if (!res.ok) throw transientError("server");
+      try {
+        return await res.json();
+      } catch {
+        throw transientError("server");
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -7742,7 +7762,8 @@ const Enrich = (() => {
   async function dict(term) {
     const w = clean(term);
     if (w in dictCache) return dictCache[w];
-    const data = await getJson(DICT + encodeURIComponent(w));
+    // 一時的な失敗はここで投げるので、確定した結果（項目あり／404）だけがキャッシュに残る
+    const data = await getJson(DICT + encodeURIComponent(w), DICT_TIMEOUT_MS);
     const result = Array.isArray(data) ? data : null;
     dictCache[w] = result;
     return result;
@@ -33101,7 +33122,8 @@ function enrichBody(type, data, term) {
   }
 
   if (!data || window.Enrich.isEmpty(type, data)) {
-    return enrichEmpty("情報が見つかりませんでした。通信状態もご確認ください。");
+    // ここへ来るのは取得自体は成功して中身が無かったとき（通信の失敗は handleEnrichChip の catch 側）
+    return enrichEmpty("辞書APIにはこの情報が未収録でした。");
   }
 
   if (type === "collocations") {
@@ -33176,6 +33198,17 @@ function enrichBody(type, data, term) {
   return enrichEmpty("情報が見つかりませんでした。");
 }
 
+// 取得に失敗したときの案内。語が無いのではなく「取れなかった」ことが分かるように、理由で文を変える。
+// 辞書サービスの不調（応答なし・5xx）は利用者の通信状態とは無関係なので、「通信状態を確認」とは言わない。
+function enrichFailureMessage(type, error, label) {
+  const source =
+    type === "synonyms" || type === "collocations" ? "語彙サービス（datamuse.com）" : "辞書サービス（dictionaryapi.dev）";
+  if (error?.reason === "timeout" || error?.reason === "server") {
+    return `${source}が応答しませんでした（混雑か障害の可能性があります）。この語が無いわけではありません。しばらくしてから「${label}」をもう一度押してください。`;
+  }
+  return `読み込めませんでした。通信状態を確認して、「${label}」をもう一度押してください。`;
+}
+
 function sortEnrichSections(container) {
   for (const type of ENRICH_TYPES) {
     const section = container.querySelector(`[data-section="${type.key}"]`);
@@ -33235,13 +33268,10 @@ async function handleEnrichChip(chip) {
     }
     if (chip.getAttribute("aria-pressed") !== "true") return;
     section.innerHTML = enrichSectionShell(type, enrichBody(type, data, word.term));
-  } catch {
+  } catch (error) {
     if (chip.getAttribute("aria-pressed") === "true") {
       chip.dataset.enrichError = "1";
-      section.innerHTML = enrichSectionShell(
-        type,
-        enrichEmpty(`読み込めませんでした。通信状態を確認して、「${label}」をもう一度押してください。`),
-      );
+      section.innerHTML = enrichSectionShell(type, enrichEmpty(enrichFailureMessage(type, error, label)));
     }
   } finally {
     section.setAttribute("aria-busy", "false");
