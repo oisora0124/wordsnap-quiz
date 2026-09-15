@@ -376,6 +376,6 @@ test("抜き取りの完了: 対象が全部消えていたら記録ごと捨て
 test("セッションの開始（startReview）と終了（endReview）で自動送りのタイマーを止める", () => {
   const start = extractFunction("startReview");
   const end = extractFunction("endReview");
-  assert.match(start, /if \(valid\.length === 0\) return;\s*\n\s*\/\/[^\n]*\n\s*clearAutoNextTimer\(\);/);
+  assert.match(start, /if \(valid\.length === 0\) \{[\s\S]*?return;\s*\}\s*\n\s*\/\/[^\n]*\n\s*clearAutoNextTimer\(\);/);
   assert.match(end, /^function endReview\(message\) \{\n\s*clearAutoNextTimer\(\);/);
 });

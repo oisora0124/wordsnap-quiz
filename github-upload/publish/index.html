@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.125</span>
+        <span class="app-footer-version">バージョン 1.0.126</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.125";
+  const APP_REV = "1.0.126";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -27439,7 +27439,13 @@ function selectedQuizContextAmount() {
 
 function startReview(ids, options = {}) {
   const valid = ids.filter((id) => appState.words.some((word) => word.id === id));
-  if (valid.length === 0) return;
+  if (valid.length === 0) {
+    // 結果画面の「もう一度解く」で対象の語が全部消えていた（同期・削除）とき、無言で戻ると
+    // 結果画面が残ってボタンが死んだように見える。案内して通常の画面へ。
+    setStatus("出題できる単語がありません（対象の単語が削除されました）。");
+    renderQuiz();
+    return;
+  }
   // 直前の問題の自動送りが残っていると、新しいセッションの1問目を勝手に作り直す。
   clearAutoNextTimer();
   flashcardSession = null;
@@ -27951,6 +27957,7 @@ function startFlashcardsFromIds(ids, options = {}) {
     order: buildFlashcardOrder(validIds, options.shuffle !== false),
     allIds: validIds.slice(),
     index: 0,
+    answeredId: null, // 確信度モードで採点済み・意味表示中のカード（作り直しや削除から守る）
     knownIds: [],
     midIds: [], // 「あやふや」。完了画面で「知ってる」に混ぜないよう別に数える
     unknownIds: [],
@@ -28018,13 +28025,25 @@ function renderFlashcard() {
   // 同期反映など、ローカル削除ハンドラを通らない削除でも表示中の幽霊カードを残さない。
   if (
     currentQuiz?.answer?.id &&
+    !currentQuiz.answered && // 採点済み（確信度モードで意味を見せて待つ間）のカードは落とさない。
+    // 落とすと申告した語の意味を見ずに次へ飛び、order から消えて完了画面の集計が1語ずれる。
     !appState.words.some((word) => word.id === currentQuiz.answer.id)
   ) {
     dropWordFromFlashcardSession(currentQuiz.answer.id);
     currentQuiz = null;
     flashcardRevealed = false;
   }
-  if (!currentQuiz) currentQuiz = buildCurrentFlashcard();
+  if (!currentQuiz) {
+    currentQuiz = buildCurrentFlashcard();
+    // 単語帳タブの切替など外から currentQuiz を消されて作り直すとき、同じカードを採点済みだったなら
+    // その状態を戻す（戻さないと「意味表示中」の印だけ残って進めなくなり、スワイプで二重採点できた）。
+    if (currentQuiz && flashcardSession.answeredId && flashcardSession.answeredId === currentQuiz.answer?.id) {
+      currentQuiz.answered = true;
+      flashcardRevealed = true;
+    } else if (currentQuiz) {
+      flashcardRevealed = false;
+    }
+  }
   if (!currentQuiz) {
     finishFlashcardSession();
     return;
@@ -28141,7 +28160,8 @@ function gradeFlashcardConfidence(level) {
   if (level === "high") flashcardSession.knownIds.push(wordId);
   else if (level === "mid") flashcardSession.midIds.push(wordId);
   else flashcardSession.unknownIds.push(wordId);
-  // 採点済みだが、意味を見せるために画面はここで止める。
+  // 採点済みだが、意味を見せるために画面はここで止める。カードが作り直されても採点済みと分かるよう控える。
+  flashcardSession.answeredId = wordId;
   flashcardRevealed = true;
   renderQuiz();
 }
@@ -28152,6 +28172,7 @@ function advanceFlashcard() {
   // 未採点カードに「次へ」が出てしまい、無採点のまま進められてしまう。
   if (currentQuiz && !currentQuiz.answered) return;
   flashcardSession.index += 1;
+  flashcardSession.answeredId = null;
   currentQuiz = null;
   flashcardRevealed = false;
   flashcardConfidence = null;
@@ -28320,6 +28341,8 @@ function dropWordFromFlashcardSession(id) {
   const position = flashcardSession.order.indexOf(id);
   if (position < 0) return;
   if (position < flashcardSession.index) return;
+  // 確信度モードで採点済み・意味表示中の現在カードは回答済み扱い（index はまだ進んでいない）
+  if (position === flashcardSession.index && flashcardSession.answeredId === id) return;
   flashcardSession.order.splice(position, 1);
   flashcardSession.allIds = flashcardSession.allIds.filter((entry) => entry !== id);
 }
