@@ -6855,7 +6855,7 @@ accurate 正確な"
                 <strong>設定は任意です。</strong>キーがなくてもアプリは使えます。入れると、写真からの読み取りと、例文モード（空所補充）の問題作りにAIを使えます。
               </p>
               <p class="ai-hint">
-                キーは<strong>この端末のブラウザにだけ</strong>保存され、配布用のHTMLには含まれません。他の人に渡ることはないので、複数人で使うときは各自で取得してください。
+                キーは<strong>既定ではこの端末のブラウザにだけ</strong>保存され、配布用のHTMLには含まれません（下の「APIキーも他の端末と同期する」をオンにした場合だけ、暗号化して自分の端末どうしで同期します）。他の人に渡ることはないので、複数人で使うときは各自で取得してください。
               </p>
               <p class="ai-hint">
                 写真から読み取るとき、<strong>画像は選んだサービスへ送信されます</strong>。個人情報が写った画像は使わないでください。Geminiの無料枠では、送信内容がGoogleの製品改善に使われる場合があります。
@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.121</span>
+        <span class="app-footer-version">バージョン 1.0.122</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.121";
+  const APP_REV = "1.0.122";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -25061,6 +25061,16 @@ function rememberGroqModel(model) {
   }
 }
 
+// キーを差し替えたら、以前のキーで使えたモデルの記憶を忘れる（別アカウントでは使えないことがある）
+function forgetGroqModel() {
+  groqModelMemory = "";
+  try {
+    localStorage.removeItem(GROQ_MODEL_PREF_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 function groqModelOrder() {
   const first = rememberedGroqModel();
   return first ? [first, ...GROQ_MODELS.filter((model) => model !== first)] : [...GROQ_MODELS];
@@ -25361,6 +25371,8 @@ function setAiKey(id, value, options = {}) {
     geminiUnavailableModels.delete(shortKeyFingerprint(v));
     localStorage.removeItem(GEMINI_MODEL_PREF_KEY);
   }
+  // Groq も同じ。記憶はキーごとではなく1つなので、差し替えたら忘れて先頭から試し直す。
+  if (id === "groq" && previous !== v) forgetGroqModel();
   if (previous !== v && options.source !== "remote") {
     bumpAiSecretStamp(id);
     onAiSecretsChangedLocally();
@@ -27044,6 +27056,13 @@ function renderQuiz() {
 
   if (!currentQuiz) {
     renderQuizEmpty();
+    updateQuizControls();
+    return;
+  }
+
+  if (currentQuiz.answered) {
+    // 採点済みの問題は描き直さない。同期の反映などで renderAll が走っても、正誤の色と（例文モードで）
+    // 見せた完成文を保ったまま「次の問題」を待つ（描き直すと色が消え、完成文が空所に戻り、読み上げも再び鳴る）。
     updateQuizControls();
     return;
   }
@@ -30105,8 +30124,11 @@ function buildContextChoices(answer, item) {
       // 実質ランダムに選ばれる。ここで絞らないと、選ばれた語をこの下のループで
       // 落とすことになり、根拠のある語が十分あるのに選択肢が減る。
       .filter((w) => contextDistractorAdmissible(answer, item, w.term));
+    // 選択肢の表示は英単語なので、重複排除も語（term）で行う（既定の「意味」で排除すると、訳が同じ
+    // 別語が1つに畳まれて4択が埋まらない）。逆方向出題と同じ扱い。
     for (const w of pickDistractors(basePool, answer, 3 - generated.length, [], {
       preferDifferentPos: true,
+      dedupeBy: "term",
     })) {
       const term = String(w.term || "").trim();
       const k = term.toLowerCase();
@@ -30537,6 +30559,7 @@ function renderReviewQuiz() {
     return;
   }
 
+  if (currentQuiz.answered) return; // 採点済みは描き直さない（通常出題と同じ理由）
   renderQuizPromptWord(currentQuiz);
   renderChoices(currentQuiz.choices);
   autoSpeakCurrentQuiz(); // 復習クイズでも新しい問題の単語を1回だけ読み上げる
@@ -36537,10 +36560,15 @@ function initServiceWorker() {
   }
 }
 
-initTheme();
-initSettingsAccordionState();
-initSettings();
-initContextGenSettings();
+// テーマ・設定の読み出しは保存領域に触る。ensureWebStorage の代替が効かない環境で例外が出ても、
+// 既定の見え方で起動を続ける（ここで止まると以降の描画・同期まで始まらない）。
+for (const init of [initTheme, initSettingsAccordionState, initSettings, initContextGenSettings]) {
+  try {
+    init();
+  } catch {
+    /* 保存領域が使えなくても起動は続ける */
+  }
+}
 initStepTabs();
 initLearningQuote();
 initStorageWarning();

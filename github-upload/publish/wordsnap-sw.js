@@ -19,7 +19,7 @@
 // network-first のフォールバックでその古い本体が表示される（1.0.77 が出る事故）。
 // 版を埋め込めばリリースのたびに中身が変わり、入れ直し→本体の取り直し→
 // activate で旧キャッシュ削除、まで自動で起きる。
-const APP_REV = "1.0.121";
+const APP_REV = "1.0.122";
 const CACHE_NAME = `wordsnap-v7-${APP_REV}`;
 
 // 最初に確保しておくファイル（アプリ本体は必須、アイコン等は1つ失敗しても他を続ける）
@@ -107,7 +107,11 @@ self.addEventListener("fetch", (event) => {
             .then(() => response);
         }
         return response;
-      });
+      }).catch(
+        // オフラインで未キャッシュの資産（OCR の実行コード・言語データ等）は、拒否のまま返さず
+        // ネットワークエラー応答として返す（SW 側で未処理の拒否を残さない。挙動は同じ）
+        () => Response.error(),
+      );
     }),
   );
 });

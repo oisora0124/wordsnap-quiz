@@ -1566,3 +1566,9 @@ test("JSON の置き換え読み込み: ゴミ箱を引き継ぎ、保存を確�
   const share = extractFunction("deckSharePayload");
   assert.match(share, /const canon = canonicalDeckIdMapper\(appState\.decks\);[\s\S]*?\.filter\(\(word\) => canon\(word\.deckId\) === canon\(deckId\)\)/);
 });
+
+test("クイズ描画: 採点済みの問題は再描画で描き直さない（正誤の色と完成文を保つ）。例文モードの補充は語で重複排除する（1.0.122）", () => {
+  assert.match(extractFunction("renderQuiz"), /if \(currentQuiz\.answered\) \{[\s\S]*?updateQuizControls\(\);\s*return;\s*\}\s*renderQuizPromptWord\(currentQuiz\);/);
+  assert.match(extractFunction("renderReviewQuiz"), /if \(currentQuiz\.answered\) return;[\s\S]*?renderQuizPromptWord\(currentQuiz\);/);
+  assert.match(extractFunction("buildContextChoices"), /pickDistractors\(basePool, answer, 3 - generated\.length, \[\], \{\s*preferDifferentPos: true,\s*dedupeBy: "term",\s*\}\)/);
+});
