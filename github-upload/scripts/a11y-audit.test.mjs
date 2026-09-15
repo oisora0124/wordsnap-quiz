@@ -184,9 +184,29 @@ test("PC表示: カレンダー一式は1つのまとまりで置く（行が引
     "まとまりの中の積み方がパネル本体と違う＝1段組の見え方が変わる",
   );
   const block = extractMediaBlock("min-width: 1000px");
-  assert.match(block, /\.streak-cal-block\s*\{[^}]*grid-row:\s*3/, "成績と同じ行に置いていない");
-  assert.match(block, /\.streak-panel \.stats-block\s*\{[^}]*grid-row:\s*3/, "成績と同じ行に置いていない");
-  assert.doesNotMatch(block, /grid-row:\s*3 \/ span/, "行をまたがせると左列の行が引き伸ばされる");
+  assert.match(block, /\.streak-cal-block\s*\{[^}]*grid-column:\s*1/, "カレンダーを左列に置いていない");
+  assert.match(block, /\.streak-panel \.stats-block\s*\{[^}]*grid-column:\s*2/, "成績を右列に置いていない");
+  // 行番号は固定しない（auto-flowに任せる）。1.0.131で #learningQuote（名言）を
+  // .streak-panel-head の直後に挿したとき、cal-block/stats-blockへ grid-row:3 を
+  // 直書きしていたせいで、名言が挟まった分だけ summary が最下段まで落ちる崩れが起きた。
+  // 行を固定しないことで、上に並ぶ横いっぱいの要素がいくつあっても崩れない。
+  assert.doesNotMatch(
+    block,
+    /\.streak-cal-block\s*\{[^}]*grid-row/,
+    "カレンダー側に行番号を固定していない（上の行数が変わると壊れるため）",
+  );
+  assert.doesNotMatch(
+    block,
+    /\.streak-panel \.stats-block\s*\{[^}]*grid-row/,
+    "成績側に行番号を固定していない（上の行数が変わると壊れるため）",
+  );
+  // 見出し・名言・連続記録のまとめは横いっぱいにして、カレンダー/成績が
+  // 常にその次の行で横並びになるようauto-flowへ委ねる。
+  assert.match(
+    block,
+    /\.streak-panel-head,\s*#learningQuote,\s*\.streak-summary\s*\{[^}]*grid-column:\s*1 \/ -1/,
+    "見出し・名言・連続記録のまとめが横いっぱいでない＝カレンダー/成績の行がずれうる",
+  );
 });
 
 test("PC表示: 2段組の指定はメディアクエリの中だけにある（スマホを巻き込まない）", () => {

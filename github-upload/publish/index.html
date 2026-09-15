@@ -102,7 +102,7 @@
   --space-5: 24px;
 
   --font:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", Meiryo, sans-serif;
 
   font-family: var(--font);
@@ -267,7 +267,7 @@ h2 {
   flex-wrap: wrap;
   gap: 0.15rem 0.45rem;
   align-items: baseline;
-  margin: 0.4rem 0 0;
+  margin: 0;
   padding: 0.35rem 0.65rem;
   border-left: 3px solid var(--accent);
   border-radius: 0 var(--r-md) var(--r-md) 0;
@@ -306,7 +306,9 @@ h2 {
   display: flex;
   gap: 12px;
   align-items: center;
-  margin-bottom: 0.4rem;
+  /* 名言figureがこの下にあった頃の余白。移設で下に何も無くなったため0にした
+     （残すと見出し下に意味のない空白ができ、hero-sideの高さともずれて見える）。 */
+  margin-bottom: 0;
 }
 
 .hero-title h1 {
@@ -746,16 +748,17 @@ h2 {
     align-items: start;
   }
 
-  /* 見出しと連続記録のまとめは横いっぱい */
+  /* 見出し・名言・連続記録のまとめは横いっぱい */
   .streak-panel-head,
+  #learningQuote,
   .streak-summary {
     grid-column: 1 / -1;
   }
 
-  /* 左列＝カレンダー、右列＝成績。同じ行に置いて上端をそろえる。 */
+  /* 左列＝カレンダー、右列＝成績。同じ行に置いて上端をそろえる。
+     行番号は名言figureの有無で変わりうるため固定しない（auto-flowに任せる）。 */
   .streak-cal-block {
     grid-column: 1;
-    grid-row: 3;
   }
 
   /* .stats-block / .stats-grid の基本ルールはこのブロックより後ろに書かれているので、
@@ -764,7 +767,6 @@ h2 {
      パネルの中に限った指定であることをセレクタで示し、順序に左右されないようにする。 */
   .streak-panel .stats-block {
     grid-column: 2;
-    grid-row: 3;
     /* 1段組では区切り線で「ここから成績」と示すが、横に並ぶ2段組では列そのものが
        区切りになる。線が右列の上だけに浮いて見えるので消す。 */
     margin-top: 0;
@@ -3239,6 +3241,22 @@ textarea:focus-visible {
   gap: 10px;
 }
 
+/* 設定を3グループに分ける見出し。.settings-accordion は display:grid; gap:10px
+   で項目間に既に隙間があるので、その分だけ margin を控えめにする。 */
+.settings-group-title {
+  margin: 8px 0 0;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  text-transform: none;
+}
+
+.settings-accordion > .settings-group-title:first-child {
+  margin-top: 0;
+}
+
 .settings-section {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -5455,6 +5473,9 @@ body.tutorial-open {
   font-weight: 650;
 }
 
+/* クイズ・復習の結果画面にだけ出す名言（白文字のカード上） */
+.quiz-result-quote { margin: 12px 0 0; font-size: 0.85rem; opacity: 0.85; }
+
 /* ---------- JSON import label as button ---------- */
 
 .import-json {
@@ -5674,12 +5695,6 @@ body.tutorial-open {
   .deck-pick select,
   .deck-move select {
     font-size: 16px;
-  }
-
-  /* クイズ出題中はヘッダーを圧縮：名言を隠してヒーロー部の余白を詰める */
-  body.quiz-active #learningQuote,
-  body.quiz-active .learning-quote {
-    display: none;
   }
 
   body.quiz-active .hero {
@@ -5924,10 +5939,6 @@ body.tutorial-open {
             <span class="brand-mark" aria-hidden="true"><span class="brand-lines"></span></span>
             <h1>WordBank</h1>
           </div>
-          <figure id="learningQuote" class="learning-quote" aria-label="学習にまつわる名言" hidden>
-            <blockquote class="quote-text"></blockquote>
-            <figcaption class="quote-author"></figcaption>
-          </figure>
         </div>
         <div class="hero-side">
           <div class="hero-controls">
@@ -5981,6 +5992,10 @@ body.tutorial-open {
           <h2 id="streakPanelTitle">学習の記録</h2>
           <button id="streakPanelClose" class="ghost mini" type="button">閉じる</button>
         </div>
+        <figure id="learningQuote" class="learning-quote" aria-label="学習にまつわる名言" hidden>
+          <blockquote class="quote-text"></blockquote>
+          <figcaption class="quote-author"></figcaption>
+        </figure>
         <div id="streakSummary" class="streak-summary"></div>
         <!-- カレンダー一式を1つのまとまりにしておく。PC幅で「カレンダー｜成績」の2段組に
              するとき、バラバラの要素を同じ列へ置くと、成績が高いぶんだけ左列の各行が
@@ -6172,13 +6187,14 @@ accurate 正確な"
         <details class="sample-details">
           <summary>📚 サンプル単語帳を追加</summary>
           <div class="sample-chips" role="group" aria-label="サンプル単語集を追加">
-            <button class="sample-chip" type="button" data-sample="jhs100">中学基礎1500</button>
-            <button class="sample-chip" type="button" data-sample="exam300">大学受験標準1500</button>
-            <button class="sample-chip" type="button" data-sample="eiken100">英検準1級1500</button>
-            <button class="sample-chip" type="button" data-sample="soukei100">早慶レベル1500</button>
-            <button class="sample-chip" type="button" data-sample="toeic100">TOEIC頻出1500</button>
-            <button class="sample-chip" type="button" data-sample="ielts100">IELTS頻出1500</button>
+            <button class="sample-chip" type="button" data-sample="jhs1500">中学基礎1500</button>
+            <button class="sample-chip" type="button" data-sample="exam1500">大学受験標準1500</button>
+            <button class="sample-chip" type="button" data-sample="eiken1500">英検準1級1500</button>
+            <button class="sample-chip" type="button" data-sample="soukei1500">早慶レベル1500</button>
+            <button class="sample-chip" type="button" data-sample="toeic1500">TOEIC頻出1500</button>
+            <button class="sample-chip" type="button" data-sample="ielts1500">IELTS頻出1500</button>
           </div>
+          <p class="settings-desc sample-source-note">これらの単語集は WordBank が独自に選定したもので、特定の教材や市販単語帳の転載ではありません。訳語は一般的な語義を短くまとめたもので、文脈により異なる訳になることがあります。</p>
         </details>
         <p id="status" class="status" role="status">単語と訳を貼り付けるか、写真を端末内OCRで読み取れます（1行に「英単語 意味」）。</p>
         <!-- 変換結果が「すべて保存済み」だったときだけ表示する導線。次の変換操作で自動的に消える。 -->
@@ -6458,6 +6474,7 @@ accurate 正確な"
           <button id="dontKnowButton" class="dont-know" type="button" hidden>わからない</button>
           <p id="quizFeedback" class="feedback" role="status" aria-live="polite"></p>
           <p id="quizNextHint" class="quiz-next-hint" hidden></p>
+          <p id="quizResultQuote" class="quiz-result-quote" hidden></p>
         </div>
 
         <div class="actions quiz-actions">
@@ -6613,24 +6630,197 @@ accurate 正確な"
         </div>
 
         <div class="settings-accordion">
-          <details class="settings-section" data-settings-section="guide">
-            <summary>📖 ツールの使い方</summary>
+          <h3 class="settings-group-title">学習</h3>
+
+          <details class="settings-section" data-settings-section="quiz">
+            <summary>📝 クイズ</summary>
             <div class="settings-section-body">
-              <ol class="usage-steps">
-                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。写真からの読み取り（OCR）は写真の鮮明さやレイアウトで結果が変わるため、取り込み後に「確認」で直してください。精度を優先するなら「外部AIで抽出」をおすすめします（APIキーが必要で、画像は選んだサービスへ送信されます）。</li>
-                <li><strong>確認</strong>：取り込んだ候補をチェックして「保存」。保存先の単語帳も選べます。</li>
-                <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
-                <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲選択し、選んだ単語をまとめて出題・削除できます。</li>
-                <li><strong>設定</strong>：「JSONバックアップ」から単語・成績・単語帳を書き出せます。</li>
-                <li data-sync-identity-ui="legacy"><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
-                <li data-sync-identity-ui="v2-native" hidden><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末では、設定の「新方式（V2）の同期と引き継ぎ」にある引き継ぎコードで合流します。</li>
-              </ol>
-              <p class="usage-tip">💡 Safariで開いて「ホーム画面に追加」しておくと、データが消えにくく、ワンタップで起動できます。</p>
+              <p class="settings-desc">反復練習のテンポを調整します。自動送りをオンにすると、答えたあと少し待って次の問題へ進みます。</p>
               <div class="settings-row">
-                <button id="showTutorialButton" class="secondary" type="button">チュートリアルをもう一度見る</button>
+                <label class="settings-check">
+                  <input id="autoNextToggle" type="checkbox" />
+                  <span>答えたあと自動で次の問題へ進む</span>
+                </label>
+                <label class="settings-field">
+                  待ち時間
+                  <select id="autoNextDelaySelect" aria-label="自動で次の問題に進むまでの秒数">
+                    <option value="1000">1秒</option>
+                    <option value="2000">2秒</option>
+                    <option value="3000">3秒</option>
+                    <option value="4000">4秒</option>
+                    <option value="5000">5秒</option>
+                  </select>
+                </label>
+              </div>
+              <p class="settings-desc">
+                制限時間をつけると、各問題にカウントダウンが表示されます。時間内に答えないと「わからない」扱いになり、少しあとにまた出題されます。
+              </p>
+              <div class="settings-row">
+                <label class="settings-field">
+                  1問あたりの制限時間
+                  <select id="quizTimeLimitSelect" aria-label="1問あたりの制限時間">
+                    <option value="0">なし</option>
+                    <option value="5">5秒</option>
+                    <option value="10">10秒</option>
+                    <option value="15">15秒</option>
+                    <option value="20">20秒</option>
+                    <option value="30">30秒</option>
+                  </select>
+                </label>
+              </div>
+              <label class="settings-check">
+                <input id="flashcardConfidenceToggle" type="checkbox" />
+                <span>フラッシュカードで自信の度合いを聞く（知らない／あやふや／確実）</span>
+              </label>
+              <p class="settings-desc">
+                意味を見る<strong>前</strong>に自信を選ぶ形に変わります。「確実」と答えた単語が
+                あとで意味の4択クイズに出たとき、本当に答えられたかを照らし合わせて
+                「知っているつもり」を見つけます。記録はこの端末の中だけで、外部には送りません。
+                オフのままなら、これまでどおり裏返してから仕分けます。
+              </p>
+              <label class="settings-check">
+                <input id="adaptiveSrsToggle" type="checkbox" />
+                <span>復習間隔を成績に合わせて自動調整する（個人適応SRS）</span>
+              </label>
+              <p class="settings-desc">
+                忘却曲線に沿った標準の間隔（1→3→7→14…日）を、その単語の正答率・全体の直近正答率・
+                回答の速さに応じて0.5〜1.6倍に伸縮します。よく覚えている語は間隔が伸び、
+                忘れかけている語は早めに戻ってきます。オフに戻すと、それ以降の解答は従来の
+                固定間隔で予定されます（すでに決まっている復習日はそのまま残ります）。
+                フラッシュカードで習得した語は、次の復習日に通常の4択で確認します。
+              </p>
+              <div class="settings-row">
+                <label class="settings-field">
+                  1日の目標回答数
+                  <select id="dailyGoalSelect" aria-label="1日の目標回答数">
+                    <option value="0">なし</option>
+                    <option value="10">10問</option>
+                    <option value="20">20問</option>
+                    <option value="30">30問</option>
+                    <option value="50">50問</option>
+                  </select>
+                </label>
+              </div>
+              <p class="settings-desc">
+                目標を設定すると、クイズ画面に「🎯 今日 n/目標問」が表示され、達成した日はお知らせします。
+              </p>
+              <label class="settings-check">
+                <input id="autoSpeakToggle" type="checkbox" />
+                <span>出題時に発音を自動再生する</span>
+              </label>
+              <div class="settings-row">
+                <label class="settings-field">
+                  例文モード（空所補充）の例文・誤答の作り方
+                  <select id="contextGenModeSelect" aria-label="例文モードで例文と誤答選択肢をどう用意するか">
+                    <option value="auto">自動（AI優先 → 辞書）</option>
+                    <option value="dict">辞書のみ（APIキー不要）</option>
+                    <option value="off">作らない（保存済みの例文だけ）</option>
+                  </select>
+                </label>
+              </div>
+              <p id="contextGenHint" class="settings-desc"></p>
+            </div>
+          </details>
+
+          <details class="settings-section" data-settings-section="sound">
+            <summary>🔊 音</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">操作やクイズ結果に短い効果音を鳴らします。</p>
+              <div class="settings-row">
+                <button id="soundToggle" class="sound-toggle" type="button" aria-pressed="true">
+                  <span class="sound-icon" aria-hidden="true"></span>
+                  <span class="sound-toggle-text">音 ON</span>
+                </button>
+                <button id="soundTestButton" class="secondary" type="button">音を試す</button>
+              </div>
+              <label class="settings-field">
+                <span>音量 <output id="soundVolumeValue">70%</output></span>
+                <input id="soundVolumeSlider" type="range" min="0" max="100" step="5" value="70" />
+              </label>
+              <label class="settings-field">
+                読み上げ音声
+                <select id="speechVoiceSelect" aria-label="英単語と例文の読み上げ音声">
+                  <option value="">端末の既定音声（英語）</option>
+                </select>
+              </label>
+              <label class="settings-field speech-rate-field">
+                <span>読み上げ速度 <output id="speechRateValue">1.00倍</output></span>
+                <input id="speechRateSlider" type="range" min="0.5" max="1.5" step="0.05" value="1" />
+              </label>
+              <div class="settings-row">
+                <button id="speechTestButton" class="secondary" type="button" data-speech-test>発音をテスト再生</button>
+              </div>
+              <label class="settings-check">
+                <input id="vibrateToggle" type="checkbox" />
+                <span>振動（対応端末のみ）</span>
+              </label>
+            </div>
+          </details>
+
+          <details class="settings-section" data-settings-section="appearance">
+            <summary>🎨 表示</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">画面テーマと、クイズ画面の補助表示を調整します。</p>
+              <label class="settings-field">
+                テーマ
+                <select id="themeModeSelect" aria-label="表示テーマ">
+                  <option value="light">ライト</option>
+                  <option value="dark">ダーク</option>
+                  <option value="auto">自動（日の出・日の入り）</option>
+                </select>
+              </label>
+              <p id="themeAutoHint" class="settings-desc" hidden>
+                自動：昼はライト、夜はダークに切り替わります。正確な日の出・日の入りには位置情報を使います（許可しない場合は6時〜18時を目安にします）。
+              </p>
+              <label class="settings-check">
+                <input id="keyboardHintsToggle" type="checkbox" />
+                <span>クイズ画面にキーボード操作のヒントを表示する</span>
+              </label>
+            </div>
+          </details>
+
+          <details class="settings-section" data-settings-section="learning-log">
+            <summary>⏬ 単語情報の先読み（任意）</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">
+                取り込んだ単語のCEFRレベルと品詞は、<strong>保存した直後にその分だけ</strong>自動で取りに行きます。
+                内蔵のサンプル単語帳は通信せずに判定できるので、この設定は
+                貼り付け・写真から入れた単語にだけ関係します。
+              </p>
+              <label class="settings-check">
+                <input id="prefetchAllToggle" type="checkbox" />
+                <span>過去に取り込んだ単語も、起動中に先読みする</span>
+              </label>
+              <p class="settings-desc">
+                オンにすると「保存した単語」画面を開かなくても、保存済みの単語すべてを
+                少しずつ埋めます。判定には英単語だけを
+                <strong>api.datamuse.com</strong> へ送ります（意味・学習の記録は送りません）。
+                既定はオフで、そのときは今までどおり「保存した単語」画面を開いている間だけ埋まります。
+              </p>
+              <p id="prefetchAllStatus" class="settings-desc" role="status">未判定の単語: 0件</p>
+            </div>
+          </details>
+
+          <details class="settings-section">
+            <summary>📈 学習の記録（任意）</summary>
+            <div class="settings-section-body">
+              <p class="settings-desc">
+                回答の速さ・正誤・出題形式などをこの端末だけに記録し、学習の振り返りに使います。
+                外部には送信しません。既定はオフです。
+              </p>
+              <label class="settings-check">
+                <input id="reviewLogToggle" type="checkbox" />
+                <span>学習イベントを記録する（この端末のみ）</span>
+              </label>
+              <p id="reviewLogCount" class="settings-desc" role="status">記録件数: 0件</p>
+              <div class="settings-row">
+                <button id="reviewLogExportButton" class="secondary" type="button">記録をJSONで書き出す</button>
+                <button id="reviewLogClearButton" class="ghost danger" type="button">記録をすべて削除</button>
               </div>
             </div>
           </details>
+
+          <h3 class="settings-group-title">データ</h3>
 
           <details class="settings-section" data-settings-section="sync">
             <summary>🔄 データの保存・引き継ぎ</summary>
@@ -6873,152 +7063,7 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section" data-settings-section="sound">
-            <summary>🔊 音</summary>
-            <div class="settings-section-body">
-              <p class="settings-desc">操作やクイズ結果に短い効果音を鳴らします。</p>
-              <div class="settings-row">
-                <button id="soundToggle" class="sound-toggle" type="button" aria-pressed="true">
-                  <span class="sound-icon" aria-hidden="true"></span>
-                  <span class="sound-toggle-text">音 ON</span>
-                </button>
-                <button id="soundTestButton" class="secondary" type="button">音を試す</button>
-              </div>
-              <label class="settings-field">
-                <span>音量 <output id="soundVolumeValue">70%</output></span>
-                <input id="soundVolumeSlider" type="range" min="0" max="100" step="5" value="70" />
-              </label>
-              <label class="settings-field">
-                読み上げ音声
-                <select id="speechVoiceSelect" aria-label="英単語と例文の読み上げ音声">
-                  <option value="">端末の既定音声（英語）</option>
-                </select>
-              </label>
-              <label class="settings-field speech-rate-field">
-                <span>読み上げ速度 <output id="speechRateValue">1.00倍</output></span>
-                <input id="speechRateSlider" type="range" min="0.5" max="1.5" step="0.05" value="1" />
-              </label>
-              <div class="settings-row">
-                <button id="speechTestButton" class="secondary" type="button" data-speech-test>発音をテスト再生</button>
-              </div>
-              <label class="settings-check">
-                <input id="vibrateToggle" type="checkbox" />
-                <span>振動（対応端末のみ）</span>
-              </label>
-            </div>
-          </details>
-
-          <details class="settings-section" data-settings-section="appearance">
-            <summary>🎨 表示</summary>
-            <div class="settings-section-body">
-              <p class="settings-desc">画面テーマと、クイズ画面の補助表示を調整します。</p>
-              <label class="settings-field">
-                テーマ
-                <select id="themeModeSelect" aria-label="表示テーマ">
-                  <option value="light">ライト</option>
-                  <option value="dark">ダーク</option>
-                  <option value="auto">自動（日の出・日の入り）</option>
-                </select>
-              </label>
-              <p id="themeAutoHint" class="settings-desc" hidden>
-                自動：昼はライト、夜はダークに切り替わります。正確な日の出・日の入りには位置情報を使います（許可しない場合は6時〜18時を目安にします）。
-              </p>
-              <label class="settings-check">
-                <input id="keyboardHintsToggle" type="checkbox" />
-                <span>クイズ画面にキーボード操作のヒントを表示する</span>
-              </label>
-            </div>
-          </details>
-
-          <details class="settings-section" data-settings-section="quiz">
-            <summary>📝 クイズ</summary>
-            <div class="settings-section-body">
-              <p class="settings-desc">反復練習のテンポを調整します。自動送りをオンにすると、答えたあと少し待って次の問題へ進みます。</p>
-              <div class="settings-row">
-                <label class="settings-check">
-                  <input id="autoNextToggle" type="checkbox" />
-                  <span>答えたあと自動で次の問題へ進む</span>
-                </label>
-                <label class="settings-field">
-                  待ち時間
-                  <select id="autoNextDelaySelect" aria-label="自動で次の問題に進むまでの秒数">
-                    <option value="1000">1秒</option>
-                    <option value="2000">2秒</option>
-                    <option value="3000">3秒</option>
-                    <option value="4000">4秒</option>
-                    <option value="5000">5秒</option>
-                  </select>
-                </label>
-              </div>
-              <p class="settings-desc">
-                制限時間をつけると、各問題にカウントダウンが表示されます。時間内に答えないと「わからない」扱いになり、少しあとにまた出題されます。
-              </p>
-              <div class="settings-row">
-                <label class="settings-field">
-                  1問あたりの制限時間
-                  <select id="quizTimeLimitSelect" aria-label="1問あたりの制限時間">
-                    <option value="0">なし</option>
-                    <option value="5">5秒</option>
-                    <option value="10">10秒</option>
-                    <option value="15">15秒</option>
-                    <option value="20">20秒</option>
-                    <option value="30">30秒</option>
-                  </select>
-                </label>
-              </div>
-              <label class="settings-check">
-                <input id="flashcardConfidenceToggle" type="checkbox" />
-                <span>フラッシュカードで自信の度合いを聞く（知らない／あやふや／確実）</span>
-              </label>
-              <p class="settings-desc">
-                意味を見る<strong>前</strong>に自信を選ぶ形に変わります。「確実」と答えた単語が
-                あとで意味の4択クイズに出たとき、本当に答えられたかを照らし合わせて
-                「知っているつもり」を見つけます。記録はこの端末の中だけで、外部には送りません。
-                オフのままなら、これまでどおり裏返してから仕分けます。
-              </p>
-              <label class="settings-check">
-                <input id="adaptiveSrsToggle" type="checkbox" />
-                <span>復習間隔を成績に合わせて自動調整する（個人適応SRS）</span>
-              </label>
-              <p class="settings-desc">
-                忘却曲線に沿った標準の間隔（1→3→7→14…日）を、その単語の正答率・全体の直近正答率・
-                回答の速さに応じて0.5〜1.6倍に伸縮します。よく覚えている語は間隔が伸び、
-                忘れかけている語は早めに戻ってきます。オフに戻すと、それ以降の解答は従来の
-                固定間隔で予定されます（すでに決まっている復習日はそのまま残ります）。
-                フラッシュカードで習得した語は、次の復習日に通常の4択で確認します。
-              </p>
-              <div class="settings-row">
-                <label class="settings-field">
-                  1日の目標回答数
-                  <select id="dailyGoalSelect" aria-label="1日の目標回答数">
-                    <option value="0">なし</option>
-                    <option value="10">10問</option>
-                    <option value="20">20問</option>
-                    <option value="30">30問</option>
-                    <option value="50">50問</option>
-                  </select>
-                </label>
-              </div>
-              <p class="settings-desc">
-                目標を設定すると、クイズ画面に「🎯 今日 n/目標問」が表示され、達成した日はお知らせします。
-              </p>
-              <label class="settings-check">
-                <input id="autoSpeakToggle" type="checkbox" />
-                <span>出題時に発音を自動再生する</span>
-              </label>
-              <div class="settings-row">
-                <label class="settings-field">
-                  例文モード（空所補充）の例文・誤答の作り方
-                  <select id="contextGenModeSelect" aria-label="例文モードで例文と誤答選択肢をどう用意するか">
-                    <option value="auto">自動（AI優先 → 辞書）</option>
-                    <option value="dict">辞書のみ（APIキー不要）</option>
-                    <option value="off">作らない（保存済みの例文だけ）</option>
-                  </select>
-                </label>
-              </div>
-              <p id="contextGenHint" class="settings-desc"></p>
-            </div>
-          </details>
+          <h3 class="settings-group-title">上級・その他</h3>
 
           <!-- APIキーは「写真から読み取る（OCR）」と「例文モード」の2機能で共用し、
                同期のトグルも同じ箱に入る。取り込むタブのOCR欄に埋めていた頃の名残で
@@ -7044,43 +7089,21 @@ accurate 正確な"
             </div>
           </details>
 
-          <details class="settings-section" data-settings-section="learning-log">
-            <summary>⏬ 単語情報の先読み（任意）</summary>
+          <details class="settings-section" data-settings-section="guide">
+            <summary>📖 ツールの使い方</summary>
             <div class="settings-section-body">
-              <p class="settings-desc">
-                取り込んだ単語のCEFRレベルと品詞は、<strong>保存した直後にその分だけ</strong>自動で取りに行きます。
-                内蔵のサンプル単語帳は通信せずに判定できるので、この設定は
-                貼り付け・写真から入れた単語にだけ関係します。
-              </p>
-              <label class="settings-check">
-                <input id="prefetchAllToggle" type="checkbox" />
-                <span>過去に取り込んだ単語も、起動中に先読みする</span>
-              </label>
-              <p class="settings-desc">
-                オンにすると「保存した単語」画面を開かなくても、保存済みの単語すべてを
-                少しずつ埋めます。判定には英単語だけを
-                <strong>api.datamuse.com</strong> へ送ります（意味・学習の記録は送りません）。
-                既定はオフで、そのときは今までどおり「保存した単語」画面を開いている間だけ埋まります。
-              </p>
-              <p id="prefetchAllStatus" class="settings-desc" role="status">未判定の単語: 0件</p>
-            </div>
-          </details>
-
-          <details class="settings-section">
-            <summary>📈 学習の記録（任意）</summary>
-            <div class="settings-section-body">
-              <p class="settings-desc">
-                回答の速さ・正誤・出題形式などをこの端末だけに記録し、学習の振り返りに使います。
-                外部には送信しません。既定はオフです。
-              </p>
-              <label class="settings-check">
-                <input id="reviewLogToggle" type="checkbox" />
-                <span>学習イベントを記録する（この端末のみ）</span>
-              </label>
-              <p id="reviewLogCount" class="settings-desc" role="status">記録件数: 0件</p>
+              <ol class="usage-steps">
+                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。写真からの読み取り（OCR）は写真の鮮明さやレイアウトで結果が変わるため、取り込み後に「確認」で直してください。精度を優先するなら「外部AIで抽出」をおすすめします（APIキーが必要で、画像は選んだサービスへ送信されます）。</li>
+                <li><strong>確認</strong>：取り込んだ候補をチェックして「保存」。保存先の単語帳も選べます。</li>
+                <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
+                <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲選択し、選んだ単語をまとめて出題・削除できます。</li>
+                <li><strong>設定</strong>：「JSONバックアップ」から単語・成績・単語帳を書き出せます。</li>
+                <li data-sync-identity-ui="legacy"><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
+                <li data-sync-identity-ui="v2-native" hidden><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末では、設定の「新方式（V2）の同期と引き継ぎ」にある引き継ぎコードで合流します。</li>
+              </ol>
+              <p class="usage-tip">💡 Safariで開いて「ホーム画面に追加」しておくと、データが消えにくく、ワンタップで起動できます。</p>
               <div class="settings-row">
-                <button id="reviewLogExportButton" class="secondary" type="button">記録をJSONで書き出す</button>
-                <button id="reviewLogClearButton" class="ghost danger" type="button">記録をすべて削除</button>
+                <button id="showTutorialButton" class="secondary" type="button">チュートリアルをもう一度見る</button>
               </div>
             </div>
           </details>
@@ -7131,7 +7154,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.130</span>
+        <span class="app-footer-version">バージョン 1.0.131</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7269,7 +7292,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.130";
+  const APP_REV = "1.0.131";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -17836,12 +17859,12 @@ standard 標準`;
 
 // サンプル単語集の定義。key は .sample-chips の data-sample と一致させる。
 const SAMPLE_SETS = {
-  jhs100: { label: "中学基礎1500", text: SAMPLE_TEXT_JHS },
-  exam300: { label: "大学受験標準レベル単語1500", text: SAMPLE_TEXT },
-  eiken100: { label: "英検準1級レベル1500", text: SAMPLE_TEXT_EIKEN },
-  soukei100: { label: "早慶レベル1500", text: SAMPLE_TEXT_SOUKEI },
-  toeic100: { label: "TOEIC頻出1500", text: SAMPLE_TEXT_TOEIC },
-  ielts100: { label: "IELTS頻出1500", text: SAMPLE_TEXT_IELTS },
+  jhs1500: { label: "中学基礎1500", text: SAMPLE_TEXT_JHS },
+  exam1500: { label: "大学受験標準1500", text: SAMPLE_TEXT },
+  eiken1500: { label: "英検準1級1500", text: SAMPLE_TEXT_EIKEN },
+  soukei1500: { label: "早慶レベル1500", text: SAMPLE_TEXT_SOUKEI },
+  toeic1500: { label: "TOEIC頻出1500", text: SAMPLE_TEXT_TOEIC },
+  ielts1500: { label: "IELTS頻出1500", text: SAMPLE_TEXT_IELTS },
 };
 
 const elements = {
@@ -17933,6 +17956,7 @@ const elements = {
   flashcardUnknownButton: document.querySelector("#flashcardUnknownButton"),
   quizFeedback: document.querySelector("#quizFeedback"),
   quizNextHint: document.querySelector("#quizNextHint"),
+  quizResultQuote: document.querySelector("#quizResultQuote"),
   quizKeyboardHint: document.querySelector("#quizKeyboardHint"),
   startQuizButton: document.querySelector("#startQuizButton"),
   difficultQuizButton: document.querySelector("#difficultQuizButton"),
@@ -19472,10 +19496,17 @@ function setActiveStep(id, options = {}) {
   }
 }
 
+// 起動時の初期タブを決める純関数。保存されたタブがあれば（有効な値のときに限り）それを使い、
+// 保存が無い初回訪問だけ、単語が既にあるなら「クイズ」から始める（無ければ従来どおり「取り込み」）。
+function initialStepId(saved, wordCount) {
+  if (saved === null) return wordCount > 0 ? "quiz" : "import";
+  return STEP_IDS.includes(saved) ? saved : "import";
+}
+
 function initStepTabs() {
   if (!elements.stepTabs.length || !elements.stepPanels.length) return;
   const saved = localStorage.getItem(ACTIVE_STEP_KEY);
-  setActiveStep(saved, { persist: false, sound: false });
+  setActiveStep(initialStepId(saved, appState.words.length), { persist: false, sound: false });
 
   // クリック/タップはタブ列に委譲する。スマホで指がアイコン（内側の要素）に
   // 触れても、closest() で必ずタブ本体を拾えるようにして反応の取りこぼしを防ぐ。
@@ -19505,6 +19536,24 @@ function initStepTabs() {
       nextTab.focus();
       setActiveStep(nextTab.dataset.stepTab, { scroll: true });
     });
+  }
+}
+
+// initStepTabs() は起動処理の早い段階で走るため、そのときの appState.words.length は
+// まだ暫定値のことがある（IndexedDBのクライアントID採用や同期の接続で appState が
+// recoverPersisted() の中で丸ごと差し替わるため）。復元が確定した後にもう一度だけ、
+// 「タブをまだ一度も触っていない（保存が無い＝initialStepIdの判定に使ったのと同じ条件）」
+// 「まだ import タブのまま」「単語は実は既にある」の3条件がそろったときだけ quiz へ進める。
+// 保存が有る・別タブへ移動済み・単語が無い、のいずれかなら何もしない（利用者の選択や
+// 「無ければ取り込みから」を上書きしない）。
+function promoteInitialStepAfterRecovery() {
+  try {
+    if (localStorage.getItem(ACTIVE_STEP_KEY) !== null) return;
+    if (activeStepId !== "import") return;
+    if (!(appState.words.length > 0)) return;
+    setActiveStep("quiz", { persist: false, sound: false });
+  } catch {
+    /* 保存領域が読めなくても起動は続ける */
   }
 }
 
@@ -27641,6 +27690,7 @@ function updateQuizControls() {
     }
   }
   elements.dontKnowButton.hidden = inFlashcard || !questionActive || showingResult;
+  if (elements.quizResultQuote) elements.quizResultQuote.hidden = !showingResult;
   elements.exitReviewButton.hidden = !inReview;
   if (elements.exitQuizButton) {
     elements.exitQuizButton.hidden = !(quizStarted && !inReview) || showingResult;
@@ -28904,6 +28954,10 @@ function renderReviewResult() {
   const correct = Math.max(0, result.total - result.missedCount - (Number(result.midCount) || 0));
   elements.quizWord.textContent = result.missedCount === 0 ? "全問クリア！" : "クイズ完了！";
   elements.quizFeedback.textContent = "";
+  if (elements.quizResultQuote) {
+    const quote = currentLearningQuote();
+    elements.quizResultQuote.textContent = quote ? `${quote.text} — ${quote.author}` : "";
+  }
 
   const box = document.createElement("div");
   box.className = "review-result";
@@ -37158,6 +37212,15 @@ function pickQuoteIndex(bucket, len) {
   return (x >>> 0) % len;
 }
 
+// 現在時刻（4時間バケット）に対応する名言を返す純関数。render() とテストの両方から使う。
+function currentLearningQuote(nowMs = Date.now()) {
+  const FOUR_HOURS = 4 * 60 * 60 * 1000;
+  const bucket = Math.floor(nowMs / FOUR_HOURS);
+  return (
+    LEARNING_QUOTES[pickQuoteIndex(bucket, LEARNING_QUOTES.length)] || LEARNING_QUOTES[0]
+  );
+}
+
 function initLearningQuote() {
   const figure = document.querySelector("#learningQuote");
   if (!figure || !LEARNING_QUOTES.length) return;
@@ -37166,9 +37229,7 @@ function initLearningQuote() {
   const FOUR_HOURS = 4 * 60 * 60 * 1000;
 
   function render() {
-    const bucket = Math.floor(Date.now() / FOUR_HOURS);
-    const quote =
-      LEARNING_QUOTES[pickQuoteIndex(bucket, LEARNING_QUOTES.length)] || LEARNING_QUOTES[0];
+    const quote = currentLearningQuote();
     if (!quote) return;
     textEl.textContent = quote.text;
     authorEl.textContent = quote.author;
@@ -37255,7 +37316,12 @@ for (const init of [initTheme, initSettingsAccordionState, initQuizSetupDisclosu
     /* 保存領域が使えなくても起動は続ける */
   }
 }
-initStepTabs();
+try {
+  initStepTabs();
+} catch {
+  // 他の起動処理と同様、失敗しても起動は続ける。タブは既定の「取り込み」のまま。
+  setActiveStep("import", { persist: false, sound: false });
+}
 initLearningQuote();
 initStorageWarning();
 initServiceWorker();
@@ -37276,11 +37342,13 @@ const startWordsnapSync = () => {
 };
 recoverPersisted()
   .then(() => {
+    promoteInitialStepAfterRecovery();
     // IndexedDBから既存単語を復元したユーザーには初回チュートリアルを誤表示しない。
     maybeShowInitialTutorial();
     startWordsnapSync();
   })
   .catch(() => {
+    promoteInitialStepAfterRecovery();
     maybeShowInitialTutorial();
     startWordsnapSync();
   });

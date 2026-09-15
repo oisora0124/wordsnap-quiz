@@ -375,12 +375,12 @@ for (const removed of ["downloadStandalone", "downloadToolButton", "STANDALONE_D
 // 増補や差し替えのときに他の集が壊れたまま素通りする。
 const SAMPLE_ROW_COUNT = 1500;
 const SAMPLE_CONSTANTS = [
-  ["SAMPLE_TEXT", "exam300"],
-  ["SAMPLE_TEXT_JHS", "jhs100"],
-  ["SAMPLE_TEXT_EIKEN", "eiken100"],
-  ["SAMPLE_TEXT_SOUKEI", "soukei100"],
-  ["SAMPLE_TEXT_TOEIC", "toeic100"],
-  ["SAMPLE_TEXT_IELTS", "ielts100"],
+  ["SAMPLE_TEXT", "exam1500"],
+  ["SAMPLE_TEXT_JHS", "jhs1500"],
+  ["SAMPLE_TEXT_EIKEN", "eiken1500"],
+  ["SAMPLE_TEXT_SOUKEI", "soukei1500"],
+  ["SAMPLE_TEXT_TOEIC", "toeic1500"],
+  ["SAMPLE_TEXT_IELTS", "ielts1500"],
 ];
 // firstMeaning() がここで意味を切ってしまうので、意味に混ぜると後半が黙って消える。
 const SAMPLE_MEANING_SPLIT = /[、,，;；。．・/]/;
@@ -1308,7 +1308,7 @@ const BINARY_EXTENSIONS = new Set([
 // NUL混入検査は従来どおり「ソースとして扱う拡張子」だけを対象にする。
 // 新しい種類のバイナリ資産を足したときに、この検査が誤って落ちないようにするため。
 const SOURCE_TEXT_EXTENSIONS = new Set([
-  ".html", ".js", ".mjs", ".json", ".md", ".sql", ".txt", ".yml", ".yaml",
+  ".html", ".js", ".mjs", ".json", ".md", ".sql", ".txt", ".yml", ".yaml", ".xml",
 ]);
 
 // 走査対象は「gitが追跡しているファイル」を基準にする。公開されるのは追跡分だけであり、
