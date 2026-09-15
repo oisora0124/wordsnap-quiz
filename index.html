@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.127</span>
+        <span class="app-footer-version">バージョン 1.0.128</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.127";
+  const APP_REV = "1.0.128";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -21664,6 +21664,10 @@ function applyMergedRemoteState(remoteState, suppliedOptions) {
       // 一覧の選択は消えた語の分だけ外す（丸ごと消すと、10秒ごとの同期で他端末の変更が届くたびに
       // 一括操作の直前まで選んでいた選択が黙って全部解除されていた）。
       pruneSelection();
+      // 別の単語帳へ移された・表示範囲から外れた語の選択も外す。残すと「N件 選択中」なのにチェックが
+      // 見えず、そのまま「選んだ単語を削除」を押すと見えない語が消える（一括移動が選択を捨てるのと同じ理由）。
+      const scope = new Set(scopedWords().map((word) => word.id));
+      for (const id of [...selectedIds]) if (!scope.has(id)) selectedIds.delete(id);
       persistAppState({ sync: options.sync !== false });
     } finally {
       syncState.applyingRemote = false;
@@ -23983,13 +23987,19 @@ function renderDecks() {
   renderDeckStats();
 }
 
+let statusRepeatTimer = 0; // 同じ文の入れ直し待ち（別の文が来たら取り消す）
+
 function setStatus(message) {
   const text = String(message ?? "");
   // 同じ文をそのまま入れ直すと DOM に変化が無く、読み上げ（role="status"）が2回目を読まない
   // （2段階確認の案内を4秒後にもう一度出すとき等）。一度空にして次のタイミングで入れ直す。
+  // 入れ直しの前に別の文が来たら入れ直しは取り消す（取り消さないと新しい文が古い文で上書きされた）。
+  window.clearTimeout(statusRepeatTimer);
+  statusRepeatTimer = 0;
   if (text && elements.status.textContent === text) {
     elements.status.textContent = "";
-    window.setTimeout(() => {
+    statusRepeatTimer = window.setTimeout(() => {
+      statusRepeatTimer = 0;
       elements.status.textContent = text;
     }, 0);
     return;
@@ -26483,14 +26493,18 @@ const CANDIDATE_EMPTY_GUIDE_HTML =
   "<p>手順 1 で文字を貼り付けるか写真から読み取り、<strong>「単語リストに変換」</strong>を押すと、ここに候補が出ます。</p>" +
   '<button type="button" class="secondary" data-goto-step="import">手順 1（取り込む）へ</button>';
 
-function renderCandidates() {
+function renderCandidates(options = {}) {
   // 候補の欄を入力中（日本語入力の変換中を含む）に同期の反映などで作り直すと、フォーカスと未確定の
   // 文字が消える。入力中は作り直さず「次に描くべき」印だけ付け、欄から離れたとき（focusout）に描く。
-  if (
-    candidates.length > 0 &&
-    elements.candidateList?.contains?.(document.activeElement) &&
-    document.activeElement !== elements.candidateList
-  ) {
+  // 対象は入力欄（input/textarea）に焦点があるときだけ。削除ボタンなど一覧の中の他の要素に焦点が
+  // あるだけで止めると、削除ハンドラの描き直しまで止まり、画面と配列がずれて別の候補へ書き込まれた。
+  // 削除のように配列を変えた直後の描画は options.force で必ず描く。
+  const active = document.activeElement;
+  const editing =
+    Boolean(active) &&
+    (active.tagName === "INPUT" || active.tagName === "TEXTAREA") &&
+    elements.candidateList?.contains?.(active);
+  if (!options.force && candidates.length > 0 && editing) {
     dirtyPanels.add("candidates");
     return;
   }
@@ -30656,6 +30670,10 @@ function renderReviewQuiz() {
   }
   elements.quizScope.textContent = reviewScopeText();
 
+  // 採点済みの問題は描き直さない（最後の1問を採点した直後に同期で再描画されても、正誤の色と
+  // 完成文を保つ。「次の問題」で下の完了表示へ進む）。
+  if (currentQuiz?.answered) return;
+
   if (reviewSession.queue.length === 0) {
     elements.quizWord.textContent = "復習完了！";
     elements.choices.innerHTML = "";
@@ -30681,7 +30699,6 @@ function renderReviewQuiz() {
     return;
   }
 
-  if (currentQuiz.answered) return; // 採点済みは描き直さない（通常出題と同じ理由）
   renderQuizPromptWord(currentQuiz);
   renderChoices(currentQuiz.choices);
   autoSpeakCurrentQuiz(); // 復習クイズでも新しい問題の単語を1回だけ読み上げる
@@ -34605,7 +34622,7 @@ elements.candidateList.addEventListener("click", (event) => {
   if (!removeButton) return;
   const index = Number(removeButton.dataset.remove);
   candidates.splice(index, 1);
-  renderCandidates();
+  renderCandidates({ force: true }); // 配列を変えたので、入力欄に焦点があっても必ず描く
   // 再描画後も操作位置を見失わないよう、次の候補（末尾なら1つ前）へフォーカスを移す。
   const nextIndex = Math.min(index, candidates.length - 1);
   const nextTarget = nextIndex >= 0
