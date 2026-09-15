@@ -31,6 +31,14 @@ function extractFunction(name) {
   assert.fail(`function ${name} の終端が見つかること`);
 }
 
+// 上限などの定数は手書きせずHTMLから抜き出す。手書きすると本体だけ変わったときに
+// 砂場だけ古い値のまま通り、上限まわりの挙動を試していないのに緑になる。
+function extractConstant(name) {
+  const match = html.match(new RegExp(`^const ${name} = [^;\n]+;$`, "m"));
+  assert.ok(match, `const ${name} が見つかること`);
+  return match[0];
+}
+
 function makeWordRuntime() {
   const pieces = [
     "const LEARNING_SCHEMA_VERSION = 1;",
@@ -42,8 +50,8 @@ function makeWordRuntime() {
     "const TRASH_TTL_MS = 30 * DAY_MS;",
     "const SAFE_CEFR_LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);",
     "const SAFE_POS_TAGS = new Set(['n', 'v', 'adj', 'adv']);",
-    "const HISTORY_RAW_MAX = 50;",
-    "const HISTORY_DAILY_MAX_ENTRIES = 2000;",
+    extractConstant("HISTORY_RAW_MAX"),
+    extractConstant("HISTORY_DAILY_MAX_ENTRIES"),
     "const selectedIds = new Set();",
     "const clearSavedReviewProgress = () => false;",
     extractFunction("createId"),
@@ -56,6 +64,9 @@ function makeWordRuntime() {
     extractFunction("safeCefrLevel"),
     extractFunction("normalizeCefr"),
     extractFunction("normalizePos"),
+    extractFunction("compareHistoryEntries"),
+    extractFunction("historyEntryKey"),
+    extractFunction("dedupeHistoryEntries"),
     extractFunction("normalizeHistoryEntries"),
     extractFunction("emptyHistoryDaily"),
     extractFunction("compareHistoryDailyTokens"),

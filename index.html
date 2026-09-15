@@ -20396,7 +20396,7 @@ async function resolvePos(term) {
 function normalizeHistoryEntries(history) {
   if (!Array.isArray(history)) return [];
   const fallbackAt = new Date().toISOString();
-  return history
+  const entries = history
     .map((entry) => {
       let at = fallbackAt;
       try {
@@ -20409,8 +20409,40 @@ function normalizeHistoryEntries(history) {
         // 壊れた時刻は現在時刻へ倒し、インポート・同期経路へ例外を漏らさない
       }
       return { at, correct: Boolean(entry?.correct) };
-    })
-    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    });
+  return dedupeHistoryEntries(entries);
+}
+
+// 生の履歴の全順序。時刻が同じなら誤答→正解の順に決め打ちする。
+// 決めておかないと、同一時刻・正誤違いの2件の並びが `[...a, ...b]` の与え方で変わり、
+// 50件目から押し出されるのがどちらかも変わる＝マージが可換でなくなる。
+function compareHistoryEntries(a, b) {
+  const at = String(a.at).localeCompare(String(b.at));
+  if (at !== 0) return at;
+  return (a.correct ? 1 : 0) - (b.correct ? 1 : 0);
+}
+
+// 生の履歴の同一性。日別の記録（historyDaily）とそろえて **(UTC日, 秒, 正誤)** で見る。
+// ミリ秒まで区別すると、同じ秒の2件のうち片方だけが50件からあふれて日別へ移ったとき、
+// 生では2件・日別では1件と数えられ、カレンダーの解答数と正解数が食い違う。
+// at は ISO（UTC）に正規化済みなので、先頭19文字が「日＋秒」になる。
+function historyEntryKey(entry) {
+  return `${String(entry.at).slice(0, 19)}:${entry.correct ? 1 : 0}`;
+}
+
+// 並べてから重複を落とす（同一秒・同一正誤なら最も早いミリ秒の1件が残る）。
+// 先に並べるので、入力の与え方に依らず必ず同じ結果になる。at 自体は元のミリ秒を保つ。
+function dedupeHistoryEntries(entries) {
+  const sorted = [...entries].sort(compareHistoryEntries);
+  const seen = new Set();
+  const kept = [];
+  for (const entry of sorted) {
+    const key = historyEntryKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(entry);
+  }
+  return kept;
 }
 
 // 50件からあふれた解答を捨てずに残すための、語ごと・日ごとの学習の記録。
@@ -20445,11 +20477,15 @@ function normalizeHistoryDailyTokens(value) {
   for (const raw of value.split(",")) {
     const token = raw.trim();
     if (!/^[0-9a-z]{1,4}[+-]$/.test(token)) continue;
+    const seconds = parseInt(token.slice(0, -1), 36);
     // 1日は86400秒。それ以上は壊れた値なので捨てる（36進4桁は 1,679,615 まで表せる）
-    if (parseInt(token.slice(0, -1), 36) >= 86400) continue;
-    if (seen.has(token)) continue;
-    seen.add(token);
-    tokens.push(token);
+    if (!(seconds >= 0) || seconds >= 86400) continue;
+    // 必ず正規形（先頭ゼロなし）へ書き戻してから見る。文字列のまま比べると
+    // "0+" と "00+" が別のトークンとして両方残り、同じ解答を2回数えてしまう。
+    const canonical = seconds.toString(36) + token.slice(-1);
+    if (seen.has(canonical)) continue;
+    seen.add(canonical);
+    tokens.push(canonical);
   }
   return tokens.sort(compareHistoryDailyTokens).join(",");
 }
@@ -22142,16 +22178,13 @@ function mergeWord(localWord, remoteWord, source) {
 
 // 両端末の履歴の和集合を時刻順に返す（切り詰めはしない）。
 // あふれた分は呼び出し側が foldHistoryIntoDaily に通して日別へ残してから落とす。
+// 重複排除と並び順は dedupeHistoryEntries に任せる。同一性が日別とそろい、
+// 並びが入力順に依らないので、mergeWord(A,B) と mergeWord(B,A) が一致する。
 function mergeHistoryEntries(a = [], b = []) {
-  const entries = new Map();
-  [...a, ...b].forEach((entry) => {
-    if (!entry?.at) return;
-    entries.set(`${entry.at}:${entry.correct ? 1 : 0}`, {
-      at: entry.at,
-      correct: Boolean(entry.correct),
-    });
-  });
-  return [...entries.values()].sort((x, y) => String(x.at).localeCompare(String(y.at)));
+  const entries = [...(a || []), ...(b || [])]
+    .filter((entry) => entry?.at)
+    .map((entry) => ({ at: String(entry.at), correct: Boolean(entry.correct) }));
+  return dedupeHistoryEntries(entries);
 }
 
 // 日別の記録は日ごとに**トークン集合の和**を採る。和は可換・結合・冪等なので、

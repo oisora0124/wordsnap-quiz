@@ -54,6 +54,14 @@ function extractFunction(name) {
   throw new Error(`unbalanced braces for ${name}`);
 }
 
+// 上限などの定数は手書きせずHTMLから抜き出す。手書きすると本体だけ変わったときに
+// 砂場だけ古い値のまま通り、上限まわりの挙動を試していないのに緑になる。
+function extractConstant(name) {
+  const match = html.match(new RegExp(`^const ${name} = [^;\n]+;$`, "m"));
+  assert.ok(match, `const ${name} が見つかること`);
+  return match[0];
+}
+
 // `const NAME = ...;`（配列/Setを含む）を対応する括弧の末尾＋セミコロンまで切り出す。
 function extractConst(name) {
   const start = html.indexOf(`const ${name} `);
@@ -586,10 +594,13 @@ function buildGradeQuizSandbox() {
     "function renderQuiz() {}",
     extractFunction("currentQuizPromptMode"),
     // 採点直後の履歴の切り詰めは、捨てる分を日別へ畳み込む実コードをそのまま使う
-    "const HISTORY_RAW_MAX = 50;",
-    "const HISTORY_DAILY_MAX_ENTRIES = 2000;",
+    extractConstant("HISTORY_RAW_MAX"),
+    extractConstant("HISTORY_DAILY_MAX_ENTRIES"),
     extractFunction("nonNegativeNumber"),
     extractFunction("nonNegativeInteger"),
+    extractFunction("compareHistoryEntries"),
+    extractFunction("historyEntryKey"),
+    extractFunction("dedupeHistoryEntries"),
     extractFunction("normalizeHistoryEntries"),
     extractFunction("emptyHistoryDaily"),
     extractFunction("compareHistoryDailyTokens"),

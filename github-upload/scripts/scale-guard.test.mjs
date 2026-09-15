@@ -42,6 +42,14 @@ function extractFunction(name) {
   assert.fail(`function ${name} の終端が見つかること`);
 }
 
+// 上限などの定数は手書きせずHTMLから抜き出す。手書きすると本体だけ変わったときに
+// 砂場だけ古い値のまま通り、上限まわりの挙動を試していないのに緑になる。
+function extractConstant(name) {
+  const match = html.match(new RegExp(`^const ${name} = [^;\n]+;$`, "m"));
+  assert.ok(match, `const ${name} が見つかること`);
+  return match[0];
+}
+
 // word-merge.test.mjs と同じ依存順で組み立てる（スタブへ差し替えない）。
 function makeRuntime() {
   const pieces = [
@@ -54,13 +62,14 @@ function makeRuntime() {
     "const TRASH_TTL_MS = 30 * DAY_MS;",
     "const SAFE_CEFR_LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);",
     "const SAFE_POS_TAGS = new Set(['n', 'v', 'adj', 'adv']);",
-    "const HISTORY_RAW_MAX = 50;",
-    "const HISTORY_DAILY_MAX_ENTRIES = 2000;",
+    extractConstant("HISTORY_RAW_MAX"),
+    extractConstant("HISTORY_DAILY_MAX_ENTRIES"),
     "const selectedIds = new Set();",
     "const clearSavedReviewProgress = () => false;",
     ...[
       "createId", "sanitizeId", "normalizeTerm", "nonNegativeNumber", "nonNegativeInteger",
       "emptyEnrich", "normalizeEnrich", "safeCefrLevel", "normalizeCefr", "normalizePos",
+      "compareHistoryEntries", "historyEntryKey", "dedupeHistoryEntries",
       "normalizeHistoryEntries", "emptyHistoryDaily", "compareHistoryDailyTokens",
       "normalizeHistoryDailyTokens", "validHistoryDailyKey", "historyDailyDayCount",
       "trimHistoryDailyDays", "normalizeHistoryDaily", "historyDailyTokenFor",

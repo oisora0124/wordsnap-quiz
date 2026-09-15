@@ -32,6 +32,14 @@ function extractFunction(name) {
   assert.fail(`function ${name} の終端が見つかること`);
 }
 
+// 上限などの定数は手書きせずHTMLから抜き出す。手書きすると本体だけ変わったときに
+// 砂場だけ古い値のまま通り、上限まわりの挙動を試していないのに緑になる。
+function extractConstant(name) {
+  const match = html.match(new RegExp(`^const ${name} = [^;\n]+;$`, "m"));
+  assert.ok(match, `const ${name} が見つかること`);
+  return match[0];
+}
+
 function makeRuntime() {
   const pieces = [
     "const LEARNING_SCHEMA_VERSION = 1;",
@@ -40,8 +48,8 @@ function makeRuntime() {
     "const SRS_MAX_FUTURE_DAYS = 400;",
     "const SAFE_CEFR_LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);",
     "const SAFE_POS_TAGS = new Set(['n', 'v', 'adj', 'adv']);",
-    "const HISTORY_RAW_MAX = 50;",
-    "const HISTORY_DAILY_MAX_ENTRIES = 2000;",
+    extractConstant("HISTORY_RAW_MAX"),
+    extractConstant("HISTORY_DAILY_MAX_ENTRIES"),
     // buildDailyActivity・deckSharePayload が参照する状態。テストから差し替える。
     "const appState = { words: [], decks: [], activeDeckId: 'all' };",
     extractFunction("createId"),
@@ -54,6 +62,9 @@ function makeRuntime() {
     extractFunction("normalizeCefr"),
     extractFunction("normalizePos"),
     extractFunction("localDateString"),
+    extractFunction("compareHistoryEntries"),
+    extractFunction("historyEntryKey"),
+    extractFunction("dedupeHistoryEntries"),
     extractFunction("normalizeHistoryEntries"),
     extractFunction("emptyHistoryDaily"),
     extractFunction("compareHistoryDailyTokens"),
@@ -79,10 +90,19 @@ function makeRuntime() {
     extractFunction("canonicalDeckIdMapper"),
     extractFunction("deckSharePayload"),
     extractFunction("shouldPromoteInitialStep"),
+    // undoSignature を字面ではなく実際に動かして確かめるための依存一式。
+    "const DELETION_TTL_MS = 90 * 24 * 60 * 60 * 1000;",
+    "const TRASH_TTL_MS = 30 * 24 * 60 * 60 * 1000;",
+    extractFunction("normalizeTerm"),
+    extractFunction("trashKeyForWord"),
+    extractFunction("sanitizeDeletions"),
+    extractFunction("sanitizeTrash"),
+    extractFunction("normalizeStreak"),
+    extractFunction("undoSignature"),
     "globalThis.__rt = {" +
-      " localDateString, normalizeHistoryDaily, foldHistoryIntoDaily, mergeHistoryDaily," +
-      " mergeHistoryEntries, normalizeWord, mergeWord, buildDailyActivity, deckSharePayload," +
-      " shouldPromoteInitialStep," +
+      " localDateString, normalizeHistoryEntries, normalizeHistoryDaily, foldHistoryIntoDaily," +
+      " mergeHistoryDaily, mergeHistoryEntries, normalizeWord, mergeWord, buildDailyActivity," +
+      " deckSharePayload, shouldPromoteInitialStep, undoSignature," +
       " setState: (words, decks) => { appState.words = words; appState.decks = decks; } };",
   ];
   const context = {};
@@ -200,22 +220,57 @@ test("同じ履歴を何度畳み込んでも増えない（冪等）", () => {
   assert.deepEqual(plain(again.historyDaily), plain(once.historyDaily));
 });
 
-test("同じ秒・同じ正誤の解答は1件に畳まれる（符号化の限界）", () => {
-  // 1語を同一秒に2回採点した場合にだけ起きる。旧実装が同一ミリ秒を1件と見ていたのと同種。
+test("同じ秒・同じ正誤の解答は、生の履歴の段階で1件に畳まれる", () => {
+  // 生履歴の同一性も日別とそろえて (UTC日, 秒, 正誤)。ミリ秒まで区別していると、
+  // 同じ秒の2件のうち片方だけが50件からあふれたときに、生では2件・日別では1件と
+  // 数えられ、カレンダーの解答数と正解数が食い違う。
   const at = new Date(OLD_MS).toISOString();
   const history = [
     { at, correct: true },
-    { at: at.replace(".000Z", ".500Z"), correct: true }, // 同じ秒・同じ正誤
-    { at: at.replace(".000Z", ".700Z"), correct: false }, // 同じ秒・違う正誤は別トークン
+    { at: at.replace(".000Z", ".500Z"), correct: true }, // 同じ秒・同じ正誤 → 畳まれる
+    { at: at.replace(".000Z", ".700Z"), correct: false }, // 同じ秒・違う正誤 → 別の1件
     ...answersFrom(BASE_MS, 50),
   ];
 
-  const folded = rt.foldHistoryIntoDaily(history, null);
+  const entries = rt.normalizeHistoryEntries(history);
+  assert.equal(entries.length, 52, "53件のうち同一秒・同一正誤の2件が1件になる");
+  assert.equal(entries[0].at, at, "残るのは同じ秒の中で最も早いミリ秒（at はそのまま）");
 
+  const folded = rt.foldHistoryIntoDaily(history, null);
   assert.equal(folded.history.length, 50);
   const second = tokenFor({ at, correct: true }).slice(0, -1);
   assert.deepEqual(plain(folded.historyDaily.days), { [OLD_DAY]: `${second}+,${second}-` });
-  assert.equal(totalAnswers(folded.historyDaily), 2, "3件のうち同一秒・同一正誤の2件が1件になる");
+  assert.equal(totalAnswers(folded.historyDaily), 2);
+});
+
+test("同じ秒の2件が生と日別へ分かれても、カレンダーの合計が食い違わない", () => {
+  // レビュー（Codex high）の再現条件。00:00:00.100 と 00:00:00.900 がどちらも正解で
+  // 並び、51件目の押し出しで片方だけ日別へ移ると、ミリ秒で数える実装では
+  // answers 51 / correct 2、日別の同一性では 50 / 1 と、同じ解答の数え方が割れていた。
+  const base = new Date(OLD_MS).toISOString().replace(".000Z", "");
+  const history = [
+    { at: `${base}.100Z`, correct: true },
+    { at: `${base}.900Z`, correct: true },
+    ...answersFrom(BASE_MS, 50),
+  ];
+
+  const word = rt.normalizeWord({ id: "w1", term: "apple", meaning: "りんご", history });
+  const byDay = rt.buildDailyActivity([word]);
+  const answers = [...byDay.values()].reduce((sum, day) => sum + day.answers, 0);
+  const correct = [...byDay.values()].reduce((sum, day) => sum + day.correct, 0);
+
+  assert.equal(answers, 51, "同一秒・同一正誤の2件は1件として数える");
+  assert.equal(correct, 26, "正解数も同じ数え方になる（50件中25件＋畳んだ1件）");
+  // 生の履歴と日別で同じ解答が二重に数えられていないこと
+  assert.equal(word.history.length + totalAnswers(word.historyDaily), 51);
+});
+
+test("先頭ゼロのトークン（0+ と 00+）は同じ解答として1件にまとめる", () => {
+  const daily = rt.normalizeHistoryDaily({
+    days: { "2026-07-01": "00+,0+,000+,0-,001-,1-" },
+  });
+
+  assert.deepEqual(plain(daily.days), { "2026-07-01": "0+,0-,1-" });
 });
 
 // ============================================================================
@@ -336,6 +391,37 @@ test("マージは左右を入れ替えても履歴と日別が同じになる�
 
   assert.deepEqual(plain(ab.history), plain(ba.history));
   assert.deepEqual(plain(ab.historyDaily), plain(ba.historyDaily));
+});
+
+test("同一秒・正誤違いを含む履歴でも、マージは左右を入れ替えて JSON 一致する", () => {
+  // 生履歴の並びが (at, correct) で全順序になっていないと、同一時刻の正誤2件の順番が
+  // `[...a, ...b]` の与え方で変わり、50件目から押し出されるのがどちらかも変わる
+  // ＝ mergeWord が可換でなくなる。
+  const at = new Date(OLD_MS).toISOString();
+  const shared = answersFrom(BASE_MS, 49);
+  const deviceA = rt.normalizeWord({
+    id: "w1", term: "apple", meaning: "りんご",
+    history: [{ at, correct: true }, ...shared],
+  });
+  const deviceB = rt.normalizeWord({
+    id: "w1", term: "apple", meaning: "りんご",
+    history: [{ at, correct: false }, ...shared],
+  });
+
+  const ab = rt.mergeWord(deviceA, deviceB, "remote");
+  const ba = rt.mergeWord(deviceB, deviceA, "remote");
+
+  assert.equal(
+    JSON.stringify([plain(ab.history), plain(ab.historyDaily)]),
+    JSON.stringify([plain(ba.history), plain(ba.historyDaily)]),
+    "history も historyDaily も入れ替えで変わらないこと",
+  );
+  // 51件になるので1件だけ日別へ落ちる。落ちるのは同一時刻のうち誤答（タイブレークで先）。
+  assert.equal(ab.history.length, 50);
+  assert.deepEqual(
+    plain(ab.historyDaily.days),
+    { [OLD_DAY]: `${tokenFor({ at, correct: false })}` },
+  );
 });
 
 test("3端末×60件のマージは結合的で、生50＋日別130の真値180になる", () => {
@@ -501,9 +587,14 @@ test("個人キーをURLへ載せる rememberSyncIdInUrl でも noindex を付�
 });
 
 test("履歴の上限値はHTMLの定数とテストの前提が一致している", () => {
-  // 砂場では定数を手書きしているので、本体だけ変わったときに気付けるようにする。
-  assert.match(html, /const HISTORY_RAW_MAX = 50;/);
-  assert.match(html, /const HISTORY_DAILY_MAX_ENTRIES = 2000;/);
+  // 砂場はHTMLから定数を抜き出すので値のずれ自体は起きないが、上限はテスト本文の
+  // 期待値（2000件・50件）と設計書の容量見積が前提にしている数でもある。
+  // 変えるときは両方を直す合図として、ここで値そのものを固定しておく。
+  assert.equal(extractConstant("HISTORY_RAW_MAX"), "const HISTORY_RAW_MAX = 50;");
+  assert.equal(
+    extractConstant("HISTORY_DAILY_MAX_ENTRIES"),
+    "const HISTORY_DAILY_MAX_ENTRIES = 2000;",
+  );
   assert.doesNotMatch(html, /foldedThrough/, "廃止した水位が残っていないこと");
 });
 
@@ -563,24 +654,35 @@ test("単語帳の共有には学習の記録（日別を含む）を載せな�
 // ============================================================================
 
 test("Undoの指紋は日別の記録も見る（日別だけ増えた同期を『変更なし』にしない）", () => {
-  const body = extractFunction("undoSignature");
-  assert.match(body, /w\.historyDaily/, "undoSignature が historyDaily を含むこと");
-
-  // 「日別だけが違う2つの状態」で指紋が変わることを、実コードの範囲で確かめる。
-  const base = rt.normalizeWord({
+  // 字面ではなく undoSignature を実際に動かして確かめる。含めないと、日別だけが
+  // 増えたリモートを取り込んだ直後に「変更なし」と判定され、直前の操作のUndoが
+  // 残り続けて、押すと日別の記録まで巻き戻る。
+  const word = rt.normalizeWord({
     id: "w1",
     term: "apple",
     meaning: "りんご",
+    deckId: "deckone",
     history: answersFrom(BASE_MS, 10),
   });
-  const withDaily = { ...base, historyDaily: { days: { [OLD_DAY]: "5+,9-" } } };
+  const stateWith = (daily) => ({
+    words: [{ ...word, historyDaily: daily }],
+    decks: [{ id: "deckone", name: "単語帳", updatedAt: 0 }],
+    deletions: {},
+    trash: [],
+    quizCounter: 3,
+    streak: { count: 2, last: "", best: 2 },
+  });
 
-  // undoSignature 自体は sanitizeDeletions 等に依存するので、ここでは
-  // 指紋が見る語の並び（normalizeWord の結果）が違うことだけを固定する。
-  assert.notEqual(
-    JSON.stringify(rt.normalizeWord(withDaily).historyDaily),
-    JSON.stringify(base.historyDaily),
-    "日別の違いが正規化後にも残ること",
+  const before = rt.undoSignature(stateWith({ days: {} }));
+  const after = rt.undoSignature(stateWith({ days: { [OLD_DAY]: "5+,9-" } }));
+
+  assert.notEqual(after, before, "日別だけが違えば指紋も変わること");
+  // 日別以外が同じなら指紋も一致する（余計な差分でUndoを壊さない）
+  assert.equal(rt.undoSignature(stateWith({ days: {} })), before);
+  assert.equal(
+    rt.undoSignature(stateWith({ days: { [OLD_DAY]: "9-,5+,5+" } })),
+    after,
+    "並びと重複だけが違う日別は同じ指紋になること",
   );
 });
 

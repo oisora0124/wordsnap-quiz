@@ -761,11 +761,22 @@ const htmlFunctionSource = (name) => {
   assert.fail(`end of ${name} is missing`);
 };
 const historyCompactionSource = [
+  "compareHistoryEntries", "historyEntryKey", "dedupeHistoryEntries",
   "normalizeHistoryEntries", "emptyHistoryDaily", "compareHistoryDailyTokens",
   "normalizeHistoryDailyTokens", "validHistoryDailyKey", "historyDailyDayCount",
   "trimHistoryDailyDays", "normalizeHistoryDaily", "historyDailyTokenFor",
   "foldHistoryIntoDaily",
 ].map(htmlFunctionSource).join("\n");
+
+// 上限の定数も手書きしない。砂場だけ古い値のまま残ると、上限まわりの挙動を
+// 試していないのに検査が通ってしまう（実際に 3000 -> 2000 の変更で取り残された）。
+const htmlConstantSource = (name) => {
+  const match = publicHtml.match(new RegExp(`^const ${name} = [^;\\n]+;$`, "m"));
+  assert.ok(match, `const ${name} source is missing`);
+  return match[0];
+};
+const historyLimitSource = ["HISTORY_RAW_MAX", "HISTORY_DAILY_MAX_ENTRIES"]
+  .map(htmlConstantSource).join("\n");
 
 // 進捗時刻の判定は削除の巻き添えを防ぐ要なので、スタブを書かず公開HTMLの実装をそのまま持ち込む。
 const progressMsStart = publicHtml.indexOf("function wordProgressMs(");
@@ -789,8 +800,7 @@ new Script(
     "const mergeStreaks = (a, b) => a || b || {};\n" +
     "const emptyEnrich = () => ({ examples: null, etymology: null, synonyms: null, collocations: null });\n" +
     "const normalizeState = (value) => value;\n" +
-    "const HISTORY_RAW_MAX = 50;\n" +
-    "const HISTORY_DAILY_MAX_ENTRIES = 3000;\n" +
+    `${historyLimitSource}\n` +
     `${historyCompactionSource}\n` +
     `${publicHtml.slice(mergeStateStart, mergeStateEnd)}\n` +
     "globalThis.__mergeAppStates = mergeAppStates;\n" +
