@@ -110,6 +110,33 @@ test("出ていないカードだけを挙げる（出ているものは案内�
   assert.match(card, /1件/, "件数が合っていない");
 });
 
+test("CEFR の説明（折りたたみ）は開閉を覚え、カードを作り直しても開いたまま（1.0.112）", () => {
+  const build = (open) => {
+    const sandbox = {};
+    new Script(
+      [
+        extractConst("CEFR_ORDER"),
+        extractConst("CEFR_LEVEL_GUIDE"),
+        extractFunction("escapeHtml"),
+        `let statsCefrGuideOpen = ${open};`,
+        extractFunction("cefrGuideMarkup"),
+        "globalThis.__m = cefrGuideMarkup();",
+      ].join("\n\n"),
+      { filename: "stats-cefr-guide.js" },
+    ).runInNewContext(sandbox);
+    return sandbox.__m;
+  };
+  assert.match(build(false), /<details class="stats-cefr-guide">/, "既定は閉じた状態");
+  assert.match(build(true), /<details class="stats-cefr-guide" open>/, "開いていたら作り直しても open");
+  // 開閉は toggle（上へ伝わらないので捕捉フェーズ）で覚え、成績を開き直したときは既定へ戻す
+  assert.match(
+    html,
+    /elements\.statsGrid\?\.addEventListener\(\s*"toggle",[^]*?stats-cefr-guide[^]*?statsCefrGuideOpen = details\.open;[^]*?true,\s*\);/,
+    "toggle を捕捉して開閉を覚える",
+  );
+  assert.match(html, /statsFilterOpen = false;\n\s*statsCefrGuideOpen = false;/, "成績を開き直したら既定に戻す");
+});
+
 test("CEFRは、あと何語で出るのかを数字で言う", () => {
   const words = [
     ...Array.from({ length: 4 }, (_, i) => ({ id: `a${i}`, cefr: { level: "B1" } })),
