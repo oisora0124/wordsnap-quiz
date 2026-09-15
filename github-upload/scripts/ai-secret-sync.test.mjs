@@ -54,6 +54,7 @@ const FUNCTIONS = [
   "aiKeyStorageKey",
   "aiKeysPersisted",
   "getAiKey",
+  "forgetGroqModel", // 1.0.122: setAiKey が Groq のモデル記憶を忘れる
   "setAiKey",
   "aiKeySyncEnabled",
   "readAiSecretStamps",
@@ -139,6 +140,8 @@ function makeApp({
     sessionStorage,
     AI_PROVIDERS: [{ id: "gemini" }, { id: "groq" }],
     GEMINI_MODEL_PREF_KEY: "wordsnap-gemini-model",
+    GROQ_MODEL_PREF_KEY: "wordsnap-groq-model",
+    groqModelMemory: "",
     geminiModelMemory: new Map(),
     geminiUnavailableModels: new Map(),
     shortKeyFingerprint: (v) => String(v).slice(0, 6),

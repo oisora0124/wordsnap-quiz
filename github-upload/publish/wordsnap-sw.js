@@ -107,7 +107,11 @@ self.addEventListener("fetch", (event) => {
             .then(() => response);
         }
         return response;
-      });
+      }).catch(
+        // オフラインで未キャッシュの資産（OCR の実行コード・言語データ等）は、拒否のまま返さず
+        // ネットワークエラー応答として返す（SW 側で未処理の拒否を残さない。挙動は同じ）
+        () => Response.error(),
+      );
     }),
   );
 });
