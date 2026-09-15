@@ -130,3 +130,32 @@ test("Groq: 200 でも本文が読めなければ「使えた」と覚えない�
   await assert.rejects(sandbox.__g.groqChatCompletion("gsk_x", { messages: [] }, undefined));
   assert.equal(storage["wordsnap-groq-model:v1"], undefined);
 });
+
+test("Groq: キーを差し替えたら使えたモデルの記憶を忘れて先頭から試し直す（1.0.122）", () => {
+  const storage = { "wordsnap-groq-model:v1": "qwen/qwen3.6-27b" };
+  const sandbox = {
+    localStorage: { getItem: (k) => (k in storage ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v); }, removeItem: (k) => { delete storage[k]; } },
+  };
+  new Script(
+    [
+      extractConst("GROQ_MODELS"),
+      extractConst("GROQ_MODEL_PREF_KEY"),
+      "let groqModelMemory = '';",
+      extractFunction("rememberedGroqModel"),
+      extractFunction("forgetGroqModel"),
+      extractFunction("groqModelOrder"),
+      "globalThis.__g = { groqModelOrder, forgetGroqModel };",
+    ].join("\n\n"),
+    { filename: "ai-models-forget.js" },
+  ).runInNewContext(sandbox);
+  assert.equal(sandbox.__g.groqModelOrder()[0], "qwen/qwen3.6-27b", "前のキーで使えたモデルが先頭");
+  sandbox.__g.forgetGroqModel();
+  assert.equal(sandbox.__g.groqModelOrder()[0], "qwen/qwen3.8-27b", "忘れたら最新から");
+  assert.equal(storage["wordsnap-groq-model:v1"], undefined);
+  assert.match(extractFunction("setAiKey"), /if \(id === "groq" && previous !== v\) forgetGroqModel\(\);/, "キー差し替えで忘れる配線");
+});
+
+test("設定の説明と起動: 保存先の文言は同期ONの場合に触れ、テーマ・設定の初期化は保存領域の例外で止まらない（1.0.122）", () => {
+  assert.match(html, /キーは<strong>既定ではこの端末のブラウザにだけ<\/strong>保存され[^<]*（下の「APIキーも他の端末と同期する」をオンにした場合だけ、暗号化して自分の端末どうしで同期します）/);
+  assert.match(html, /for \(const init of \[initTheme, initSettingsAccordionState, initSettings, initContextGenSettings\]\) \{\s*try \{\s*init\(\);\s*\} catch \{/);
+});
