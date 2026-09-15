@@ -6943,7 +6943,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.111</span>
+        <span class="app-footer-version">バージョン 1.0.112</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7081,7 +7081,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.111";
+  const APP_REV = "1.0.112";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -31340,7 +31340,7 @@ function cefrGuideMarkup() {
     );
   }).join("");
   return (
-    `<details class="stats-cefr-guide">` +
+    `<details class="stats-cefr-guide"${statsCefrGuideOpen ? " open" : ""}>` +
     `<summary>CEFR（A1〜C2）とは</summary>` +
     `<p>ヨーロッパで作られた語学力の共通ものさしで、A1がいちばんやさしく、C2がいちばん難しい6段階です。` +
     `WordBankでは<strong>単語ごとの難しさ</strong>の目安として使い、やさしい順の出題や絞り込みに利用します。</p>` +
@@ -31509,6 +31509,10 @@ function statsAccuracyCard(byDay) {
 // 折りたたみの開閉も覚えておく。作り直したときに閉じてしまうと、続けて2冊目を選べない。
 let statsDeckIds = new Set();
 let statsFilterOpen = false;
+// 「CEFR（A1〜C2）とは」の開閉。成績のカードは innerHTML で丸ごと作り直すので、覚えていないと
+// 採点・同期の反映・カレンダーの更新など再描画のたびに閉じて、読んでいる途中で消えてしまう。
+// 成績を閉じて開き直したときは既定（閉じた状態）に戻す（普段の見え方を変えない）。
+let statsCefrGuideOpen = false;
 
 // 絞り込みを適用した単語。空＝すべて。
 function statsScopedWords() {
@@ -32044,6 +32048,7 @@ function openStreakPanel() {
   // 残すと、あとで見たときに絞られたままなのに気づかない事故が起きる。
   statsDeckIds = new Set();
   statsFilterOpen = false;
+  statsCefrGuideOpen = false;
   if (elements.statsFilter) elements.statsFilter.dataset.signature = "";
   panel.hidden = false;
   elements.streakBadge?.setAttribute("aria-expanded", "true");
@@ -34449,6 +34454,16 @@ elements.statsFilter?.addEventListener(
   (event) => {
     const details = event.target;
     if (details?.classList?.contains("stats-deck-filter")) statsFilterOpen = details.open;
+  },
+  true,
+);
+
+// 「CEFR（A1〜C2）とは」の開閉を覚える（絞り込みと同じ理由。カードは再描画で作り直される）。
+elements.statsGrid?.addEventListener(
+  "toggle",
+  (event) => {
+    const details = event.target;
+    if (details?.classList?.contains("stats-cefr-guide")) statsCefrGuideOpen = details.open;
   },
   true,
 );
