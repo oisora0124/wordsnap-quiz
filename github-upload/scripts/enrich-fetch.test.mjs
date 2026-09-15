@@ -308,3 +308,58 @@ test("和訳の後追い: 同じ語・種類の後追いは同時に1本だけ�
   assert.equal(persisted.length, 1);
   assert.equal(sandbox.__b.backfillInFlight.size, 0, "終わったら進行中の記録を消す");
 });
+
+test("クイズ用: throwIfUnconfirmed なら、未確定の未収録は null を返さず一時的な失敗として投げる（1.0.117）", async () => {
+  const { Enrich } = enrichSandbox((url) => {
+    if (host(url) === "api.dictionaryapi.dev") return { status: 522, body: null };
+    if (host(url) === "freedictionaryapi.com") return { status: 200, body: FREEDICT_EMPTY };
+    if (host(url) === "en.wiktionary.org") return { status: 404, body: null };
+    return { status: 200, body: [] };
+  });
+  await assert.rejects(Enrich.record("apple", { throwIfUnconfirmed: true }), (e) => e.transient === true);
+  assert.equal(await Enrich.record("apple"), null, "「詳しく」向けの既定は null（未収録として表示、確定はしない）");
+  // 全源が確定して「無い」なら、指定があっても null
+  const all404 = enrichSandbox(() => ({ status: 404, body: null }));
+  assert.equal(await all404.Enrich.record("zzz", { throwIfUnconfirmed: true }), null);
+  assert.match(html, /window\.Enrich\.record\(term, \{ throwIfUnconfirmed: true \}\)/, "クイズの例文取得はこの指定で呼ぶ");
+});
+
+test("和訳の後追い: 前に取れなかった（null）項目も次に開いたときに取り直す。また取れなければ保存も再描画もしない（1.0.118）", async () => {
+  let nextResult = null;
+  const persisted = [];
+  const section = { isConnected: true, innerHTML: "" };
+  const chip = { getAttribute: () => "true", closest: () => ({ querySelector: () => section }) };
+  const requested = [];
+  const sandbox = {
+    document: { querySelector: () => chip },
+    window: { Translate: { translateBatch: async (texts) => { requested.push(texts); return texts.map(() => nextResult); } } },
+    persistAppState: () => persisted.push(1),
+    enrichSectionShell: (type, inner) => inner,
+    enrichBody: (type, data) => JSON.stringify(data),
+    normalizeEtymologyData: (d) => d,
+    normalizeSynonymsData: (d) => d,
+  };
+  new Script(
+    [
+      extractFunction("normalizeEnrichSource"),
+      extractFunction("normalizeExamplesData"),
+      "const backfillInFlight = new Map();",
+      extractFunction("backfillTranslations"),
+      extractFunction("liveEnrichTargets"),
+      "async " + extractFunction("backfillTranslationsOnce"),
+      "globalThis.__b = { backfillTranslations };",
+    ].join("\n\n"),
+    { filename: "backfill-retry.js" },
+  ).runInNewContext(sandbox);
+  const word = { id: "w1", term: "apple", enrich: { examples: { examples: [{ en: "I ate an apple.", ja: null }, { en: "Apples keep well.", ja: "りんごは日持ちする。" }], definitions: [] } } };
+  await sandbox.__b.backfillTranslations("examples", word, section, chip);
+  assert.equal(JSON.stringify(requested[0]), JSON.stringify(["I ate an apple."]), "取れなかった項目だけ取り直す（取れている項目は送らない）");
+  assert.equal(word.enrich.examples.examples[0].ja, null, "また取れなければ null のまま");
+  assert.equal(persisted.length, 0, "変わらなければ保存しない");
+  assert.equal(section.innerHTML, "", "変わらなければ再描画しない");
+  nextResult = "私はりんごを食べた。";
+  await sandbox.__b.backfillTranslations("examples", word, section, chip);
+  assert.equal(word.enrich.examples.examples[0].ja, "私はりんごを食べた。", "取れたら置き換わる");
+  assert.equal(persisted.length, 1);
+  assert.match(section.innerHTML, /私はりんごを食べた。/);
+});
