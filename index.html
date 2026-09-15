@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.120</span>
+        <span class="app-footer-version">バージョン 1.0.121</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.120";
+  const APP_REV = "1.0.121";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -32528,6 +32528,9 @@ function updateStreakOnAnswer() {
   try {
     const today = localDateString();
     const streak = normalizeStreak(appState.streak);
+    // 丸めた結果（未来日付→今日）はその場で確定する。確定しないと、未来日付の記録が残ったまま
+    // 毎回「今日」に丸められて下の分岐に入らず、開いたままの端末では日付をまたいでも連続日数が増えない。
+    if (String(appState.streak?.last || "") !== streak.last) appState.streak = streak;
     if (streak.last !== today) {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
@@ -35390,13 +35393,16 @@ elements.clearSelectionButton.addEventListener("click", () => {
 function deckSharePayload(deckId) {
   const deck = appState.decks.find((item) => item.id === deckId);
   if (!deck) return null;
+  const canon = canonicalDeckIdMapper(appState.decks);
   return {
     kind: "wordbank-deck",
     version: 1,
     exportedAt: new Date().toISOString(),
     deck: { name: deck.name },
+    // 同名の単語帳は同期のマージで1つに統合される（代表ID）。表示中のIDだけで絞ると、同名の別IDに
+    // ある語が共有から抜けるので、移動・削除の判定と同じ対応表で「同じ単語帳」とみなす語を全部含める。
     words: appState.words
-      .filter((word) => word.deckId === deckId)
+      .filter((word) => canon(word.deckId) === canon(deckId))
       .map((word) => ({
         term: word.term,
         meaning: word.meaning,
@@ -35811,9 +35817,11 @@ elements.importConfirmButton?.addEventListener("click", async () => {
     const imported = pendingImport;
     const importedCredential = pendingImportV2Credential;
     const snapshot = snapshotState();
+    const before = appState; // 保存に失敗したら置き換え前へ返す
     const previousWords = appState.words;
     const previousDecks = appState.decks || [];
     const previousDeletions = appState.deletions || {};
+    const previousTrash = appState.trash || [];
     // 読み込んだ状態に同名の単語帳が複数あれば、同期のマージと同じ形（先頭へ統合）に先に揃える。
     // 揃えないと、読み込んだ側の墓標や語の所属が同期の同一性とずれ、戻した語が次の同期で消える。
     appState = consolidateSameNameDecks(normalizeState(imported));
@@ -35845,8 +35853,26 @@ elements.importConfirmButton?.addEventListener("click", async () => {
     // （削除より前に書き出したバックアップで戻す場合）。同期先にだけ残る墓標は手元で見えないので、
     // ここでは救えない（従来どおり）。
     for (const word of appState.words) reviveAgainstDeletion(word);
+    // 置換前の「削除済み」（ゴミ箱、30日）も引き継ぐ。墓標は引き継ぐのにゴミ箱の実体だけ捨てると、
+    // 同期していない端末ではその語を二度と手元から戻せない（同期端末は次の合流でサーバー経由で戻る）。
+    // 単語帳IDは墓標と同じ対応表で読み替える。同じ語は新しい削除の方を採る（同期のマージと同じ）。
+    appState.trash = mergeTrashEntries([appState.trash || [], previousTrash], remapDeck);
+    // 端末への保存が済んだことを確かめてから成功と伝える（共有単語帳の追加・元に戻すと同じ）。
+    // 従来は投げっぱなしの保存で「読み込みました」と出し、保存できない端末では再読込で置き換え前に
+    // 戻るのに、墓標つきの置き換え後の状態だけがサーバーへ送られていた。失敗したら置き換え前へ返す。
+    const persisted = await persistAppStateChecked();
+    if (!persisted) {
+      appState = before;
+      invalidatePersonalFactorCache();
+      renderAll();
+      setStatus(
+        "端末に保存できなかったため、読み込みを取り消しました（保存領域が使えないか、いっぱいです）。空き容量を確認して、もう一度お試しください。",
+      );
+      return;
+    }
     currentQuiz = null;
-    saveState();
+    clearUndo();
+    renderAll();
     offerUndo(snapshot);
     trackUsage("json-import");
     if (importedCredential && !getActiveV2Credential()) {

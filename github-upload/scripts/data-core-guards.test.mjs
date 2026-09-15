@@ -762,6 +762,11 @@ test("JSON読み込み（確定）: 置換前の墓標を引き継ぎ、戻し�
     "let __status = []; let __saved = 0; let __undo = 0; let __hidden = 0;",
     "function setStatus(m) { __status.push(m); }",
     "function saveState() { __saved += 1; }",
+    // 1.0.121: 置き換えは保存を確かめ（persistAppStateChecked）、ゴミ箱を引き継ぐ（mergeTrashEntries）
+    "async function persistAppStateChecked() { __saved += 1; return true; }",
+    "function mergeTrashEntries(sources) { return sources.flat(); }",
+    "function clearUndo() {}",
+    "function renderAll() {}",
     "function offerUndo() { __undo += 1; }",
     "function snapshotState() { return JSON.parse(JSON.stringify(appState)); }",
     "function normalizeState(s) { const c = JSON.parse(JSON.stringify(s)); c.deletions = c.deletions || {}; return c; }",
@@ -1050,6 +1055,11 @@ test("JSON読み込み（確定）: 同名で別IDの単語帳は同じ単語帳
     "let __status = [];",
     "function setStatus(m) { __status.push(m); }",
     "function saveState() {}",
+    // 1.0.121: 置き換えは保存を確かめ、ゴミ箱を引き継ぐ
+    "async function persistAppStateChecked() { return true; }",
+    "function mergeTrashEntries(sources) { return sources.flat(); }",
+    "function clearUndo() {}",
+    "function renderAll() {}",
     "function offerUndo() {}",
     "function snapshotState() { return JSON.parse(JSON.stringify(appState)); }",
     "function invalidatePersonalFactorCache() {}",
@@ -1130,6 +1140,11 @@ test("JSON読み込み（確定）: 置換前の墓標は単語帳IDを読み替
     "const elements = { importConfirmButton: { disabled: false, dataset: {} } };",
     "function setStatus() {}",
     "function saveState() {}",
+    // 1.0.121: 置き換えは保存を確かめ、ゴミ箱を引き継ぐ
+    "async function persistAppStateChecked() { return true; }",
+    "function mergeTrashEntries(sources) { return sources.flat(); }",
+    "function clearUndo() {}",
+    "function renderAll() {}",
     "function offerUndo() {}",
     "function snapshotState() { return JSON.parse(JSON.stringify(appState)); }",
     "function invalidatePersonalFactorCache() {}",
@@ -1221,6 +1236,11 @@ test("JSON読み込み（確定）: 読み込んだ側に同名の単語帳が�
     "const elements = { importConfirmButton: { disabled: false, dataset: {} } };",
     "function setStatus() {}",
     "function saveState() {}",
+    // 1.0.121: 置き換えは保存を確かめ、ゴミ箱を引き継ぐ
+    "async function persistAppStateChecked() { return true; }",
+    "function mergeTrashEntries(sources) { return sources.flat(); }",
+    "function clearUndo() {}",
+    "function renderAll() {}",
     "function offerUndo() {}",
     "function snapshotState() { return JSON.parse(JSON.stringify(appState)); }",
     "function invalidatePersonalFactorCache() {}",
@@ -1314,6 +1334,11 @@ test("JSON読み込み（確定）: 読み込んだデータ自身の墓標が�
     "const elements = { importConfirmButton: { disabled: false, dataset: {} } };",
     "function setStatus() {}",
     "function saveState() {}",
+    // 1.0.121: 置き換えは保存を確かめ、ゴミ箱を引き継ぐ
+    "async function persistAppStateChecked() { return true; }",
+    "function mergeTrashEntries(sources) { return sources.flat(); }",
+    "function clearUndo() {}",
+    "function renderAll() {}",
     "function offerUndo() {}",
     "function snapshotState() { return JSON.parse(JSON.stringify(appState)); }",
     "function invalidatePersonalFactorCache() {}",
@@ -1503,4 +1528,41 @@ test("元に戻す: 保存を待つ間に同期の反映で状態が差し替わ
   assert.equal(u.getState().words.some((w) => w.id === "c"), true, "同期で入った語を捨ててはいけない");
   assert.equal(u.hasUndo(), false, "指紋が合わなくなった控えは消す");
   assert.match(u.status().at(-1), /同期の反映と重なったため/);
+});
+
+test("ストリーク: 未来日付の記録は解答時に「今日」へ丸めて確定し、翌日に連続日数が増える（1.0.121）", () => {
+  const sandbox = { appState: { streak: { count: 3, last: "2999-01-01", best: 3 } }, renderStreakBadge() {} };
+  new Script(
+    [
+      extractFunction("localDateString"),
+      extractFunction("normalizeStreak"),
+      extractFunction("updateStreakOnAnswer"),
+      "globalThis.__s = { updateStreakOnAnswer, localDateString };",
+    ].join("\n\n"),
+    { filename: "streak.js" },
+  ).runInNewContext(sandbox);
+  sandbox.__s.updateStreakOnAnswer();
+  const today = sandbox.__s.localDateString();
+  assert.equal(sandbox.appState.streak.last, today, "未来日付を今日に丸めて書き戻す");
+  assert.equal(sandbox.appState.streak.count, 3, "日数は捨てない");
+  // 翌日（記録が昨日になった状態）に解くと連続日数が増える
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  sandbox.appState.streak = { count: 3, last: sandbox.__s.localDateString(y), best: 3 };
+  sandbox.__s.updateStreakOnAnswer();
+  assert.equal(sandbox.appState.streak.count, 4);
+  assert.equal(sandbox.appState.streak.last, today);
+});
+
+test("JSON の置き換え読み込み: ゴミ箱を引き継ぎ、保存を確かめてから成功と伝える。共有単語帳の書き出しは同名の別IDの語も含める（1.0.121）", () => {
+  const start = html.indexOf('elements.importConfirmButton?.addEventListener("click", async () => {');
+  const body = html.slice(start, html.indexOf("\n});\n", start));
+  assert.match(body, /const previousTrash = appState\.trash \|\| \[\];/);
+  assert.match(body, /appState\.trash = mergeTrashEntries\(\[appState\.trash \|\| \[\], previousTrash\], remapDeck\);/, "置換前のゴミ箱を墓標と同じ対応表で引き継ぐ");
+  const awaitAt = body.indexOf("await persistAppStateChecked()");
+  assert.ok(awaitAt > 0, "保存を確かめる");
+  assert.match(body.slice(awaitAt), /if \(!persisted\) \{\s*appState = before;[\s\S]*?読み込みを取り消しました/, "失敗したら置き換え前へ返す");
+  assert.match(body.slice(awaitAt), /clearUndo\(\);\s*renderAll\(\);\s*offerUndo\(snapshot\);/, "保存できてから取り消しを差し替える");
+  assert.equal(body.includes("saveState();"), false, "投げっぱなしの保存は使わない");
+  const share = extractFunction("deckSharePayload");
+  assert.match(share, /const canon = canonicalDeckIdMapper\(appState\.decks\);[\s\S]*?\.filter\(\(word\) => canon\(word\.deckId\) === canon\(deckId\)\)/);
 });
