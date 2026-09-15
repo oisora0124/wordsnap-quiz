@@ -377,6 +377,8 @@ function buildDirectionListenerSandbox() {
       " removeItem: (k) => { delete __store[k]; } };",
     "const __soundCalls = [];",
     "function playSound(name) { __soundCalls.push(name); }",
+    // 1.0.129 A: ハンドラ末尾から呼ばれる（畳んだ設定summaryの要約更新）。ここでは配線だけ確認すればよい。
+    "function updateQuizSetupScope() {}",
     `const QUIZ_DIRECTION_KEY = ${JSON.stringify(QUIZ_DIRECTION_KEY_LITERAL)};`,
     extractConst("QUIZ_DIRECTION_CHOICES"),
     extractFunction("normalizeQuizDirection"),

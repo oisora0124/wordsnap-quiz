@@ -157,5 +157,5 @@ test("Groq: キーを差し替えたら使えたモデルの記憶を忘れて�
 
 test("設定の説明と起動: 保存先の文言は同期ONの場合に触れ、テーマ・設定の初期化は保存領域の例外で止まらない（1.0.122）", () => {
   assert.match(html, /キーは<strong>既定ではこの端末のブラウザにだけ<\/strong>保存され[^<]*（下の「APIキーも他の端末と同期する」をオンにした場合だけ、暗号化して自分の端末どうしで同期します）/);
-  assert.match(html, /for \(const init of \[initTheme, initSettingsAccordionState, initSettings, initContextGenSettings\]\) \{\s*try \{\s*init\(\);\s*\} catch \{/);
+  assert.match(html, /for \(const init of \[initTheme, initSettingsAccordionState, initQuizSetupDisclosure, initSettings, initContextGenSettings\]\) \{\s*try \{\s*init\(\);\s*\} catch \{/);
 });
