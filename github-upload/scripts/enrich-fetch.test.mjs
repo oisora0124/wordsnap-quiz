@@ -88,7 +88,8 @@ test("順番: dictionaryapi.dev が元気なら従来どおりそこから取り
   const ety = await Enrich.fetch("etymology", "apple");
   assert.equal(ety.text, "From Old English æppel.");
   assert.equal(calls.filter((u) => host(u) === "api.dictionaryapi.dev").length, 1, "同じ語の辞書データは1回だけ取り、3種類で共用する");
-  assert.equal(calls.length, 1, "1番目で取れたら予備は叩かない");
+  // 語源だけは Wiktionary の MediaWiki API（/w/api.php）を並行して叩く設計なので、辞書の予備だけを数える
+  assert.equal(calls.filter((u) => !u.includes("/w/api.php")).length, 1, "1番目で取れたら予備は叩かない");
 });
 
 test("切り替え: dictionaryapi.dev が 522 なら freedictionaryapi.com から取り、発音記号と例文が出る。以後その源は後回し", async () => {
@@ -362,4 +363,132 @@ test("和訳の後追い: 前に取れなかった（null）項目も次に開�
   assert.equal(word.enrich.examples.examples[0].ja, "私はりんごを食べた。", "取れたら置き換わる");
   assert.equal(persisted.length, 1);
   assert.match(section.innerHTML, /私はりんごを食べた。/);
+});
+
+// ---------- 語源: Wiktionary の MediaWiki API（1.0.130） ----------
+// dictionaryapi.dev 等の origin はほぼ空なので、語源だけ en.wiktionary.org の action=parse で
+// English 節配下の Etymology 節を直接取りに行く。
+
+const WIKT_SECTIONS_OK = {
+  parse: {
+    sections: [
+      { index: "1", toclevel: "1", line: "English" },
+      { index: "2", toclevel: "2", line: "Etymology 1" },
+      { index: "3", toclevel: "3", line: "Noun" },
+      { index: "4", toclevel: "2", line: "Etymology 2" },
+      { index: "5", toclevel: "1", line: "French" },
+      { index: "6", toclevel: "2", line: "Etymology" },
+    ],
+  },
+};
+const WIKT_SECTIONS_NO_ETYMOLOGY = {
+  parse: {
+    sections: [
+      { index: "1", toclevel: "1", line: "English" },
+      { index: "2", toclevel: "2", line: "Noun" },
+      { index: "3", toclevel: "1", line: "French" },
+      { index: "4", toclevel: "2", line: "Etymology" },
+    ],
+  },
+};
+const WIKT_SECTIONS_NO_ENGLISH = {
+  parse: { sections: [{ index: "1", toclevel: "1", line: "French" }, { index: "2", toclevel: "2", line: "Etymology" }] },
+};
+const WIKT_TEXT_OK = {
+  parse: { text: '<p>From Middle English <i>appel</i>, from Old English <i>æppel</i>.</p><h3>Noun</h3><p>ignored</p>' },
+};
+
+test("pickEnglishEtymologySection: English節内のEtymologyを選び、English節の後ろ（他言語）のEtymologyは選ばない", async () => {
+  const { Enrich } = enrichSandbox(() => ({ status: 500, body: null }));
+  assert.equal(Enrich.pickEnglishEtymologySection(WIKT_SECTIONS_OK.parse.sections), "2", "English節内の最初のEtymology（Etymology 1）");
+  assert.equal(Enrich.pickEnglishEtymologySection(WIKT_SECTIONS_NO_ETYMOLOGY.parse.sections), null, "English節にEtymologyが無ければnull（French側のEtymologyは選ばない）");
+  assert.equal(Enrich.pickEnglishEtymologySection(WIKT_SECTIONS_NO_ENGLISH.parse.sections), null, "English節自体が無ければnull");
+  assert.equal(Enrich.pickEnglishEtymologySection([]), null);
+});
+
+test("extractEtymologyParagraph: 最初の<p>を採り、下位見出し以降の<p>は無視。脚注除去と600字超の切り詰めも行う", async () => {
+  const { Enrich } = enrichSandbox(() => ({ status: 500, body: null }));
+  assert.equal(
+    Enrich.extractEtymologyParagraph(WIKT_TEXT_OK.parse.text),
+    "From Middle English appel, from Old English æppel.",
+    "最初の<p>だけを採り、<h3>以降の<p>は無視する",
+  );
+  assert.equal(
+    Enrich.extractEtymologyParagraph('<p>Word origin.<sup>[1]</sup> Displaced native word.<sup>[2]</sup></p>'),
+    "Word origin. Displaced native word.",
+    "脚注 [1] [2] を除く",
+  );
+  // 実際の action=parse&section=N は「節自身の見出し → 空の <p class="mw-empty-elt"> → 本文」の順で、
+  // [ ] * は数値参照で来る。先頭の見出しで止めてしまうと語源が一度も出ない（実データで再現した退行）。
+  assert.equal(
+    Enrich.extractEtymologyParagraph(
+      '<div class="mw-content-ltr mw-parser-output"><div class="mw-heading mw-heading3"><h3 id="Etymology_1">Etymology 1</h3></div>' +
+        '<p class="mw-empty-elt">\n</p><p>From Old French <i>abandoner</i>,&#91;1&#93; from Frankish &#42;ban.</p>' +
+        '<div class="mw-heading mw-heading4"><h4 id="Verb">Verb</h4></div><p>ignored</p></div>',
+    ),
+    "From Old French abandoner, from Frankish *ban.",
+    "節自身の見出しは読み飛ばし、空段落を飛ばし、数値参照を戻してから脚注を除く",
+  );
+  assert.equal(Enrich.extractEtymologyParagraph('<div>No paragraph here.</div>'), null, "<p>が無ければnull");
+  assert.equal(Enrich.extractEtymologyParagraph(''), null);
+
+  const filler = "This is a filler sentence used to pad the etymology text past six hundred characters for the truncation test. ";
+  const long = Enrich.extractEtymologyParagraph(`<p>${filler.repeat(8)}</p>`);
+  assert.ok(long.length <= 602, `600字程度で切る: ${long.length}`);
+  assert.match(long, /\.…$/, "文の区切り（. ）で切って…を付ける");
+});
+
+test("etymology(term): recordにoriginがあればそれを優先する（Wiktionaryは並行して取りに行くが結果には使わない）", async () => {
+  // Wiktionary 側が失敗（500）しても、origin があれば例外にならずに辞書の語源を返す
+  const { Enrich, calls } = enrichSandbox((url) => (host(url) === "api.dictionaryapi.dev" ? { status: 200, body: DICTAPI_ENTRY } : { status: 500, body: null }));
+  const ety = await Enrich.fetch("etymology", "apple");
+  assert.equal(ety.text, "From Old English æppel.");
+  assert.equal(ety.ja, undefined);
+  assert.equal(ety.source.label, "Wiktionary");
+  assert.equal(calls.filter((u) => host(u) === "api.dictionaryapi.dev").length, 1);
+  // 辞書の待ちと Wiktionary の往復を直列にしない（不調時に10秒を超えるため）
+  assert.equal(calls.filter((u) => u.includes("/w/api.php")).length, 1, "Wiktionary は record() の完了を待たずに並行して始める");
+});
+
+test("etymology(term): originが無ければWiktionaryのMediaWiki APIを2回叩き、textとsourceが返る", async () => {
+  const { Enrich, calls } = enrichSandbox((url) => {
+    if (host(url) === "api.dictionaryapi.dev") return { status: 404, body: null };
+    if (host(url) === "freedictionaryapi.com") return { status: 404, body: null };
+    if (url.includes("/api/rest_v1/")) return { status: 404, body: null }; // Wiktionary REST（例文用）には該当なし
+    if (url.includes("prop=sections")) return { status: 200, body: WIKT_SECTIONS_OK };
+    if (url.includes("prop=text")) return { status: 200, body: WIKT_TEXT_OK };
+    return { status: 500, body: null };
+  });
+  const ety = await Enrich.fetch("etymology", "apple");
+  assert.equal(ety.text, "From Middle English appel, from Old English æppel.");
+  assert.equal(ety.ja, undefined);
+  assert.equal(ety.source.id, "wiktionary");
+  assert.equal(ety.source.label, "Wiktionary");
+  assert.equal(ety.source.url, "https://en.wiktionary.org/wiki/apple");
+  assert.equal(ety.source.license, "CC BY-SA 4.0");
+  assert.equal(calls.filter((u) => u.includes("/w/api.php")).length, 2, "sections→textの2リクエスト");
+});
+
+test("etymology(term): missingtitle（未収録）は { text: null, ja: null } で、sectionsの1回しか叩かない", async () => {
+  const { Enrich, calls } = enrichSandbox((url) => {
+    if (host(url) === "api.dictionaryapi.dev") return { status: 404, body: null };
+    if (host(url) === "freedictionaryapi.com") return { status: 404, body: null };
+    if (url.includes("/api/rest_v1/")) return { status: 404, body: null };
+    if (url.includes("prop=sections")) return { status: 200, body: { error: { code: "missingtitle", info: "The page you specified doesn't exist." } } };
+    return { status: 500, body: null };
+  });
+  const ety = await Enrich.fetch("etymology", "zzzzqqq");
+  assert.equal(json(ety), json({ text: null, ja: null }));
+  assert.equal(calls.filter((u) => u.includes("/w/api.php")).length, 1, "missingtitleならsectionsだけでtextは叩かない");
+});
+
+test("etymology(term): WiktionaryのMediaWiki APIが5xxなら一時的な失敗として投げる（キャッシュしない）", async () => {
+  const { Enrich } = enrichSandbox((url) => {
+    if (host(url) === "api.dictionaryapi.dev") return { status: 404, body: null };
+    if (host(url) === "freedictionaryapi.com") return { status: 404, body: null };
+    if (url.includes("/api/rest_v1/")) return { status: 404, body: null };
+    if (url.includes("prop=sections")) return { status: 522, body: null };
+    return { status: 500, body: null };
+  });
+  await assert.rejects(Enrich.fetch("etymology", "apple"), (e) => e.transient === true);
 });
