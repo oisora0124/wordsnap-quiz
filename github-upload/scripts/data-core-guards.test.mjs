@@ -1580,3 +1580,20 @@ test("同期の送信: サーバーの 413 は自動再送しない。現行サ�
   assert.match(put, /const knownRejection =\s*typeof error\?\.data\?\.error === "string" && \/\^\(invalid state\|force required\)\$\/\.test\(error\.data\.error\);/);
   assert.match(put, /const unknownFormat = error && \(error\.status === 400 \|\| error\.status === 422\) && !knownRejection;/);
 });
+
+test("同期の反映: 一覧の選択は丸ごと消さず、消えた語の分だけ外す（1.0.124）", () => {
+  const src = extractFunction("applyMergedRemoteState");
+  assert.match(src, /appState = merged;[\s\S]*?pruneSelection\(\);\s*persistAppState\(\{ sync: options\.sync !== false \}\);/);
+  assert.equal(src.includes("selectedIds.clear()"), false);
+});
+
+test("手順2とエラー監視: 入力中は候補を作り直さない／消えた保存先の「選んだ」印を下ろす／エラーは受け付けられてから記録（1.0.124）", () => {
+  const rc = extractFunction("renderCandidates");
+  assert.match(rc, /elements\.candidateList\?\.contains\?\.\(document\.activeElement\)[\s\S]*?dirtyPanels\.add\("candidates"\);\s*return;/);
+  assert.match(html, /elements\.candidateList\.addEventListener\("focusout", \(event\) => \{[\s\S]*?renderDirtyActivePanel\(\);/);
+  const sd = extractFunction("renderSaveDeckSelect");
+  assert.match(sd, /if \(saveDeckChosenByUser && chosen && !chosenExists\) saveDeckChosenByUser = false;/);
+  const ce = extractFunction("captureError");
+  const postAt = ce.indexOf("postEvents(");
+  assert.ok(postAt > 0 && ce.indexOf("localStorage.setItem(ERROR_STATE_KEY") > postAt, "記録は送信の受け付け後（onAccepted の中）");
+});
