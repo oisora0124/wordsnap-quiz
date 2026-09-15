@@ -216,7 +216,7 @@ test("候補の保存: 端末に保存できたら候補を消して案内する
   const log = s.log();
   const names = log.map((e) => (Array.isArray(e) ? e[0] : e));
   assert.ok(names.includes("clearUndo"), "取り消しを消す（saveState と同じ）");
-  assert.ok(names.indexOf("clearUndo") < names.indexOf("persist"), "保存の前に取り消しを消す（saveState と同じ順）");
+  assert.ok(names.indexOf("persist") < names.indexOf("clearUndo"), "取り消しは保存できてから消す（失敗したときに残すため。1.0.119）");
   assert.ok(names.indexOf("persist") < names.indexOf("renderAll"), "保存してから描く");
   assert.ok(names.includes("success"));
   assert.ok(!names.includes("failure"));

@@ -160,6 +160,11 @@ function undoSandbox() {
     "function setStatus(m) { __status.push(m); }",
     "function setV2JoinUndoVisible() {}",
     "function saveState() { __saved += 1; undoSnapshot = null; undoAfterSignature = null; }",
+    // 1.0.119: performUndo は保存を確かめてから確定する（__persistOk=false で保存失敗を再現）
+    "let __persistOk = true; let __rendered = 0;",
+    "async function persistAppStateChecked() { __saved += 1; return __persistOk; }",
+    "function renderAll() { __rendered += 1; }",
+    "function invalidatePersonalFactorCache() {}",
     "let undoSnapshot = null;",
     "let undoAfterSignature = null;",
     "let undoCreatedAt = 0;",
@@ -167,13 +172,14 @@ function undoSandbox() {
     extractFunction("undoSignature"),
     extractFunction("offerUndo"),
     extractFunction("clearUndo"),
-    extractFunction("performUndo"),
+    "async " + extractFunction("performUndo"),
     "globalThis.__u = {" +
       " setState: (s) => { appState = s; }, getState: () => appState," +
       " snapshotState, offerUndo, performUndo, undoSignature, normalizeState," +
       " reload: () => { appState = normalizeState(appState); }," +
       " dropSignature: () => { undoAfterSignature = null; }, createdAt: () => undoCreatedAt," +
       " status: () => __status, saved: () => __saved, hasUndo: () => Boolean(undoSnapshot)," +
+      " setPersistOk: (v) => { __persistOk = v; }, rendered: () => __rendered, quiz: () => currentQuiz, setQuiz: (q) => { currentQuiz = q; }," +
       " raw: () => JSON.parse(__store[UNDO_STORAGE_KEY] || 'null') };",
   ];
   const sandbox = {};
@@ -193,7 +199,7 @@ function baseState() {
   };
 }
 
-test("元に戻す: 何も変わっていなければ従来どおり戻る", () => {
+test("元に戻す: 何も変わっていなければ従来どおり戻る", async () => {
   const u = undoSandbox();
   u.setState(baseState());
   const snapshot = u.snapshotState();
@@ -202,7 +208,7 @@ test("元に戻す: 何も変わっていなければ従来どおり戻る", () 
   u.getState().deletions["d1 apple"] = NOW;
   u.offerUndo(snapshot);
   assert.equal(typeof u.raw().after, "string", "指紋を保存していない");
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.length, 2, "削除が戻っていない");
   assert.equal(u.status().at(-1), "元に戻しました。");
   const a = u.getState().words.find((w) => w.id === "a");
@@ -210,7 +216,7 @@ test("元に戻す: 何も変わっていなければ従来どおり戻る", () 
   assert.equal(a.progressUpdatedAt, 0, "学習の更新時刻は触らない（作問時の変更検知に使うため）");
 });
 
-test("元に戻す: 取り込み直後の語（既定値の無い項目がある）でも、再読込のあとに戻せる", () => {
+test("元に戻す: 取り込み直後の語（既定値の無い項目がある）でも、再読込のあとに戻せる", async () => {
   const u = undoSandbox();
   const state = baseState();
   // 共有単語帳の追加やサンプル取り込みが作る形＝deckUpdatedAt / favoriteUpdatedAt が無い
@@ -224,11 +230,11 @@ test("元に戻す: 取り込み直後の語（既定値の無い項目がある
   u.getState().words = u.getState().words.filter((w) => w.id !== "a");
   u.offerUndo(snapshot);
   u.reload(); // 再読込＝保存データを normalizeState で読み戻した状態
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.length, 3, "再読込しただけで取り消せなくなってはいけない");
 });
 
-test("元に戻す: 削除のあとに別の語を学習していたら戻さない（学習が巻き戻るため）", () => {
+test("元に戻す: 削除のあとに別の語を学習していたら戻さない（学習が巻き戻るため）", async () => {
   const u = undoSandbox();
   u.setState(baseState());
   const snapshot = u.snapshotState();
@@ -240,7 +246,7 @@ test("元に戻す: 削除のあとに別の語を学習していたら戻さな
   b.history.push({ at: iso(NOW), correct: true });
   b.progressUpdatedAt = NOW;
   u.getState().quizCounter += 1;
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.length, 1, "戻してはいけない");
   assert.equal(u.getState().words[0].stats.correct, 1, "学習を巻き戻してはいけない");
   assert.match(u.status().at(-1), /元に戻せませんでした/);
@@ -248,7 +254,7 @@ test("元に戻す: 削除のあとに別の語を学習していたら戻さな
   assert.equal(u.hasUndo(), false, "無効になった取り消しは消す");
 });
 
-test("元に戻す: 指紋は学習の各項目（stats・history・learning・progressUpdatedAt）を個別に見る", () => {
+test("元に戻す: 指紋は学習の各項目（stats・history・learning・progressUpdatedAt）を個別に見る", async () => {
   const u = undoSandbox();
   const cases = [
     (b) => { b.stats.wrong += 1; },
@@ -262,12 +268,12 @@ test("元に戻す: 指紋は学習の各項目（stats・history・learning・p
     u.getState().words = u.getState().words.filter((w) => w.id !== "a");
     u.offerUndo(snapshot);
     mutate(u.getState().words.find((w) => w.id === "b"));
-    u.performUndo();
+    await u.performUndo();
     assert.equal(u.getState().words.length, 1, `学習の変化を見落としている: ${mutate.toString()}`);
   }
 });
 
-test("元に戻す: 背景の補完（cefr / pos / enrich / addedAt）だけの変化では戻せる", () => {
+test("元に戻す: 背景の補完（cefr / pos / enrich / addedAt）だけの変化では戻せる", async () => {
   const u = undoSandbox();
   u.setState(baseState());
   const snapshot = u.snapshotState();
@@ -277,18 +283,18 @@ test("元に戻す: 背景の補完（cefr / pos / enrich / addedAt）だけの�
   b.cefr = { level: "A1", estimated: true };
   b.pos = { tag: "n" };
   b.enrich = { examples: [{ en: "x", ja: "y" }] };
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.length, 2, "補完だけなら戻せるべき");
 });
 
-test("元に戻す: 同期で他端末の変更（語の追加・削除記録）が入っていたら戻さない", () => {
+test("元に戻す: 同期で他端末の変更（語の追加・削除記録）が入っていたら戻さない", async () => {
   const u = undoSandbox();
   u.setState(baseState());
   const snapshot = u.snapshotState();
   u.getState().words = u.getState().words.filter((w) => w.id !== "a");
   u.offerUndo(snapshot);
   u.getState().words.push(W("c", "cat", "猫", "d1")); // 他端末で追加された語が同期で入った
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.some((w) => w.id === "c"), true, "同期で入った語を消してはいけない");
   assert.match(u.status().at(-1), /元に戻せませんでした/);
 });
@@ -297,7 +303,7 @@ test("元に戻す: 同期で他端末の変更（語の追加・削除記録）
 // 宣言順を誤ると、保存済みの取り消しがある状態で再読込したときに TDZ で起動が止まる。
 function startupUndoRegion() {
   const start = html.indexOf("function parseUndoSnapshot(raw) {");
-  const end = html.indexOf("function performUndo() {");
+  const end = html.indexOf("async function performUndo() {"); // 1.0.119: 保存を確かめるため async に
   if (start < 0 || end < 0 || end < start) throw new Error("undo region not found");
   return html.slice(start, end);
 }
@@ -343,7 +349,7 @@ test("起動: 保存が無ければ取り消しは無い", () => {
   assert.equal(s.buttonHidden(), true);
 });
 
-test("元に戻す: 指紋の無い旧い保存データは、提示のあとに保存が無いときだけ戻す", () => {
+test("元に戻す: 指紋の無い旧い保存データは、提示のあとに保存が無いときだけ戻す", async () => {
   const u = undoSandbox();
   u.setState(baseState());
   const snapshot = u.snapshotState();
@@ -351,7 +357,7 @@ test("元に戻す: 指紋の無い旧い保存データは、提示のあとに
   u.offerUndo(snapshot);
   u.dropSignature(); // 旧版が保存した形（after 無し）を読み込んだ状態を再現
   u.getState().savedAt = u.createdAt() - 500; // 提示より前に保存された＝その後の保存なし
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.length, 2, "保存が無ければ従来どおり戻せる");
 
   u.setState(baseState());
@@ -360,7 +366,7 @@ test("元に戻す: 指紋の無い旧い保存データは、提示のあとに
   u.offerUndo(snapshot2);
   u.dropSignature();
   u.getState().savedAt = u.createdAt() + 5000; // 提示のあとに保存があった（学習・同期・編集はすべて保存を伴う）
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.length, 1, "提示後に保存があれば戻さない");
   assert.match(u.status().at(-1), /元に戻せませんでした/);
 
@@ -372,7 +378,7 @@ test("元に戻す: 指紋の無い旧い保存データは、提示のあとに
     u.offerUndo(snap);
     u.dropSignature();
     u.getState().savedAt = u.createdAt() + delta;
-    u.performUndo();
+    await u.performUndo();
     assert.equal(u.getState().words.length, 1, `提示の${delta}ms後の保存を巻き戻してはいけない`);
   }
   u.setState(baseState());
@@ -381,22 +387,22 @@ test("元に戻す: 指紋の無い旧い保存データは、提示のあとに
   u.offerUndo(snap);
   u.dropSignature();
   u.getState().savedAt = u.createdAt(); // 提示と同時刻の保存（提示直前の保存）は許す
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.length, 2);
 });
 
-test("元に戻す: 指紋は favoriteUpdatedAt も見る（値が同じで時刻だけ新しい同期を見落とさない）", () => {
+test("元に戻す: 指紋は favoriteUpdatedAt も見る（値が同じで時刻だけ新しい同期を見落とさない）", async () => {
   const u = undoSandbox();
   u.setState(baseState());
   const snapshot = u.snapshotState();
   u.getState().words = u.getState().words.filter((w) => w.id !== "a");
   u.offerUndo(snapshot);
   u.getState().words.find((w) => w.id === "b").favoriteUpdatedAt = NOW;
-  u.performUndo();
+  await u.performUndo();
   assert.equal(u.getState().words.length, 1, "お気に入りの更新時刻の変化を見落としている");
 });
 
-test("元に戻す: 起動時に保存した指紋を読み戻す配線がある", () => {
+test("元に戻す: 起動時に保存した指紋を読み戻す配線がある", async () => {
   assert.match(html, /if \(undoSnapshot\) \(\{ after: undoAfterSignature, createdAt: undoCreatedAt \} = readLocalUndoRecordMeta\(\)\);/);
   assert.match(extractFunction("readLocalUndoRecordMeta"), /typeof record\?\.after === "string"/);
   assert.match(extractFunction("clearUndo"), /undoAfterSignature = null;\s*\n\s*undoCreatedAt = 0;/);
@@ -1144,7 +1150,7 @@ test("JSON読み込み（確定）: 置換前の墓標は単語帳IDを読み替
   });
 });
 
-test("元に戻す: 現在の墓標を、戻す状態の単語帳ID（同名別ID）へ読み替えてから突き合わせる", () => {
+test("元に戻す: 現在の墓標を、戻す状態の単語帳ID（同名別ID）へ読み替えてから突き合わせる", async () => {
   const u = undoSandbox();
   // 戻す状態: 単語帳 d1/A に apple がある
   const before = { ...baseState(), decks: [{ id: "d1", name: "A", updatedAt: 0 }] };
@@ -1158,7 +1164,7 @@ test("元に戻す: 現在の墓標を、戻す状態の単語帳ID（同名別I
     deletions: { "d9 apple": NOW },
   });
   u.offerUndo(snapshot);
-  u.performUndo();
+  await u.performUndo();
   const st = u.getState();
   const apple = st.words.find((w) => w.term === "apple");
   assert.ok(apple, "戻っていない");
@@ -1328,7 +1334,7 @@ test("JSON読み込み（確定）: 読み込んだデータ自身の墓標が�
   });
 });
 
-test("元に戻す: 戻す状態自身の墓標が兄弟の単語帳IDにあっても、統合してから戻した語を救う", () => {
+test("元に戻す: 戻す状態自身の墓標が兄弟の単語帳IDにあっても、統合してから戻した語を救う", async () => {
   const u = undoSandbox();
   const snapshotState = {
     ...baseState(),
@@ -1340,7 +1346,7 @@ test("元に戻す: 戻す状態自身の墓標が兄弟の単語帳IDにあっ�
   const snapshot = u.snapshotState();
   u.setState({ ...baseState(), words: [], decks: [{ id: "d2", name: "A", updatedAt: 0 }], deletions: {} });
   u.offerUndo(snapshot);
-  u.performUndo();
+  await u.performUndo();
   const st = u.getState();
   assert.deepEqual(Array.from(st.decks, (d) => d.id), ["d2"]);
   const apple = st.words.find((w) => w.term === "apple");
@@ -1414,4 +1420,40 @@ test("移動の停止: 同名の非代表側の単語帳にある墓標も見る
   // 学習が墓標より新しければ動かせる
   y.progressUpdatedAt = NOW + 1;
   assert.equal(m.deletionBlocksMove("d1", y), false);
+});
+
+test("元に戻す: 端末に保存できなければ戻す前の状態に返し、取り消しの控えは残す（もう一度押せる）（1.0.119）", async () => {
+  const u = undoSandbox();
+  u.setState(baseState());
+  const snapshot = u.snapshotState();
+  u.setState({ ...u.getState(), words: [u.getState().words[1]] }); // 1語削除した
+  u.offerUndo(snapshot);
+  u.setQuiz({ live: true });
+  u.setPersistOk(false);
+  await u.performUndo();
+  assert.equal(u.getState().words.length, 1, "保存できなかったので削除後の状態のまま（メモリだけ戻して再読込で消えることを避ける）");
+  assert.equal(u.hasUndo(), true, "控えは残す");
+  assert.ok(u.quiz()?.live, "進行中のクイズも捨てない");
+  assert.match(u.status().at(-1), /端末に保存できなかったため、元に戻せませんでした/);
+  assert.ok(u.rendered() >= 1);
+  // 空きができて、もう一度押したら戻る
+  u.setPersistOk(true);
+  await u.performUndo();
+  assert.equal(u.getState().words.length, 2, "戻った");
+  assert.equal(u.hasUndo(), false, "使い終えた控えは消す");
+  assert.equal(u.quiz(), null);
+  assert.equal(u.status().at(-1), "元に戻しました。");
+});
+
+test("候補の保存と採点: 保存前に取り消し・進行中クイズを捨てない／出題中の語が消えたら無言で止めない（1.0.119）", () => {
+  const save = html.slice(html.indexOf('elements.saveParsedButton.addEventListener("click", async () => {'));
+  const body = save.slice(0, save.indexOf("\n});\n"));
+  const awaitAt = body.indexOf("await persistAppStateChecked()");
+  assert.ok(awaitAt > 0);
+  assert.equal(body.slice(0, awaitAt).includes("clearUndo()"), false, "保存を待つ前に取り消しを消さない");
+  assert.equal(body.slice(0, awaitAt).includes("currentQuiz = null"), false, "保存を待つ前に進行中のクイズを捨てない");
+  assert.match(body.slice(awaitAt), /currentQuiz = null;\s*clearUndo\(\);/, "保存できてから捨てる");
+  const grade = extractFunction("gradeQuiz");
+  assert.match(grade, /if \(!word\) \{[\s\S]*?setStatus\("出題中の単語が削除されたため、次の問題に進みます。"\);\s*renderQuiz\(\);\s*return;/);
+  assert.match(extractFunction("performUndo"), /invalidatePersonalFactorCache\(\);[\s\S]*?await persistAppStateChecked\(\)/, "丸ごと入れ替えるので派生キャッシュを捨てる");
 });
