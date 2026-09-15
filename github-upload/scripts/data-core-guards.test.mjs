@@ -1572,3 +1572,11 @@ test("クイズ描画: 採点済みの問題は再描画で描き直さない（
   assert.match(extractFunction("renderReviewQuiz"), /if \(currentQuiz\.answered\) return;[\s\S]*?renderQuizPromptWord\(currentQuiz\);/);
   assert.match(extractFunction("buildContextChoices"), /pickDistractors\(basePool, answer, 3 - generated\.length, \[\], \{\s*preferDifferentPos: true,\s*dedupeBy: "term",\s*\}\)/);
 });
+
+test("同期の送信: サーバーの 413 は自動再送しない。現行サーバーの 422（invalid state / force required）は旧サーバー扱いで非圧縮再送しない（1.0.123）", () => {
+  const push = extractFunction("pushWordsnapState");
+  assert.match(push, /retryNeeded = retryAttempt < 2 && !error\.noRetry && error\?\.status !== 413;/);
+  const put = html.slice(html.indexOf("stateGz = await gzipJsonToBase64("), html.indexOf("function setSyncStatus("));
+  assert.match(put, /const knownRejection =\s*typeof error\?\.data\?\.error === "string" && \/\^\(invalid state\|force required\)\$\/\.test\(error\.data\.error\);/);
+  assert.match(put, /const unknownFormat = error && \(error\.status === 400 \|\| error\.status === 422\) && !knownRejection;/);
+});

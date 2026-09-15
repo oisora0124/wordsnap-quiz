@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.122</span>
+        <span class="app-footer-version">バージョン 1.0.123</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.122";
+  const APP_REV = "1.0.123";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -20546,7 +20546,11 @@ async function syncPutState(baseRev, requestOptions = {}) {
       } catch (error) {
         // 旧サーバー（stateGz未対応）が返す400/422だけ、プレーン形式で1回再試行する。
         // 409（競合）・413・5xx・通信断・キー切替は従来どおり呼び出し側の処理へ渡す。
-        const unknownFormat = error && (error.status === 400 || error.status === 422);
+        // 現行サーバーが返す 422（"invalid state" / "force required"）は形式の問題ではないので、
+        // 同じ state を非圧縮で丸ごと送り直しても結果は変わらない（帯域と D1 読み取りを無駄に増やす）。
+        const knownRejection =
+          typeof error?.data?.error === "string" && /^(invalid state|force required)$/.test(error.data.error);
+        const unknownFormat = error && (error.status === 400 || error.status === 422) && !knownRejection;
         if (isStaleSyncError(error) || !unknownFormat) throw error;
       }
     }
@@ -21898,8 +21902,8 @@ async function pushWordsnapState(options = {}) {
         return;
       }
     }
-    // サイズ超過（noRetry）はリトライしても解決しないため自動再送しない
-    retryNeeded = retryAttempt < 2 && !error.noRetry;
+    // サイズ超過（noRetry、サーバーの 413）はリトライしても解決しないため自動再送しない
+    retryNeeded = retryAttempt < 2 && !error.noRetry && error?.status !== 413;
     setSyncStatus(error.message || "同期保存に失敗しました。", "error");
   } finally {
     syncState.pushing = false;
