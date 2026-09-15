@@ -8108,10 +8108,18 @@ const Enrich = (() => {
     let rec = await record(term);
     let exampleList = collectExamples(rec);
     let definitions = collectDefinitions(rec);
-    // 最初に当たった辞書に例文が無ければ、例文の多い Wiktionary で補う（補えなければそのまま）
-    if (rec && exampleList.length === 0 && rec.source?.id !== "wiktionary") {
+    // 最初に当たった辞書に例文が無ければ、例文の多い Wiktionary で補う（補えなければそのまま）。
+    // 後回し中（応答しなかった）か、この語が無いと分かっている Wiktionary は待たない。
+    const w = clean(term);
+    if (
+      rec &&
+      exampleList.length === 0 &&
+      rec.source?.id !== "wiktionary" &&
+      !isDegraded(WIKTIONARY.id) &&
+      !sourceMiss.has(`${WIKTIONARY.id}|${w}`)
+    ) {
       try {
-        const alt = await fetchSource(WIKTIONARY, clean(term));
+        const alt = await fetchSource(WIKTIONARY, w);
         const more = collectExamples(alt);
         if (more.length) {
           exampleList = more;
