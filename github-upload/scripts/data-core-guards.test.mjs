@@ -162,7 +162,8 @@ function undoSandbox() {
     "function saveState() { __saved += 1; undoSnapshot = null; undoAfterSignature = null; }",
     // 1.0.119: performUndo は保存を確かめてから確定する（__persistOk=false で保存失敗を再現）
     "let __persistOk = true; let __rendered = 0;",
-    "async function persistAppStateChecked() { __saved += 1; return __persistOk; }",
+    "let __duringPersist = null;",
+    "async function persistAppStateChecked() { __saved += 1; if (__duringPersist) { const f = __duringPersist; __duringPersist = null; f(); } return __persistOk; }",
     "function renderAll() { __rendered += 1; }",
     "function invalidatePersonalFactorCache() {}",
     "let undoSnapshot = null;",
@@ -172,7 +173,9 @@ function undoSandbox() {
     extractFunction("undoSignature"),
     extractFunction("offerUndo"),
     extractFunction("clearUndo"),
+    "let undoInFlight = false;",
     "async " + extractFunction("performUndo"),
+    "async " + extractFunction("performUndoOnce"),
     "globalThis.__u = {" +
       " setState: (s) => { appState = s; }, getState: () => appState," +
       " snapshotState, offerUndo, performUndo, undoSignature, normalizeState," +
@@ -180,6 +183,7 @@ function undoSandbox() {
       " dropSignature: () => { undoAfterSignature = null; }, createdAt: () => undoCreatedAt," +
       " status: () => __status, saved: () => __saved, hasUndo: () => Boolean(undoSnapshot)," +
       " setPersistOk: (v) => { __persistOk = v; }, rendered: () => __rendered, quiz: () => currentQuiz, setQuiz: (q) => { currentQuiz = q; }," +
+      " setDuringPersist: (f) => { __duringPersist = f; }," +
       " raw: () => JSON.parse(__store[UNDO_STORAGE_KEY] || 'null') };",
   ];
   const sandbox = {};
@@ -303,7 +307,7 @@ test("元に戻す: 同期で他端末の変更（語の追加・削除記録）
 // 宣言順を誤ると、保存済みの取り消しがある状態で再読込したときに TDZ で起動が止まる。
 function startupUndoRegion() {
   const start = html.indexOf("function parseUndoSnapshot(raw) {");
-  const end = html.indexOf("async function performUndo() {"); // 1.0.119: 保存を確かめるため async に
+  const end = html.indexOf("let undoInFlight = false;"); // 1.0.119: 保存を確かめるため async に。進行中ガードの宣言まで
   if (start < 0 || end < 0 || end < start) throw new Error("undo region not found");
   return html.slice(start, end);
 }
@@ -1455,5 +1459,48 @@ test("候補の保存と採点: 保存前に取り消し・進行中クイズを
   assert.match(body.slice(awaitAt), /currentQuiz = null;\s*clearUndo\(\);/, "保存できてから捨てる");
   const grade = extractFunction("gradeQuiz");
   assert.match(grade, /if \(!word\) \{[\s\S]*?setStatus\("出題中の単語が削除されたため、次の問題に進みます。"\);\s*renderQuiz\(\);\s*return;/);
-  assert.match(extractFunction("performUndo"), /invalidatePersonalFactorCache\(\);[\s\S]*?await persistAppStateChecked\(\)/, "丸ごと入れ替えるので派生キャッシュを捨てる");
+  assert.match(extractFunction("performUndoOnce"), /invalidatePersonalFactorCache\(\);[\s\S]*?await persistAppStateChecked\(\)/, "丸ごと入れ替えるので派生キャッシュを捨てる");
+});
+
+test("元に戻す: 保存を待つ間に2回目を押しても、控えを消さず1回目の結果に従う（1.0.120）", async () => {
+  const u = undoSandbox();
+  u.setState(baseState());
+  const snapshot = u.snapshotState();
+  u.setState({ ...u.getState(), words: [u.getState().words[1]] });
+  u.offerUndo(snapshot);
+  u.setPersistOk(false);
+  const first = u.performUndo();
+  const second = u.performUndo(); // 保存待ちの間の2回目
+  await Promise.all([first, second]);
+  assert.equal(u.hasUndo(), true, "2回目が「変わった」と誤判定して控えを消してはいけない");
+  assert.equal(u.getState().words.length, 1, "保存に失敗したので戻していない");
+  assert.equal(u.status().filter((m) => /元に戻せませんでした。削除した単語は/.test(m)).length, 0, "誤った説明を出さない");
+  u.setPersistOk(true);
+  await u.performUndo();
+  assert.equal(u.getState().words.length, 2);
+});
+
+test("単語帳をまたぐ移動の墓標判定: 全語の走査は旧形式の墓標があるときだけ（一括移動・単語帳削除で選択数×語数にしない）（1.0.120）", () => {
+  const src = extractFunction("deletionBlocksMove");
+  const scanAt = src.indexOf("appState.words.filter(");
+  const legacyAt = src.indexOf("if (legacyTs) {");
+  assert.ok(legacyAt > 0 && scanAt > legacyAt, "走査は旧形式の墓標がある分岐の中にある");
+  assert.match(src, /let ts = 0;[\s\S]*?if \(!ts\) \{/, "新形式の墓標が見つかれば走査しない");
+});
+
+test("元に戻す: 保存を待つ間に同期の反映で状態が差し替わっていたら、保存に失敗しても差し替え後を残す（同期差分を捨てない）（1.0.120）", async () => {
+  const u = undoSandbox();
+  u.setState(baseState());
+  const snapshot = u.snapshotState();
+  u.setState({ ...u.getState(), words: [u.getState().words[1]] });
+  u.offerUndo(snapshot);
+  u.setPersistOk(false);
+  // 保存待ちの間に同期が appState を丸ごと差し替える（他端末で cat が追加された）
+  u.setDuringPersist(() => {
+    u.setState({ ...u.getState(), words: [...u.getState().words, W("c", "cat", "猫", "d1")] });
+  });
+  await u.performUndo();
+  assert.equal(u.getState().words.some((w) => w.id === "c"), true, "同期で入った語を捨ててはいけない");
+  assert.equal(u.hasUndo(), false, "指紋が合わなくなった控えは消す");
+  assert.match(u.status().at(-1), /同期の反映と重なったため/);
 });

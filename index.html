@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.119</span>
+        <span class="app-footer-version">バージョン 1.0.120</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.119";
+  const APP_REV = "1.0.120";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23339,7 +23339,21 @@ function clearUndo() {
   if (elements.undoButton) elements.undoButton.hidden = true;
 }
 
+// 保存を待つ間に2回目が走ると、2回目は「内容が変わった」と判定して控えを消し、1回目の保存が
+// 失敗したときに戻せなくなる。進行中は受け付けない。
+let undoInFlight = false;
+
 async function performUndo() {
+  if (!undoSnapshot || undoInFlight) return;
+  undoInFlight = true;
+  try {
+    await performUndoOnce();
+  } finally {
+    undoInFlight = false;
+  }
+}
+
+async function performUndoOnce() {
   if (!undoSnapshot) return;
   // 取り消す操作のあとに学習・同期・編集で内容が変わっていたら、丸ごと戻すと
   // それらまで消えるので戻さない（削除した語は「削除済み」から個別に戻せる）。
@@ -23387,6 +23401,14 @@ async function performUndo() {
   invalidatePersonalFactorCache();
   const persisted = await persistAppStateChecked();
   if (!persisted) {
+    if (appState !== restored) {
+      // 保存を待つ間に同期の反映（appState の丸ごと差し替え）が入った。戻す前の状態へ返すと
+      // その同期差分まで捨てるので、いまの状態を残す。控えは指紋が合わなくなっているので消す。
+      clearUndo();
+      renderAll();
+      setStatus("端末に保存できませんでした（保存領域が使えないか、いっぱいです）。同期の反映と重なったため、取り消しは取り下げました。");
+      return;
+    }
     appState = before;
     invalidatePersonalFactorCache();
     renderAll();
@@ -23679,20 +23701,27 @@ function deletionBlocksMove(deckId, word) {
   // 同名の単語帳は同期のマージで1つに統合され、墓標もその代表IDへ読み替えられる。
   // なので墓標は「移動先そのもの」と「移動先の代表」の両方で探し、単語帳の数も代表IDで数える。
   const canon = canonicalDeckIdMapper(appState.decks);
-  const deckCount = new Set(
-    appState.words.filter((w) => w.id !== word.id && normalizeTerm(w.term) === term).map((w) => canon(w.deckId)),
-  ).add(canon(deckId)).size;
   // 同期と同じく、新形式の墓標があればそれだけを見る。無いときだけ旧形式を見る。
   // 新形式は、移動先と同じ単語帳とみなされる（代表IDが同じ）すべての単語帳IDの墓標を見る
   // （同期は非代表側の墓標も代表IDへ読み替えて使うため）。
   // 旧形式（語だけ）は「その語が1つの単語帳にしか無い」ときだけ効く（同期と同じ条件）。
   const destination = canon(deckId);
   const siblingIds = new Set([deckId, ...appState.decks.filter((deck) => canon(deck.id) === destination).map((deck) => deck.id)]);
-  let tsNew = 0;
+  let ts = 0;
   for (const id of siblingIds) {
-    tsNew = Math.max(tsNew, Number(deletions[deletionKeyForWord({ ...word, deckId: id })] || 0));
+    ts = Math.max(ts, Number(deletions[deletionKeyForWord({ ...word, deckId: id })] || 0));
   }
-  const ts = tsNew || (deckCount <= 1 ? Number(deletions[term] || 0) : 0);
+  if (!ts) {
+    // 旧形式の墓標があるときだけ、その語が何冊にあるかを数える（全語の走査）。
+    // 無条件に数えると、一括移動・単語帳の削除で候補1語ごとに全語を走査し、選択数×語数になる。
+    const legacyTs = Number(deletions[term] || 0);
+    if (legacyTs) {
+      const deckCount = new Set(
+        appState.words.filter((w) => w.id !== word.id && normalizeTerm(w.term) === term).map((w) => canon(w.deckId)),
+      ).add(canon(deckId)).size;
+      ts = deckCount <= 1 ? legacyTs : 0;
+    }
+  }
   return Boolean(ts && ts >= wordAddedMs(word) && ts >= wordProgressMs(word));
 }
 
