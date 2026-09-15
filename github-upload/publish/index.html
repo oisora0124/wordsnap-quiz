@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.123</span>
+        <span class="app-footer-version">バージョン 1.0.124</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.123";
+  const APP_REV = "1.0.124";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7290,16 +7290,28 @@ const WordBankTelemetry = (() => {
       const dedupeKey = `${safeMessage}|${safeSource}|${safeLine}`;
       const state = readErrorState();
       if (state.count >= 5 || state.seen.includes(dedupeKey)) return;
-      state.count += 1;
-      state.seen.push(dedupeKey);
-      localStorage.setItem(ERROR_STATE_KEY, JSON.stringify(state));
-      postEvents([
-        {
-          kind: "error",
-          name: safeMessage,
-          detail: sanitize(stack || `${safeSource}:${safeLine}`, 600),
+      // 「送った」と記録するのは送信が受け付けられてから（利用回数の flushUsage と同じ）。
+      // 先に記録すると、オフラインで送れなかったエラーがその日の記録機会を失い、二度と送られない。
+      postEvents(
+        [
+          {
+            kind: "error",
+            name: safeMessage,
+            detail: sanitize(stack || `${safeSource}:${safeLine}`, 600),
+          },
+        ],
+        () => {
+          try {
+            const latest = readErrorState();
+            if (latest.seen.includes(dedupeKey)) return;
+            latest.count += 1;
+            latest.seen.push(dedupeKey);
+            localStorage.setItem(ERROR_STATE_KEY, JSON.stringify(latest));
+          } catch {
+            // 記録できなくても送信済みなので何もしない
+          }
         },
-      ]);
+      );
     } catch {
       // エラー監視自身の失敗は再帰的に報告しない。
     }
@@ -21645,7 +21657,9 @@ function applyMergedRemoteState(remoteState, suppliedOptions) {
       // 選択肢を作り直し、ユーザーが選ぶ前に並び順が変わってしまう。
       // 正解語そのものが同期先で削除されていた場合は renderQuiz() 側の存在確認で
       // currentQuiz が安全に再生成される。
-      selectedIds.clear();
+      // 一覧の選択は消えた語の分だけ外す（丸ごと消すと、10秒ごとの同期で他端末の変更が届くたびに
+      // 一括操作の直前まで選んでいた選択が黙って全部解除されていた）。
+      pruneSelection();
       persistAppState({ sync: options.sync !== false });
     } finally {
       syncState.applyingRemote = false;
@@ -23799,8 +23813,11 @@ function renderSaveDeckSelect() {
   // 同期の適用は renderAll() を通るため、取り込み中に自動ポーリングが走ると
   // 選び直した保存先が既定へ戻り、気づかないまま別の単語帳へ保存されていた。
   const chosen = elements.saveDeckSelect.value;
-  const keepChosen =
-    saveDeckChosenByUser && chosen && appState.decks.some((deck) => deck.id === chosen);
+  const chosenExists = Boolean(chosen) && appState.decks.some((deck) => deck.id === chosen);
+  // 選んでいた単語帳が消えた（削除・同期）なら「選んだ」印を下ろす。残すと、既定へ戻した保存先が
+  // 次の描画で「選んだもの」に昇格し、以後は開いている単語帳に追従しなくなる。
+  if (saveDeckChosenByUser && chosen && !chosenExists) saveDeckChosenByUser = false;
+  const keepChosen = saveDeckChosenByUser && chosenExists;
   const preferred = keepChosen
     ? chosen
     : appState.activeDeckId !== "all"
@@ -26447,6 +26464,16 @@ const CANDIDATE_EMPTY_GUIDE_HTML =
   '<button type="button" class="secondary" data-goto-step="import">手順 1（取り込む）へ</button>';
 
 function renderCandidates() {
+  // 候補の欄を入力中（日本語入力の変換中を含む）に同期の反映などで作り直すと、フォーカスと未確定の
+  // 文字が消える。入力中は作り直さず「次に描くべき」印だけ付け、欄から離れたとき（focusout）に描く。
+  if (
+    candidates.length > 0 &&
+    elements.candidateList?.contains?.(document.activeElement) &&
+    document.activeElement !== elements.candidateList
+  ) {
+    dirtyPanels.add("candidates");
+    return;
+  }
   elements.candidateCount.textContent = `候補 ${candidates.length}件`;
   elements.saveParsedButton.disabled = candidates.length === 0;
 
@@ -34429,6 +34456,17 @@ elements.importClearButton?.addEventListener("click", () => {
   if (elements.importAllSavedActions) elements.importAllSavedActions.hidden = true;
   setStatus("入力をクリアしました。単語と訳をまとめて貼り付けてください（1行に「英単語 意味」）。");
   elements.ocrText.focus();
+});
+
+// 入力中に見送った候補の描き直しは、欄から離れたときに行う（次の欄へ移っただけなら待つ）
+elements.candidateList.addEventListener("focusout", (event) => {
+  if (event.relatedTarget && elements.candidateList.contains(event.relatedTarget)) return;
+  if (dirtyPanels.has("candidates") && activeStepId === "candidates") {
+    window.setTimeout(() => {
+      if (elements.candidateList.contains(document.activeElement)) return;
+      renderDirtyActivePanel();
+    }, 0);
+  }
 });
 
 elements.candidateList.addEventListener("input", (event) => {
