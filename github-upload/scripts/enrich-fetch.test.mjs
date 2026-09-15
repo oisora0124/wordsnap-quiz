@@ -40,7 +40,7 @@ function extractFunction(name) {
 
 // fetch を差し替えた砂場。respond(url) は { status, body } か Error（fetch 自体が投げる）を返す。
 // storage を渡すと localStorage の代わりになる（後回しの記憶が起動をまたぐことの確認用）。
-function enrichSandbox(respond, { storage } = {}) {
+function enrichSandbox(respond, { storage, now } = {}) {
   const calls = [];
   const sandbox = {
     window: { Translate: { translateBatch: async (list) => list.map(() => "訳"), translateOne: async () => "訳" } },
@@ -55,6 +55,7 @@ function enrichSandbox(respond, { storage } = {}) {
       return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => r.body };
     },
   };
+  if (now) sandbox.Date = { now }; // 後回しの期限（30分）を進めるための時計
   if (storage) {
     sandbox.localStorage = {
       getItem: (k) => (k in storage ? storage[k] : null),
@@ -191,6 +192,38 @@ test("未収録: 元気な源がそろって「無い」と答えたら、後回
   assert.equal(calls.filter((u) => host(u) !== "api.datamuse.com").length, 2, "未収録の結果はキャッシュされる");
 });
 
+test("未確定: 応答しなかった源が残っているとき、他の源が「無い」と言っても未収録を確定（キャッシュ）しない（1.0.117）", async () => {
+  let dictDown = true;
+  let clock = 1_700_000_000_000;
+  const { Enrich, calls } = enrichSandbox((url) => {
+    if (host(url) === "api.dictionaryapi.dev") return dictDown ? { status: 522, body: null } : { status: 200, body: DICTAPI_ENTRY };
+    if (host(url) === "freedictionaryapi.com") return { status: 200, body: FREEDICT_EMPTY };
+    if (host(url) === "en.wiktionary.org") return { status: 404, body: null };
+    return { status: 200, body: [] };
+  }, { now: () => clock });
+  assert.equal(await Enrich.record("apple"), null, "今回は未収録として扱う");
+  // 後回しの期限が過ぎて辞書も復旧したら、同じ語を取り直せる
+  // （従来は null が確定キャッシュされ、起動中は二度と取りに行かなかった）
+  dictDown = false;
+  clock += 31 * 60 * 1000;
+  const rec = await Enrich.record("apple");
+  assert.ok(rec && rec.pronunciations.length > 0, "復旧後に取り直せる");
+  assert.equal(calls.filter((u) => host(u) === "api.dictionaryapi.dev").length, 2, "応答しなかった源だけ取り直す");
+  assert.equal(calls.filter((u) => host(u) === "freedictionaryapi.com").length, 1, "「無い」と確定した源は叩き直さない");
+});
+
+test("未確定: 元気な源が1つだけで、それが「無い」と言ったときも確定しない（後回し中の源が復帰したら取り直す）", async () => {
+  const storage = { "wordsnap-dict-degraded:v1": JSON.stringify({ dictionaryapi: Date.now(), freedictionaryapi: Date.now() }) };
+  let wiktCalls = 0;
+  const { Enrich } = enrichSandbox((url) => {
+    if (host(url) === "en.wiktionary.org") { wiktCalls += 1; return { status: 404, body: null }; }
+    return { status: 522, body: null };
+  }, { storage });
+  assert.equal(await Enrich.record("apple"), null);
+  assert.equal(await Enrich.record("apple"), null);
+  assert.equal(wiktCalls, 1, "「無い」と確定した源は叩き直さないが、結果そのものは確定していない（後回しの源を待たずに返す）");
+});
+
 test("30分たてば後回しにした源をまた最初に試す", () => {
   const storage = { "wordsnap-dict-degraded:v1": JSON.stringify({ dictionaryapi: Date.now() - 31 * 60 * 1000 }) };
   const { Enrich } = enrichSandbox(() => ({ status: 500, body: null }), { storage });
@@ -231,4 +264,47 @@ test("描画: 発音記号と例文に出典を付け、機械変換の IPA に�
   // 描画側の配線（発音記号の注記・例文末尾の出典）
   assert.match(html, /data\?\.approx\s*\?\s*`<p class="enrich-caption">辞書に発音記号が無いため/);
   assert.match(html, /if \(html\) html \+= enrichSourceLine\(norm\.source\);/);
+});
+
+test("和訳の後追い: 同じ語・種類の後追いは同時に1本だけ。閉じて開き直しても訳文は捨てられず、新しい欄へ描く（1.0.117）", async () => {
+  let resolveTranslate;
+  let translateCalls = 0;
+  const persisted = [];
+  const chipA = { getAttribute: () => "true", closest: () => null };
+  const sectionA = { isConnected: false, innerHTML: "" }; // 閉じて外れた古い欄
+  const sectionB = { isConnected: true, innerHTML: "" }; // 開き直して作り直された新しい欄
+  const chipB = { getAttribute: () => "true", closest: () => ({ querySelector: () => sectionB }) };
+  const sandbox = {
+    document: { querySelector: () => chipB },
+    window: { Translate: { translateBatch: () => { translateCalls += 1; return new Promise((r) => { resolveTranslate = r; }); } } },
+    persistAppState: () => persisted.push(1),
+    enrichSectionShell: (type, inner) => inner,
+    enrichBody: (type, data) => JSON.stringify(data),
+    normalizeEtymologyData: (d) => d,
+    normalizeSynonymsData: (d) => d,
+  };
+  new Script(
+    [
+      extractFunction("normalizeEnrichSource"),
+      extractFunction("normalizeExamplesData"),
+      "const backfillInFlight = new Map();",
+      extractFunction("backfillTranslations"),
+      extractFunction("liveEnrichTargets"),
+      "async " + extractFunction("backfillTranslationsOnce"),
+      "globalThis.__b = { backfillTranslations, backfillInFlight };",
+    ].join("\n\n"),
+    { filename: "backfill.js" },
+  ).runInNewContext(sandbox);
+  const word = { id: "w1", term: "apple", enrich: { examples: { examples: [{ en: "I ate an apple.", ja: undefined }], definitions: [] } } };
+  const first = sandbox.__b.backfillTranslations("examples", word, sectionA, chipA);
+  const second = sandbox.__b.backfillTranslations("examples", word, sectionB, chipB); // 開き直し直後の2本目
+  assert.equal(first, second, "2本目は始めず、進行中の1本目を返す");
+  assert.equal(translateCalls, 1, "翻訳の通信は1回");
+  resolveTranslate(["私はりんごを食べた。"]);
+  await first;
+  assert.equal(word.enrich.examples.examples[0].ja, "私はりんごを食べた。", "訳文は表示・保存される側のオブジェクトに入る");
+  assert.match(sectionB.innerHTML, /私はりんごを食べた。/, "開き直した新しい欄に描く");
+  assert.equal(sectionA.innerHTML, "", "外れた古い欄には描かない");
+  assert.equal(persisted.length, 1);
+  assert.equal(sandbox.__b.backfillInFlight.size, 0, "終わったら進行中の記録を消す");
 });
