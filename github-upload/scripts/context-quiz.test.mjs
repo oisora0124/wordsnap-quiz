@@ -1017,6 +1017,13 @@ test("誤答の選び方: 誤答が残っていれば choicesFinal は従来ど�
 //    15分で取り直せるように区別する。
 // ============================================================================
 
+function extractEnrichModule() {
+  const start = html.indexOf("const Enrich = (() => {");
+  const end = html.indexOf("\n})();\n", start);
+  if (start < 0 || end < 0) throw new Error("Enrich module not found");
+  return html.slice(start, end + "\n})();".length);
+}
+
 function buildDictionarySandbox({ status = 200, body = [], throwKind = null } = {}) {
   const pieces = [
     `const CONTEXT_GEN_TIMEOUT_MS = ${html.match(/const CONTEXT_GEN_TIMEOUT_MS = (\d+);/)[1]};`,
@@ -1024,6 +1031,10 @@ function buildDictionarySandbox({ status = 200, body = [], throwKind = null } = 
     "function setTimeout(fn, ms) { return 0; }",
     "function clearTimeout() {}",
     "function AbortController() { this.signal = {}; this.abort = () => {}; }",
+    // 1.0.114: 辞書データは Enrich.record（源の切り替え）を経由する。fetch の差し替えは全源に効く
+    "const window = {};",
+    extractEnrichModule(),
+    "window.Enrich = Enrich;",
     throwKind === "abort"
       ? "function fetch() { const e = new Error('aborted'); e.name = 'AbortError'; return Promise.reject(e); }"
       : throwKind === "network"
@@ -1074,14 +1085,14 @@ test("辞書の失敗: 通信断・タイムアウトはそのまま例外とし
   const offline = buildDictionarySandbox({ throwKind: "network" });
   await assert.rejects(
     () => offline.fetchContextFromDictionary(WORD),
-    // vm内で作られた TypeError は別realmなので instanceof では比較できない
-    (error) => error?.name === "TypeError",
+    // 1.0.114: 取得経路（Enrich）が通信断を一時的な失敗（transient）に揃えて投げる
+    (error) => error?.transient === true && error?.reason === "network",
   );
 
   const timeout = buildDictionarySandbox({ throwKind: "abort" });
   await assert.rejects(
     () => timeout.fetchContextFromDictionary(WORD),
-    (error) => error?.name === "AbortError",
+    (error) => error?.transient === true && error?.reason === "timeout",
   );
 });
 

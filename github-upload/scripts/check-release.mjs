@@ -233,6 +233,8 @@ const connectSources = new Set(cspDirectives.get("connect-src") || []);
 for (const origin of [
   "https://api.datamuse.com",
   "https://api.dictionaryapi.dev",
+  "https://freedictionaryapi.com", // 予備の辞書（1.0.114）
+  "https://en.wiktionary.org", // 予備の辞書（1.0.114）
   "https://translate.googleapis.com",
   "https://api.mymemory.translated.net",
   "https://generativelanguage.googleapis.com",
