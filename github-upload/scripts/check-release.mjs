@@ -761,8 +761,10 @@ const htmlFunctionSource = (name) => {
   assert.fail(`end of ${name} is missing`);
 };
 const historyCompactionSource = [
-  "normalizeHistoryEntries", "emptyHistoryDaily", "trimHistoryDailyDays",
-  "normalizeHistoryDaily", "foldHistoryIntoDaily",
+  "normalizeHistoryEntries", "emptyHistoryDaily", "compareHistoryDailyTokens",
+  "normalizeHistoryDailyTokens", "validHistoryDailyKey", "historyDailyDayCount",
+  "trimHistoryDailyDays", "normalizeHistoryDaily", "historyDailyTokenFor",
+  "foldHistoryIntoDaily",
 ].map(htmlFunctionSource).join("\n");
 
 // 進捗時刻の判定は削除の巻き添えを防ぐ要なので、スタブを書かず公開HTMLの実装をそのまま持ち込む。
@@ -788,7 +790,7 @@ new Script(
     "const emptyEnrich = () => ({ examples: null, etymology: null, synonyms: null, collocations: null });\n" +
     "const normalizeState = (value) => value;\n" +
     "const HISTORY_RAW_MAX = 50;\n" +
-    "const HISTORY_DAILY_MAX_DAYS = 730;\n" +
+    "const HISTORY_DAILY_MAX_ENTRIES = 3000;\n" +
     `${historyCompactionSource}\n` +
     `${publicHtml.slice(mergeStateStart, mergeStateEnd)}\n` +
     "globalThis.__mergeAppStates = mergeAppStates;\n" +
@@ -842,10 +844,13 @@ assert.equal(oneDeckDeletedMerge.words.map((word) => word.deckId).join(","), "de
 
 // 50件を超えた解答が、マージで生の履歴からも日別からも消えないこと。
 // 「畳み込み済みの端末」と「まだ生60件を持つ端末」を突き合わせても、合計は増えも減りもしない。
+// 日別は "YYYY-MM-DD" -> "<秒の36進><+|->,..." のトークン列なので、件数はトークン数で数える。
 const sixtyAnswers = Array.from({ length: 60 }, (_, index) => ({
   at: new Date(Date.parse("2026-07-01T00:00:00.000Z") + index * 3_600_000).toISOString(),
   correct: index % 2 === 0,
 }));
+const dailyAnswerCount = (daily) => Object.values(daily.days)
+  .reduce((sum, tokens) => sum + tokens.split(",").length, 0);
 const foldedSixty = mergeStateSandbox.__foldHistoryIntoDaily(sixtyAnswers, null);
 const foldedWord = {
   ...mergeWordFixture("fold-a", "deck-a", oldAddedAt),
@@ -854,10 +859,34 @@ const foldedWord = {
 };
 const rawSixtyWord = { ...mergeWordFixture("fold-a", "deck-a", oldAddedAt), history: sixtyAnswers };
 const foldMerged = mergeStateSandbox.__mergeWord(foldedWord, rawSixtyWord, "remote");
-const foldMergedDailyAnswers = Object.values(foldMerged.historyDaily.days)
-  .reduce((sum, counts) => sum + counts[0], 0);
-assert.equal(foldMerged.history.length + foldMergedDailyAnswers, 60,
+assert.equal(foldMerged.history.length + dailyAnswerCount(foldMerged.historyDaily), 60,
   "merging a compacted word with a raw one must neither drop nor double-count answers");
+
+// 3端末ぶんを突き合わせる順番を変えても同じ結果になること（マージが結合的であること）。
+// 日別が [解答数, 正解数] の max だったときは順番で最終値が変わり、真値とも合わなかった。
+const offsetAnswers = (offsetMs) => sixtyAnswers.map((entry) => ({
+  at: new Date(Date.parse(entry.at) + offsetMs).toISOString(),
+  correct: entry.correct,
+}));
+const threeDeviceWords = [0, 60_000, 120_000].map((offset) => ({
+  ...mergeWordFixture("fold-a", "deck-a", oldAddedAt),
+  history: offsetAnswers(offset),
+}));
+const mergeThree = (x, y, z) =>
+  mergeStateSandbox.__mergeWord(mergeStateSandbox.__mergeWord(x, y, "remote"), z, "remote");
+const leftAssociated = mergeThree(threeDeviceWords[0], threeDeviceWords[1], threeDeviceWords[2]);
+const rightAssociated = mergeStateSandbox.__mergeWord(
+  threeDeviceWords[0],
+  mergeStateSandbox.__mergeWord(threeDeviceWords[1], threeDeviceWords[2], "remote"),
+  "remote",
+);
+assert.equal(
+  JSON.stringify([leftAssociated.history, leftAssociated.historyDaily]),
+  JSON.stringify([rightAssociated.history, rightAssociated.historyDaily]),
+  "merging three devices must be associative (the merge order must not change the result)",
+);
+assert.equal(leftAssociated.history.length + dailyAnswerCount(leftAssociated.historyDaily), 180,
+  "three offline devices with 60 answers each must be counted as 180 in total");
 
 const readdedMerge = mergeStates(
   mergeStateFixture([mergeWordFixture("new-a", "deck-a", newAddedAt)], [mergeDeckA]),

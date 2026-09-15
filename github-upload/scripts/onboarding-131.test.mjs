@@ -355,6 +355,8 @@ function promoteSandbox({ savedStep = null, activeStepId, wordCount }) {
     // 「構造は同じだが同一realmでない」で失敗するため、JSON文字列にして渡す。
     "globalThis.__calls = [];",
     "function setActiveStep(id, options) { globalThis.__calls.push(JSON.stringify([id, options])); }",
+    // 判定は純関数へ切り出してある（history-daily.test.mjs が条件そのものを直接見る）。
+    extractFunction("shouldPromoteInitialStep"),
     extractFunction("promoteInitialStepAfterRecovery"),
     "globalThis.__run = promoteInitialStepAfterRecovery;",
   ];
@@ -419,7 +421,7 @@ test("initStepTabs() の起動呼び出しは try/catch で包まれ、失敗時
 // ============================================================================
 
 const EXPECTED_SETTINGS_ORDER = [
-  "quiz", "sound", "appearance", "learning-log",
+  "quiz", "sound", "appearance", "learning-log", "review-log",
   "sync", "backup", "storage",
   "ai-keys", "guide", "feedback", "danger",
 ];
