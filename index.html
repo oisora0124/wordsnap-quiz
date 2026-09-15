@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.126</span>
+        <span class="app-footer-version">バージョン 1.0.127</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.126";
+  const APP_REV = "1.0.127";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23984,7 +23984,17 @@ function renderDecks() {
 }
 
 function setStatus(message) {
-  elements.status.textContent = message;
+  const text = String(message ?? "");
+  // 同じ文をそのまま入れ直すと DOM に変化が無く、読み上げ（role="status"）が2回目を読まない
+  // （2段階確認の案内を4秒後にもう一度出すとき等）。一度空にして次のタイミングで入れ直す。
+  if (text && elements.status.textContent === text) {
+    elements.status.textContent = "";
+    window.setTimeout(() => {
+      elements.status.textContent = text;
+    }, 0);
+    return;
+  }
+  elements.status.textContent = text;
 }
 
 const INLINE_SAVE_NOTICE_DEBOUNCE_MS = 450;
@@ -26623,6 +26633,9 @@ function renderSavedWords() {
     Math.max(savedListVisibleCount, savedListWindowStart + SAVED_LIST_PAGE_SIZE),
   );
 
+  // 作り直す前に、一覧の中にあった焦点を控える（★・削除・移動・詳しくをキーボードで押すと行ごと
+  // 作り直されて焦点が body に落ち、キーボードやスクリーンリーダーの利用者は位置を見失っていた）。
+  const focusMemo = rememberSavedListFocus();
   elements.savedList.className = "word-list";
   elements.savedList.innerHTML = "";
   // 案2: 先頭から一定件数だけDOM化する。番号（saved-index）や範囲選択の番号は
@@ -26632,7 +26645,52 @@ function renderSavedWords() {
   updateSavedListMore(words.length, savedListVisibleCount);
 
   renderSelection();
+  restoreSavedListFocus(focusMemo);
   scheduleLibraryMetadataBackfill();
+}
+
+// 行の中でキーボード焦点を持ち得る操作（属性名）。値はその語の id。
+const SAVED_ROW_FOCUS_ATTRS = [
+  "data-favorite-word",
+  "data-delete-word",
+  "data-move-word",
+  "data-toggle-detail",
+  "data-speak-word",
+  "data-select-word",
+];
+
+function rememberSavedListFocus() {
+  const active = document.activeElement;
+  if (!active || !elements.savedList || !elements.savedList.contains(active)) return null;
+  const row = active.closest?.(".saved-item") || null;
+  const attr = SAVED_ROW_FOCUS_ATTRS.find((name) => active.hasAttribute?.(name)) || null;
+  const rows = row ? [...elements.savedList.querySelectorAll(".saved-item")] : [];
+  return { wordId: row?.dataset?.wordId || null, attr, rowIndex: row ? rows.indexOf(row) : -1 };
+}
+
+// 同じ語の同じ操作へ焦点を戻す。語が消えていれば（削除・移動）同じ位置の行の同じ操作、
+// それも無ければ一覧そのものへ（次の Tab で自然に続けられるように）。
+function restoreSavedListFocus(memo) {
+  if (!memo || !elements.savedList) return;
+  const selector = memo.attr ? `[${memo.attr}]` : null;
+  let target = null;
+  if (selector && memo.wordId) {
+    target = elements.savedList.querySelector(`.saved-item[data-word-id="${memo.wordId}"] ${selector}`);
+  }
+  if (!target && selector && memo.rowIndex >= 0) {
+    const rows = elements.savedList.querySelectorAll(".saved-item");
+    const row = rows[Math.min(memo.rowIndex, rows.length - 1)];
+    target = row ? row.querySelector(selector) : null;
+  }
+  if (!target) {
+    elements.savedList.setAttribute("tabindex", "-1");
+    target = elements.savedList;
+  }
+  try {
+    target.focus({ preventScroll: true });
+  } catch {
+    // focus できない要素でも描画は続ける
+  }
 }
 
 // 保存一覧の行を既存DOMの末尾へ追加する。「さらに表示」では先頭ページを作り直さないため、
@@ -35735,10 +35793,14 @@ elements.importDeckShareInput?.addEventListener("change", async () => {
 let pendingImport = null;
 let pendingImportV2Credential = null;
 let importConfirmMode = "replace";
+let importConfirmHoldTimer = 0; // 「接続する」の1秒ロック解除タイマー（張り直すときは前のを止める）
 
 function resetImportConfirmUi() {
   importConfirmMode = "replace";
+  window.clearTimeout(importConfirmHoldTimer);
+  importConfirmHoldTimer = 0;
   if (elements.importConfirmButton) {
+    delete elements.importConfirmButton.dataset.holdDisabled;
     elements.importConfirmButton.textContent = "置き換える";
     elements.importConfirmButton.classList.add("danger");
     elements.importConfirmButton.disabled = false;
@@ -35768,7 +35830,10 @@ function showImportedV2CredentialConfirm(credential) {
     const button = elements.importConfirmButton;
     button.dataset.holdDisabled = "1";
     button.disabled = true;
-    window.setTimeout(() => {
+    // 前のバーのタイマーが残っていると、新しいバーのロックを1秒より早く外してしまう
+    window.clearTimeout(importConfirmHoldTimer);
+    importConfirmHoldTimer = window.setTimeout(() => {
+      importConfirmHoldTimer = 0;
       delete button.dataset.holdDisabled;
       if (importConfirmMode === "credential") button.disabled = false;
     }, 1000);

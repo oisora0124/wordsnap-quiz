@@ -862,7 +862,7 @@ test("JSON読み込み（選択）: 世代番号で最後に選んだファイ�
 test("JSON読み込み（資格情報の確認）: 「接続する」へ切り替えた直後は少しの間押せない", () => {
   const body = extractFunction("showImportedV2CredentialConfirm");
   assert.match(body, /button\.dataset\.holdDisabled = "1";\s*\n\s*button\.disabled = true;/);
-  assert.match(body, /window\.setTimeout\(\(\) => \{\s*\n\s*delete button\.dataset\.holdDisabled;/);
+  assert.match(body, /importConfirmHoldTimer = window\.setTimeout\(\(\) => \{\s*\n\s*importConfirmHoldTimer = 0;\s*\n\s*delete button\.dataset\.holdDisabled;/);
   // 確定処理の finally は、この保留中は押せる状態に戻さない
   const confirm = extractHandlerBody('elements.importConfirmButton?.addEventListener("click", async () => {');
   assert.match(confirm, /!elements\.importConfirmButton\.dataset\.holdDisabled/);
@@ -1632,4 +1632,46 @@ test("フラッシュカード（確信度）: 採点済みの現在カードは
   assert.match(extractFunction("gradeFlashcardConfidence"), /flashcardSession\.answeredId = wordId;\s*flashcardRevealed = true;/);
   assert.match(extractFunction("advanceFlashcard"), /flashcardSession\.index \+= 1;\s*flashcardSession\.answeredId = null;/);
   assert.match(extractFunction("startReview"), /if \(valid\.length === 0\) \{[\s\S]*?setStatus\("出題できる単語がありません（対象の単語が削除されました）。"\);\s*renderQuiz\(\);\s*return;/);
+});
+
+test("焦点管理: 一覧の再描画で焦点を同じ語の同じ操作へ戻す。同じ文の通知も読み上げられる。確認バーのロック解除タイマーは1本（1.0.127）", async () => {
+  // 焦点の控えと復元（DOM の最小模型）
+  const make = (attrs, row) => ({ attrs, row, focused: 0, hasAttribute: (n) => n in attrs, getAttribute: (n) => attrs[n], closest: () => row, focus() { this.focused += 1; } });
+  const rowA = { dataset: { wordId: "a" } };
+  const btnA = make({ "data-favorite-word": "a" }, rowA);
+  const newBtnA = make({ "data-favorite-word": "a" }, { dataset: { wordId: "a" } });
+  const list = {
+    contains: (el) => el === btnA,
+    querySelectorAll: () => [rowA],
+    querySelector: (sel) => (sel.includes('[data-word-id="a"]') ? newBtnA : null),
+    setAttribute() {},
+    focus() {},
+  };
+  const sandbox = { document: { activeElement: btnA }, elements: { savedList: list } };
+  new Script(
+    [
+      html.slice(html.indexOf("const SAVED_ROW_FOCUS_ATTRS = "), html.indexOf("];", html.indexOf("const SAVED_ROW_FOCUS_ATTRS = ")) + 2),
+      extractFunction("rememberSavedListFocus"),
+      extractFunction("restoreSavedListFocus"),
+      "globalThis.__f = { rememberSavedListFocus, restoreSavedListFocus };",
+    ].join("\n\n"),
+    { filename: "focus.js" },
+  ).runInNewContext(sandbox);
+  const memo = sandbox.__f.rememberSavedListFocus();
+  assert.equal(memo.wordId, "a");
+  assert.equal(memo.attr, "data-favorite-word");
+  sandbox.__f.restoreSavedListFocus(memo);
+  assert.equal(newBtnA.focused, 1, "作り直した同じ語の★へ焦点を戻す");
+  assert.match(extractFunction("renderSavedWords"), /const focusMemo = rememberSavedListFocus\(\);[\s\S]*?restoreSavedListFocus\(focusMemo\);/);
+  // 同じ文の通知
+  const st = { elements: { status: { textContent: "" } }, window: { setTimeout: (f) => { f(); return 1; } } };
+  new Script(`${extractFunction("setStatus")}\nglobalThis.__s = setStatus;`, { filename: "status.js" }).runInNewContext(st);
+  st.__s("削除します。もう一度押すと確定");
+  const cleared = [];
+  st.elements.status = { set textContent(v) { cleared.push(v); }, get textContent() { return cleared.at(-1) ?? ""; } };
+  st.__s("同じ文"); st.__s("同じ文");
+  assert.equal(JSON.stringify(cleared), JSON.stringify(["同じ文", "", "同じ文"]), "同じ文は一度空にして入れ直す");
+  // 確認バーのタイマー
+  assert.match(extractFunction("showImportedV2CredentialConfirm"), /window\.clearTimeout\(importConfirmHoldTimer\);\s*importConfirmHoldTimer = window\.setTimeout\(/);
+  assert.match(extractFunction("resetImportConfirmUi"), /window\.clearTimeout\(importConfirmHoldTimer\);[\s\S]*?delete elements\.importConfirmButton\.dataset\.holdDisabled;/);
 });
