@@ -6954,7 +6954,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.118</span>
+        <span class="app-footer-version">バージョン 1.0.119</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7092,7 +7092,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.118";
+  const APP_REV = "1.0.119";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -23339,7 +23339,7 @@ function clearUndo() {
   if (elements.undoButton) elements.undoButton.hidden = true;
 }
 
-function performUndo() {
+async function performUndo() {
   if (!undoSnapshot) return;
   // 取り消す操作のあとに学習・同期・編集で内容が変わっていたら、丸ごと戻すと
   // それらまで消えるので戻さない（削除した語は「削除済み」から個別に戻せる）。
@@ -23378,10 +23378,27 @@ function performUndo() {
     }
     if (latest && latest >= wordAddedMs(word)) word.addedAt = revivedAddedAtIso(latest); // 墓標より新しい追加時刻にする
   }
+  // 端末への保存が済んだことを確かめてから「元に戻しました」と伝え、取り消しの控えを消す。
+  // 保存領域が使えない端末では、従来はメモリ上だけ戻して成功と伝え、控えも消していたため、
+  // 再読込で操作後の状態に戻り、やり直す手段も無かった。失敗したら戻す前の状態に返し、控えは残す。
+  const before = appState;
   appState = restored;
+  // 丸ごと入れ替える操作なので、履歴から作る派生キャッシュ（適応SRSの係数・今日の問数）も捨てる
+  invalidatePersonalFactorCache();
+  const persisted = await persistAppStateChecked();
+  if (!persisted) {
+    appState = before;
+    invalidatePersonalFactorCache();
+    renderAll();
+    setStatus(
+      "端末に保存できなかったため、元に戻せませんでした（保存領域が使えないか、いっぱいです）。空き容量を確認して、もう一度「元に戻す」を押してください。",
+    );
+    return;
+  }
   currentQuiz = null;
   selectedIds.clear();
-  saveState(); // also clears the (now consumed) undo snapshot
+  clearUndo(); // 使い終えた控えを消す
+  renderAll();
   setStatus("元に戻しました。");
 }
 
@@ -32579,7 +32596,13 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
   playSound(isCorrect ? "correct" : "wrong");
   vibrateFeedback(isCorrect ? 15 : [40, 60, 40]);
   const word = appState.words.find((item) => item.id === currentQuiz.answer.id);
-  if (!word) return;
+  if (!word) {
+    // 同期・元に戻す・別タブの削除で出題中の語が消えた。無言で止めるとカードが固まったように見えるので、
+    // 事情を伝えて次の問題へ（renderQuiz が答えの語の存在を確かめて作り直す）。
+    setStatus("出題中の単語が削除されたため、次の問題に進みます。");
+    renderQuiz();
+    return;
+  }
 
   if (!currentQuiz.flashcard) trackUsage("quiz-answer");
   currentQuiz.answered = true;
@@ -33952,6 +33975,11 @@ elements.ocrCancelButton.addEventListener("click", cancelActiveOcrRun);
 elements.ocrButton.addEventListener("click", async () => {
   // disabled属性だけに頼らず、プログラム的clickを含む多重実行もここで止める。
   if (!editorImg || activeOcrRun) return;
+  if (aiExtractAbort) {
+    // AI抽出中に始めると、こちらのロックが AI抽出の「中断」ボタンまで無効にして止められなくなる
+    setStatus("AI抽出が終わるまでお待ちください（上の「読み取りを中断」で止められます）。");
+    return;
+  }
   trackUsage("ocr-run");
 
   const run = {
@@ -34239,8 +34267,13 @@ elements.aiOcrButton.addEventListener("click", async () => {
   const originalLabel = elements.aiOcrButton.innerHTML;
   elements.aiOcrButton.textContent = "⏹ 読み取りを中断";
   aiExtractCancelled = false;
+  // AI抽出の間は端末内OCRを始めさせない。始まると端末内OCRのロックがこのボタン（＝中断の導線）まで
+  // 無効にしてしまい、その間 AI抽出を止められなくなる。終わったら元の状態へ戻す。
+  const ocrButtonWasDisabled = elements.ocrButton.disabled;
+  elements.ocrButton.disabled = true;
+  let canvas = null;
   try {
-    const canvas = getEditedCanvas();
+    canvas = getEditedCanvas();
     const errors = [];
     let result = null;
     for (const provider of configured) {
@@ -34283,9 +34316,15 @@ elements.aiOcrButton.addEventListener("click", async () => {
     } else {
       setStatus(`AI抽出に失敗しました：${errors.join(" / ")}`);
     }
+  } catch (error) {
+    // 画像の取り出しや結果の反映など、プロバイダ呼び出しの外で起きた想定外の失敗も無言にしない
+    setStatus(`AI抽出に失敗しました：${error?.message || error}`);
   } finally {
     aiExtractAbort = null;
     elements.aiOcrButton.innerHTML = originalLabel;
+    elements.ocrButton.disabled = ocrButtonWasDisabled;
+    // 使い捨ての画像キャンバスは端末内OCRと同じくその場で解放する（連続実行でメモリを残さない）
+    if (canvas) releaseTemporaryCanvas(canvas);
   }
 });
 
@@ -34459,9 +34498,7 @@ elements.saveParsedButton.addEventListener("click", async () => {
   const previousActiveDeckId = appState.activeDeckId;
   try {
     appState.words.push(...cleaned);
-    currentQuiz = null;
     if (appState.activeDeckId !== "all") appState.activeDeckId = targetDeckId;
-    clearUndo();
     // 端末への保存（localStorage と IndexedDB）が済んだことを確かめてから候補を消す。
     // 確かめずに「保存しました」と出すと、両方が失敗した環境（容量切れ等）では
     // 再読込で語が消え、直した候補も失われる。
@@ -34479,6 +34516,9 @@ elements.saveParsedButton.addEventListener("click", async () => {
       renderCandidates();
       return;
     }
+    // 進行中のクイズと直前の取り消しは、保存できてから捨てる（失敗したときに残すため。共有単語帳の追加と同じ）
+    currentQuiz = null;
+    clearUndo();
     // 保存できた分だけ一覧から取り除く。残った分は理由付きで確認タブに出したままにする。
     // 保存開始時の写しで置き換えず、いまの一覧から「保存した候補」だけを外す
     // （待っている間に一覧が作り直されていても、新しい候補を消さない）。

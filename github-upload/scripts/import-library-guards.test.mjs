@@ -220,6 +220,20 @@ test("OCRの結果: 待っている間に入力欄が変わっていなければ
   assert.match(extractFunction("lockOcrUiForRun"), /elements\.sampleChips\.querySelectorAll\("button"\)/);
 });
 
+test("AI抽出と端末内OCRは同時に走らせない。AI抽出は想定外の失敗も案内し、画像キャンバスを解放する（1.0.119）", () => {
+  const ai = extractHandlerBody('elements.aiOcrButton.addEventListener("click", async () => {');
+  const ocr = extractHandlerBody('elements.ocrButton.addEventListener("click", async () => {');
+  // AI抽出中は端末内OCRを始めさせない（始まると AI抽出の中断ボタンが無効になり止められない）
+  assert.match(ocr, /if \(aiExtractAbort\) \{[\s\S]*?setStatus\("AI抽出が終わるまでお待ちください/);
+  assert.match(ai, /const ocrButtonWasDisabled = elements\.ocrButton\.disabled;\s*elements\.ocrButton\.disabled = true;/);
+  assert.match(ai, /finally \{[\s\S]*?elements\.ocrButton\.disabled = ocrButtonWasDisabled;/);
+  // プロバイダ呼び出しの外で起きた失敗も無言にしない
+  assert.match(ai, /\} catch \(error\) \{\s*\/\/[^\n]*\n\s*setStatus\(`AI抽出に失敗しました：\$\{error\?\.message \|\| error\}`\);/);
+  // 使い捨てキャンバスの解放（端末内OCRと同じ）
+  assert.match(ai, /let canvas = null;[\s\S]*?canvas = getEditedCanvas\(\);/);
+  assert.match(ai, /finally \{[\s\S]*?if \(canvas\) releaseTemporaryCanvas\(canvas\);/);
+});
+
 // ============================================================================
 // 3. 候補の保存（待っている間の編集）
 // ============================================================================
