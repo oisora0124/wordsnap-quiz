@@ -59,6 +59,14 @@ function extractFunction(name) {
   throw new Error(`unbalanced braces for ${name}`);
 }
 
+// 上限などの定数は手書きせずHTMLから抜き出す。手書きすると本体だけ変わったときに
+// 砂場だけ古い値のまま通り、上限まわりの挙動を試していないのに緑になる。
+function extractConstant(name) {
+  const match = html.match(new RegExp(`^const ${name} = [^;\n]+;$`, "m"));
+  assert.ok(match, `const ${name} が見つかること`);
+  return match[0];
+}
+
 // テスト用の単語。実データと同じ形（normalizeWord 済みを想定）にそろえる。
 function W(id, term, meaning, pos = "n") {
   return {
@@ -269,6 +277,24 @@ function buildGradeQuizSandbox() {
     "function renderQuizProgress() {}",
     "function renderQuizEmpty() {}",
     "function renderQuiz() {}",
+    // 採点直後の履歴の切り詰めは、捨てる分を日別へ畳み込む実コードをそのまま使う
+    extractConstant("HISTORY_RAW_MAX"),
+    extractConstant("HISTORY_DAILY_MAX_ENTRIES"),
+    extractFunction("nonNegativeNumber"),
+    extractFunction("nonNegativeInteger"),
+    extractFunction("compareHistoryEntries"),
+    extractFunction("historyEntryKey"),
+    extractFunction("dedupeHistoryEntries"),
+    extractFunction("normalizeHistoryEntries"),
+    extractFunction("emptyHistoryDaily"),
+    extractFunction("compareHistoryDailyTokens"),
+    extractFunction("normalizeHistoryDailyTokens"),
+    extractFunction("validHistoryDailyKey"),
+    extractFunction("historyDailyDayCount"),
+    extractFunction("trimHistoryDailyDays"),
+    extractFunction("normalizeHistoryDaily"),
+    extractFunction("historyDailyTokenFor"),
+    extractFunction("foldHistoryIntoDaily"),
     extractFunction("currentQuizPromptMode"),
     extractFunction("gradeQuiz"),
     extractFunction("quizSrsSnapshot"),
