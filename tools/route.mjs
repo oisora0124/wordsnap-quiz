@@ -35,11 +35,13 @@ const LOG_PATH = resolve(HERE, "../docs/orchestration/routing-log.jsonl");
 // ---- モデルの役割。ユーザー方針: Codex系を主軸、Claudeは最小限。 ----
 // worker=実作業、reviewer=差分レビュー/監査、orchestrator=難所の直接処理。
 const ROLES = {
-  worker_default: ["gpt-6-luna"], // 主力実装・整形・量産（GPT-6 世代に Terra は無いので Luna が担う）
-  worker_hard: ["gpt-6-sol"], // 技術難所の実装
-  reviewer: ["gpt-6-sol"], // 差分レビュー（別モデルで反証）
-  orchestrator: ["gpt-6-sol"], // 直接処理する場合の旗艦
-  bulk: ["gpt-6-luna"], // 高ボリューム・cost-sensitive
+  // 各役割の2番目は予備（第一希望が avoid_models で外れたときだけ使う）。
+  // 利用上限を早く使い切らないよう、予備は同じ格の旧世代にとどめ、重い gpt-6-astra は自動では選ばない。
+  worker_default: ["gpt-6-luna", "gpt-5.6-luna"], // 主力実装・整形・量産（GPT-6 世代に Terra は無いので Luna が担う）
+  worker_hard: ["gpt-6-sol", "gpt-5.6-sol"], // 技術難所の実装
+  reviewer: ["gpt-6-sol", "gpt-5.6-sol"], // 差分レビュー（別モデルで反証）
+  orchestrator: ["gpt-6-sol", "gpt-5.6-sol"], // 直接処理する場合の旗艦
+  bulk: ["gpt-6-luna", "gpt-5.6-luna"], // 高ボリューム・cost-sensitive
 };
 
 // 推奨トークン幅（上限ではなく運用レンジ）。憲法どおり長文常用を避ける。
@@ -118,8 +120,13 @@ function routeModels(mode, t) {
       result.reviewer = pickOr(ROLES.reviewer, "reviewer", result.orchestrator);
       break;
     case "C":
-      result = { orchestrator: pickOr(ROLES.orchestrator, "orchestrator"), worker: pickOr([...ROLES.worker_hard, ...ROLES.worker_default], "worker"), reviewer: [] };
-      result.reviewer = pickOr(ROLES.reviewer, "reviewer", result.worker);
+    {
+      // 並列に走らせるのは「上位1体＋主力1体」。予備まで並べるとレビュアー候補が全滅するので先頭だけ取る。
+      const hard = pickOr(ROLES.worker_hard, "worker").slice(0, 1);
+      const main = pickOr(ROLES.worker_default, "worker", hard).slice(0, 1);
+      const worker = [...hard, ...main];
+      result = { orchestrator: pickOr(ROLES.orchestrator, "orchestrator"), worker, reviewer: pickOr(ROLES.reviewer, "reviewer", worker) };
+    }
       break;
     case "D": {
       // 作成者は主力(luna)、差分レビュアーは上位(sol)。強い側が弱い側の成果を検証する。
