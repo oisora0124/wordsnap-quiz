@@ -35,11 +35,11 @@ const LOG_PATH = resolve(HERE, "../docs/orchestration/routing-log.jsonl");
 // ---- モデルの役割。ユーザー方針: Codex系を主軸、Claudeは最小限。 ----
 // worker=実作業、reviewer=差分レビュー/監査、orchestrator=難所の直接処理。
 const ROLES = {
-  worker_default: ["gpt-5.6-terra", "gpt-5.6-luna"], // 主力実装・整形・量産
-  worker_hard: ["gpt-5.6-sol"], // 技術難所の実装
-  reviewer: ["gpt-5.6-sol"], // 差分レビュー（別モデルで反証）
-  orchestrator: ["gpt-5.6-sol"], // 直接処理する場合の旗艦
-  bulk: ["gpt-5.6-luna"], // 高ボリューム・cost-sensitive
+  worker_default: ["gpt-6-luna"], // 主力実装・整形・量産（GPT-6 世代に Terra は無いので Luna が担う）
+  worker_hard: ["gpt-6-sol"], // 技術難所の実装
+  reviewer: ["gpt-6-sol"], // 差分レビュー（別モデルで反証）
+  orchestrator: ["gpt-6-sol"], // 直接処理する場合の旗艦
+  bulk: ["gpt-6-luna"], // 高ボリューム・cost-sensitive
 };
 
 // 推奨トークン幅（上限ではなく運用レンジ）。憲法どおり長文常用を避ける。
@@ -122,8 +122,8 @@ function routeModels(mode, t) {
       result.reviewer = pickOr(ROLES.reviewer, "reviewer", result.worker);
       break;
     case "D": {
-      // 作成者は主力(terra/luna)、差分レビュアーは最強(sol)。強い側が弱い側の成果を検証する。
-      // 提案の「Terra→Sol」に合わせ、作成者とレビュアーは必ず別モデルにする。
+      // 作成者は主力(luna)、差分レビュアーは上位(sol)。強い側が弱い側の成果を検証する。
+      // 提案の「主力→Sol」に合わせ、作成者とレビュアーは必ず別モデルにする。
       const worker = pickOr(ROLES.worker_default, "worker");
       result = { orchestrator: [], worker, reviewer: pickOr(ROLES.reviewer, "reviewer", worker) };
       break;

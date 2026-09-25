@@ -23,7 +23,7 @@ node tools/route.mjs decide '{"task_type":"impl","goal":"...","risk":"medium","t
 # 2. 委任・実装する（憲法ファイル＋差分だけを渡す。リポジトリ全体を渡さない）
 
 # 3. 実績を記録する（後で経路を見直すため）
-node tools/route.mjs record <task_id> '{"chosen_model":"gpt-5.6-terra","pass_fail":"pass","retries":0}'
+node tools/route.mjs record <task_id> '{"chosen_model":"gpt-6-luna","pass_fail":"pass","retries":0}'
 
 # 4. たまったら集計して経路を寄せる
 node tools/route.mjs stats
@@ -33,7 +33,7 @@ node tools/route.mjs stats
 
 - 通常は **E → B/A** の順に必要性を判定する。低リスク変更が自動検査に合格したら、
   追加モデルによる儀式的レビューはしない。
-- 高位モデル（Sol）は**作業者ではなくルーター兼審査者**として使う。毎タスクの実装には流さない。
+- 高位モデル（Sol = gpt-6-sol）は**作業者ではなくルーター兼審査者**として使う。毎タスクの実装には流さない。
 - ユーザーが特定モデルの不使用を指定したら（`avoid_models`）必ず優先する。
 - 実績が同じ `task_type` で 30 件以上たまったら、一発合格率が高くトークンの小さい経路へ寄せる。
 
@@ -42,7 +42,7 @@ node tools/route.mjs stats
 | モード | 使いどころ | 既定ルート（Codex主軸・Claude最小） |
 |---|---|---|
 | A | 前例のない設計・未確定仕様を直接処理 | Sol 直処理 ＋ 別モデルレビュー |
-| B | 低〜中リスクの委任・量産 | Terra/Luna（量産は Luna） |
+| B | 低〜中リスクの委任・量産 | Luna（gpt-6-luna） |
 | C | 独立案の比較価値が高い | Sol＋主力を並列、別モデルでレビュー |
-| D | 高リスクだが仕様は明確 | 作成者 Terra → レビュアー Sol |
+| D | 高リスクだが仕様は明確 | 作成者 Luna → レビュアー Sol（gpt-6-sol） |
 | E | 型・ルール・テスト・SQLで機械処理 | モデル不使用 |
