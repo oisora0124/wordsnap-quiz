@@ -121,11 +121,12 @@ function routeModels(mode, t) {
       break;
     case "C":
     {
-      // 並列に走らせるのは「上位1体＋主力1体」。予備まで並べるとレビュアー候補が全滅するので先頭だけ取る。
-      const hard = pickOr(ROLES.worker_hard, "worker").slice(0, 1);
-      const main = pickOr(ROLES.worker_default, "worker", hard).slice(0, 1);
-      const worker = [...hard, ...main];
-      result = { orchestrator: pickOr(ROLES.orchestrator, "orchestrator"), worker, reviewer: pickOr(ROLES.reviewer, "reviewer", worker) };
+      // 比較の審査は最上位（レビュアーの第一候補）が担い、独立案は作成者と別モデルになるよう残りから出す。
+      // 案出しは「主力1体＋上位の予備1体」。世代の違う2案になり、比較の独立性も保てる。
+      const reviewer = pickOr(ROLES.reviewer, "reviewer").slice(0, 1);
+      const main = pickOr(ROLES.worker_default, "worker", reviewer).slice(0, 1);
+      const hard = pickOr(ROLES.worker_hard, "worker", [...reviewer, ...main]).slice(0, 1);
+      result = { orchestrator: pickOr(ROLES.orchestrator, "orchestrator"), worker: [...main, ...hard], reviewer };
     }
       break;
     case "D": {
