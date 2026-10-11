@@ -43,36 +43,40 @@ function extractFunction(name) {
 
 // ---------- 1. 要約の後ろの語数 ----------
 
-function runDeckCount(count) {
+function runScopeCount({ count, from = "", to = "" }) {
   const elements = {
-    quizDeckCount: { textContent: "" },
     quizSetupScopeCount: { textContent: "" },
-    quizRangeFrom: { max: "" },
-    quizRangeTo: { max: "" },
+    quizRangeFrom: { value: from },
+    quizRangeTo: { value: to },
   };
-  let scopeUpdated = 0;
   const sandbox = {
     elements,
     quizSelectedDeckWords: () => Array.from({ length: count }, (_, i) => ({ id: String(i) })),
-    updateQuizSetupScope: () => {
-      scopeUpdated += 1;
-    },
   };
   vm.createContext(sandbox);
-  vm.runInContext(`${extractFunction("updateQuizDeckCount")}\nupdateQuizDeckCount();`, sandbox);
-  return { elements, scopeUpdated };
+  vm.runInContext(
+    [extractFunction("quizRangeWordCount"), extractFunction("updateQuizSetupScopeCount"), "updateQuizSetupScopeCount();"].join("\n"),
+    sandbox,
+  );
+  return elements.quizSetupScopeCount.textContent;
 }
 
 test("出題対象の語数を、折りたたみの見出しの要約の後ろにも出す", () => {
-  const { elements, scopeUpdated } = runDeckCount(6);
-  assert.equal(elements.quizDeckCount.textContent, "出題対象: 6語");
-  assert.equal(elements.quizSetupScopeCount.textContent, "・6語");
-  assert.equal(scopeUpdated, 1, "要約本体の更新も従来どおり呼ぶ");
+  assert.equal(runScopeCount({ count: 6 }), "・6語");
+  assert.equal(runScopeCount({ count: 0 }), "・対象なし");
 });
 
-test("出題対象が0語なら、要約の後ろは「対象なし」", () => {
-  const { elements } = runDeckCount(0);
-  assert.equal(elements.quizSetupScopeCount.textContent, "・対象なし");
+test("番号範囲を指定したら、見出しの語数も実際の出題数（slice(from-1, to)）に合わせる", () => {
+  assert.equal(runScopeCount({ count: 100, from: "1", to: "10" }), "・10語");
+  assert.equal(runScopeCount({ count: 100, from: "91" }), "・10語", "開始だけ");
+  assert.equal(runScopeCount({ count: 100, to: "25" }), "・25語", "終了だけ");
+  assert.equal(runScopeCount({ count: 30, from: "21", to: "500" }), "・10語", "範囲外は端へ寄せる");
+  assert.equal(runScopeCount({ count: 30, from: "20", to: "10" }), "・対象なし", "逆順は0語");
+});
+
+test("語数は要約と同じ更新経路（updateQuizSetupScope）で描き直す", () => {
+  // 範囲入力・範囲トグル・同期・復元はすべて updateQuizSetupScope を呼ぶので、そこに乗せる
+  assert.match(extractFunction("updateQuizSetupScope"), /updateQuizSetupScopeCount\(\)/);
 });
 
 test("語数の表示先は #quizSetupAdvanced の summary の中にある（閉じていても見える）", () => {
@@ -122,30 +126,58 @@ test("利用者が別の場所を操作中なら焦点を奪わない", () => {
   assert.equal(runShouldMove({ active: "quiz", step: "library" }), false, "クイズタブ以外では移さない");
 });
 
-// renderReviewResult を最小のDOMで走らせ、焦点移動が「初回だけ」であることを確かめる
-function runRenderReviewResult({ result, activeIsQuiz = true }) {
+// renderReviewResult を最小のDOMで走らせる。replaceChildren で古いボタンが外れ、
+// focus() は activeElement を動かす（外れた要素に焦点があれば body へ落ちる）ところまで再現する。
+function makeResultSandbox({ result, initialActive = "quiz" }) {
   const created = [];
+  const body = { id: "body" };
+  const doc = { body, activeElement: null, querySelector: () => ({ textContent: "" }) };
+  const choices = {
+    childrenNodes: [],
+    replaceChildren(...nodes) {
+      const removed = this.childrenNodes;
+      this.childrenNodes = nodes;
+      if (removed.some((node) => node.containsNode(doc.activeElement))) doc.activeElement = body;
+    },
+    contains(node) {
+      return this.childrenNodes.some((child) => child.containsNode(node));
+    },
+  };
   const makeNode = (tag) => {
     const node = {
       tag,
       children: [],
+      parentElement: null,
       textContent: "",
       className: "",
       type: "",
       focusCount: 0,
       append(...items) {
+        for (const item of items) item.parentElement = this;
         this.children.push(...items);
+      },
+      containsNode(target) {
+        return target === this || this.children.some((child) => child.containsNode?.(target));
+      },
+      closest(selector) {
+        if (selector === ".review-result-actions button") {
+          return this.tag === "button" && this.parentElement?.className === "review-result-actions" ? this : null;
+        }
+        if (selector === "#quizCard, .quiz-actions") return choices.contains(this) ? this : null;
+        return null;
       },
       addEventListener() {},
       focus() {
         this.focusCount += 1;
+        doc.activeElement = this;
       },
     };
     created.push(node);
     return node;
   };
-  const body = { id: "body" };
-  const activeElement = activeIsQuiz ? { closest: () => ({}) } : { closest: () => null };
+  doc.createElement = makeNode;
+  doc.activeElement =
+    initialActive === "quiz" ? { closest: (sel) => (sel === "#quizCard, .quiz-actions" ? {} : null) } : { closest: () => null };
   const sandbox = {
     reviewResult: result,
     activeStepId: "quiz",
@@ -153,15 +185,10 @@ function runRenderReviewResult({ result, activeIsQuiz = true }) {
       quizWord: { textContent: "" },
       quizFeedback: { textContent: "" },
       quizResultQuote: { textContent: "" },
-      choices: { replaceChildren() {} },
+      choices,
     },
     currentLearningQuote: () => ({ text: "学び", author: "誰か" }),
-    document: {
-      body,
-      activeElement,
-      querySelector: () => ({ textContent: "" }),
-      createElement: makeNode,
-    },
+    document: doc,
     startReview() {},
     startFlashcardsFromIds() {},
     renderQuiz() {},
@@ -169,16 +196,11 @@ function runRenderReviewResult({ result, activeIsQuiz = true }) {
   };
   vm.createContext(sandbox);
   vm.runInContext(
-    [
-      extractFunction("shouldMoveFocusToReviewResult"),
-      extractFunction("renderReviewResult"),
-      "renderReviewResult();",
-      "renderReviewResult();",
-    ].join("\n"),
+    [extractFunction("shouldMoveFocusToReviewResult"), extractFunction("renderReviewResult"), "globalThis.__render = renderReviewResult;"].join("\n"),
     sandbox,
   );
-  const buttons = created.filter((node) => node.tag === "button");
-  return { again: buttons[0], close: buttons[1] };
+  const buttons = () => created.filter((node) => node.tag === "button");
+  return { render: () => sandbox.__render(), buttons, doc };
 }
 
 const baseResult = () => ({
@@ -190,16 +212,36 @@ const baseResult = () => ({
   allIds: ["a", "b", "c"],
 });
 
-test("結果画面を初めて出したときだけ「もう一度解く」へ焦点を移す（描き直しでは移さない）", () => {
+test("結果画面を初めて出したときだけ「もう一度解く」へ焦点を移す", () => {
   const result = baseResult();
-  const { again } = runRenderReviewResult({ result });
-  assert.equal(again.focusCount, 1, "2回描いても焦点移動は1回");
+  const box = makeResultSandbox({ result });
+  box.render();
+  const [firstAgain] = box.buttons();
+  assert.equal(firstAgain.focusCount, 1);
   assert.equal(result.focusMoved, true);
+  // 焦点が外れて body に落ちた状態（ボタン以外をクリックした等）で同期の描き直しが来ても、
+  // 2回目以降は「もう一度解く」へ引き戻さない（初回だけの約束）
+  box.doc.activeElement = box.doc.body;
+  box.render();
+  const total = box.buttons().reduce((n, button) => n + button.focusCount, 0);
+  assert.equal(total, 1, "2回目の描画ではどのボタンにも focus しない");
+});
+
+test("結果のボタンに焦点がある状態で描き直したら、作り直した同じ位置のボタンへ戻す", () => {
+  const box = makeResultSandbox({ result: baseResult() });
+  box.render();
+  const [, firstClose] = box.buttons();
+  firstClose.focus(); // 利用者が「通常クイズに戻る」へ移動した
+  box.render(); // 同期による描き直し
+  const [, , secondAgain, secondClose] = box.buttons();
+  assert.equal(box.doc.activeElement, secondClose, "作り直した「通常クイズに戻る」に焦点がある");
+  assert.equal(secondAgain.focusCount, 0, "「もう一度解く」へ引き戻さない");
 });
 
 test("焦点がクイズ周りに無ければ、結果画面でも焦点を奪わない", () => {
-  const { again } = runRenderReviewResult({ result: baseResult(), activeIsQuiz: false });
-  assert.equal(again.focusCount, 0);
+  const box = makeResultSandbox({ result: baseResult(), initialActive: "elsewhere" });
+  box.render();
+  assert.equal(box.buttons()[0].focusCount, 0);
 });
 
 // ---------- 3. 再生中の🔊 ----------

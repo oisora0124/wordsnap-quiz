@@ -28633,7 +28633,39 @@ function describeQuizSetupScope({
 }
 
 // #quizSetupScope（折りたたんだ summary の要約）を今の設定欄の値で描き直す
+// 番号範囲（開始・終了の入力値）を当てたときの語数。「この設定で出題」は words.slice(from-1, to)
+// で出すので、見出しの語数もそれに合わせる（単語帳全体の語数を出すと「番号 1〜10・100語」のように
+// 実際の出題数と食い違う）。空欄や範囲外の値は出題時と同じく端へ寄せて数える（不正な値は出題時に
+// 検証メッセージが出るので、ここでは目安を出すだけ）。
+function quizRangeWordCount(total, fromRaw, toRaw) {
+  const size = Math.max(0, Math.floor(Number(total) || 0));
+  if (size === 0) return 0;
+  const parse = (raw) => {
+    const text = String(raw ?? "").trim();
+    if (!text) return null;
+    const value = Number(text);
+    return Number.isInteger(value) ? value : null;
+  };
+  const from = Math.min(size, Math.max(1, parse(fromRaw) ?? 1));
+  const to = Math.min(size, Math.max(1, parse(toRaw) ?? size));
+  return Math.max(0, to - from + 1);
+}
+
+// 1.0.129 で設定を折りたたんだため「出題対象: N語」は開かないと見えない。
+// 閉じたままでも量が分かるよう、見出しの要約の後ろにも（番号範囲を当てた）語数を出す。
+function updateQuizSetupScopeCount() {
+  if (!elements.quizSetupScopeCount) return;
+  const n = quizRangeWordCount(
+    quizSelectedDeckWords().length,
+    elements.quizRangeFrom ? elements.quizRangeFrom.value : "",
+    elements.quizRangeTo ? elements.quizRangeTo.value : "",
+  );
+  elements.quizSetupScopeCount.textContent = n ? `・${n}語` : "・対象なし";
+}
+
 function updateQuizSetupScope() {
+  // 語数は要約と同じ更新経路（単語帳・CEFR・範囲・同期・復元）で必ず描き直す
+  if (elements.quizSetupScopeCount) updateQuizSetupScopeCount();
   if (!elements.quizSetupScope) return;
   const deckId = elements.quizDeckSelect ? elements.quizDeckSelect.value : "all";
   const deckLabel = deckId === "all" ? "すべて" : deckName(deckId);
@@ -28653,11 +28685,6 @@ function updateQuizDeckCount() {
   if (!elements.quizDeckCount) return;
   const n = quizSelectedDeckWords().length;
   elements.quizDeckCount.textContent = n ? `出題対象: ${n}語` : "対象なし";
-  // 1.0.129 で設定を折りたたんだため「出題対象: N語」は開かないと見えない。
-  // 閉じたままでも量が分かるよう、見出しの要約の後ろにも語数を出す。
-  if (elements.quizSetupScopeCount) {
-    elements.quizSetupScopeCount.textContent = n ? `・${n}語` : "・対象なし";
-  }
   for (const input of [elements.quizRangeFrom, elements.quizRangeTo]) {
     if (input) input.max = String(Math.max(1, n));
   }
@@ -29320,7 +29347,28 @@ function renderReviewResult() {
   actions.append(again, close);
   box.append(actions);
 
+  // 描き直す前に、結果の操作ボタンに焦点があったかを控える（何番目のボタンか）。
+  // replaceChildren でボタンが作り直されると焦点は body へ落ちるので、同じ位置のボタンへ戻す。
+  const previousAction =
+    typeof document.activeElement?.closest === "function"
+      ? document.activeElement.closest(".review-result-actions button")
+      : null;
+  const previousActionIndex =
+    previousAction && elements.choices.contains?.(previousAction)
+      ? [...previousAction.parentElement.children].indexOf(previousAction)
+      : -1;
+
   elements.choices.replaceChildren(box);
+
+  if (previousActionIndex >= 0) {
+    result.focusMoved = true;
+    try {
+      [again, close][previousActionIndex]?.focus({ preventScroll: true });
+    } catch {
+      /* 焦点の復元は補助。失敗しても結果表示は続ける */
+    }
+    return;
+  }
 
   // 最後の問題を「次の問題」で確定すると、そのボタンは隠れて焦点の行き場が無くなる
   // （キーボード・読み上げ利用者が結果画面の操作へ辿り着けない）。結果を初めて出したときだけ、
