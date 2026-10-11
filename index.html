@@ -5029,10 +5029,32 @@ textarea:focus-visible {
   border-color: transparent;
 }
 
-.quiz-speak.is-speaking {
+/* 再生中は、暗いカードの上でも分かるよう白い輪で囲む（色だけに頼らない）。
+   通常時と同じ色だと、押しても鳴っているのか分からなかった。 */
+.quiz-speak.is-speaking,
+.flashcard-speak.is-speaking {
   color: var(--action-fg);
   background: var(--action-bg);
   border-color: var(--action-bg);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.9);
+  animation: speak-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes speak-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.9);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quiz-speak.is-speaking,
+  .flashcard-speak.is-speaking {
+    animation: none;
+  }
 }
 
 /* フラッシュカードは1タップで意味を確認し、そのまま左右へ仕分けできる軽量UI。 */
@@ -6358,7 +6380,7 @@ accurate 正確な"
             <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
           </div>
           <details id="quizSetupAdvanced" class="quiz-setup-more">
-            <summary>単語帳・範囲・出題形式を選ぶ <span id="quizSetupScope" class="quiz-setup-scope"></span></summary>
+            <summary>単語帳・範囲・出題形式を選ぶ <span id="quizSetupScope" class="quiz-setup-scope"></span><span id="quizSetupScopeCount" class="quiz-setup-scope"></span></summary>
             <div class="quiz-setup-more-body">
               <div class="quiz-setup-row">
                 <label class="quiz-setup-field">
@@ -7170,7 +7192,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.133</span>
+        <span class="app-footer-version">バージョン 1.0.134</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7308,7 +7330,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.133";
+  const APP_REV = "1.0.134";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -18005,6 +18027,7 @@ const elements = {
   quizDirectionSelect: document.querySelector("#quizDirectionSelect"),
   quizRangeStartButton: document.querySelector("#quizRangeStartButton"),
   quizDeckCount: document.querySelector("#quizDeckCount"),
+  quizSetupScopeCount: document.querySelector("#quizSetupScopeCount"),
   accuracy: document.querySelector("#accuracy"),
   selectAllCheckbox: document.querySelector("#selectAllCheckbox"),
   selectAllLabel: document.querySelector("#selectAllLabel"),
@@ -28630,6 +28653,11 @@ function updateQuizDeckCount() {
   if (!elements.quizDeckCount) return;
   const n = quizSelectedDeckWords().length;
   elements.quizDeckCount.textContent = n ? `出題対象: ${n}語` : "対象なし";
+  // 1.0.129 で設定を折りたたんだため「出題対象: N語」は開かないと見えない。
+  // 閉じたままでも量が分かるよう、見出しの要約の後ろにも語数を出す。
+  if (elements.quizSetupScopeCount) {
+    elements.quizSetupScopeCount.textContent = n ? `・${n}語` : "・対象なし";
+  }
   for (const input of [elements.quizRangeFrom, elements.quizRangeTo]) {
     if (input) input.max = String(Math.max(1, n));
   }
@@ -29293,6 +29321,30 @@ function renderReviewResult() {
   box.append(actions);
 
   elements.choices.replaceChildren(box);
+
+  // 最後の問題を「次の問題」で確定すると、そのボタンは隠れて焦点の行き場が無くなる
+  // （キーボード・読み上げ利用者が結果画面の操作へ辿り着けない）。結果を初めて出したときだけ、
+  // 焦点がクイズ周り（またはどこにも無い）なら「もう一度解く」へ移す。同期などで描き直したときや、
+  // 利用者が別の場所を操作しているときは焦点を奪わない。
+  if (!result.focusMoved) {
+    result.focusMoved = true;
+    if (shouldMoveFocusToReviewResult(document.activeElement)) {
+      try {
+        again.focus({ preventScroll: true });
+      } catch {
+        /* 焦点移動は補助。失敗しても結果表示は続ける */
+      }
+    }
+  }
+}
+
+// 結果画面を出した直後に、焦点を結果の操作へ移してよいか。
+// 焦点が無い・body・クイズのカード/操作列の中（隠れる「次の問題」を含む）のときだけ移す。
+function shouldMoveFocusToReviewResult(active) {
+  if (typeof activeStepId !== "undefined" && activeStepId !== "quiz") return false;
+  if (!active || active === document.body) return true;
+  if (typeof active.closest !== "function") return false;
+  return Boolean(active.closest("#quizCard, .quiz-actions"));
 }
 
 // 復習セッションはキュー式の「誤答は末尾へ回す」だけで十分な間隔があくため、
