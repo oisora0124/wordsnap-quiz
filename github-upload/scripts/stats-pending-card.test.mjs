@@ -93,7 +93,7 @@ function buildSandbox({ built = {}, words = [], events = [], logEnabled = true }
 
 // 全部出ている状態（＝理由を書く対象が無い）。
 const ALL = {
-  activity: "x", accuracy: "x", deck: "x", cefr: "x", weak: "x", format: "x", speed: "x",
+  activity: "x", accuracy: "x", weekly: "x", deck: "x", cefr: "x", weak: "x", format: "x", speed: "x",
 };
 
 test("全部出ているときは、このカード自体を出さない", () => {
@@ -293,7 +293,7 @@ test("配線: 定義に無いカードが描画に紛れ込まない・定義の
   const withPending = [...defs.matchAll(/key: "(\w+)",[\s\S]*?(?=\n  \{|$)/g)]
     .filter((m) => /pending:/.test(m[0]))
     .map((m) => m[1]);
-  assert.deepEqual(withPending.sort(), ["accuracy", "activity", "cefr", "deck", "format", "speed", "weak"], "理由を持つカードの顔ぶれが変わっている");
+  assert.deepEqual(withPending.sort(), ["accuracy", "activity", "cefr", "deck", "format", "speed", "weak", "weekly"], "理由を持つカードの顔ぶれが変わっている");
 });
 
 // ---------------------------------------------------------------------------

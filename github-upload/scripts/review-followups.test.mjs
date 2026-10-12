@@ -134,6 +134,7 @@ function controlsSandbox({ withSpeechSynthesis = true } = {}) {
     "let reviewResult = null;",
     "let __timer = null;",
     "function syncQuizTimer(active) { __timer = active; }",
+    "function renderQuizTodaySummary() {}",
     "function keyboardHintsEnabled() { return false; }",
     "function autoNextEnabled() { return false; }",
     "function autoNextDelay() { return 3000; }",
