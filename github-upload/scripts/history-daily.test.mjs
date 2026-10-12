@@ -133,8 +133,7 @@ function historyWithOverflow(count) {
 
 // 日キーは端末の時差に依存しないUTC日付（ISO文字列の先頭10文字）。
 const OLD_DAY = new Date(OLD_MS).toISOString().slice(0, 10);
-// 表示側は「その日の12:00Z」をローカル日付へ寄せる。
-const OLD_DAY_LOCAL = rt.localDateString(new Date(`${OLD_DAY}T12:00:00Z`));
+// 表示側はトークンの秒から実時刻に戻し、解答ごとにローカル日付へ寄せる。
 
 // vm の中で作られたオブジェクトは realm が違い deepStrictEqual を通らないので、
 // 素のJSON値に直してから比べる。
@@ -614,10 +613,23 @@ test("カレンダーの集計は生の履歴と日別を合算し、その日�
   const total = [...byDay.values()].reduce((sum, day) => sum + day.answers, 0);
 
   assert.equal(total, 60, "畳み込んだ分もカレンダーに残ること");
-  // 生の履歴には1件も残っていない日でも、回数と学習した語が残る
-  assert.equal(byDay.get(OLD_DAY_LOCAL).answers, 10);
-  assert.equal(byDay.get(OLD_DAY_LOCAL).correct, 5, '"+" の数が正解数になること');
-  assert.ok(byDay.get(OLD_DAY_LOCAL).terms.has("apple"), "日別だけの日にも単語が入ること");
+  // 生の履歴には1件も残っていない日でも、回数と学習した語が残る。
+  // 日別のトークンは実時刻に戻してからローカル日へ寄せる（日キー全体を正午で寄せない）ので、
+  // 期待値は畳まれた各解答の実時刻のローカル日で数える（端末の時差に依らない）。
+  const expected = new Map();
+  for (const entry of historyWithOverflow(10).slice(0, 10)) {
+    const key = rt.localDateString(new Date(entry.at));
+    const row = expected.get(key) || { answers: 0, correct: 0 };
+    row.answers += 1;
+    if (entry.correct) row.correct += 1;
+    expected.set(key, row);
+  }
+  // 畳まれた解答（30日前）は生の履歴（直近50時間）と日が重ならないので、日ごとに完全一致する
+  for (const [key, row] of expected) {
+    assert.equal(byDay.get(key).answers, row.answers, key);
+    assert.equal(byDay.get(key).correct, row.correct, '"+" の数が正解数になること');
+    assert.ok(byDay.get(key).terms.has("apple"), "日別だけの日にも単語が入ること");
+  }
 });
 
 test("時差の違う端末が同じ解答を畳み込んでも、日別は増えない", () => {

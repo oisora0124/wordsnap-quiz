@@ -233,6 +233,7 @@ function quizControlsSandbox() {
     "let quizStarted = false;",
     "let reviewResult = null;",
     "function syncQuizTimer() {}",
+    "function renderQuizTodaySummary() {}",
     "function keyboardHintsEnabled() { return false; }",
     "function autoNextEnabled() { return false; }",
     "function autoNextDelay() { return 3000; }",

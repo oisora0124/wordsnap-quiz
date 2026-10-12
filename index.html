@@ -4712,6 +4712,14 @@ textarea:focus-visible {
   margin-bottom: 10px;
 }
 
+/* 2回目以降の「今日の状況」の1行。主ボタンの上で、控えめに今日の連続記録と回答数を示す。 */
+.quiz-today-summary {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
 .quiz-start-primary {
   display: flex;
   flex-wrap: wrap;
@@ -4727,6 +4735,13 @@ textarea:focus-visible {
 
 .quiz-start-primary > #generalReviewButton {
   flex: 0 1 auto;
+}
+
+/* 今日の復習が1語以上あるときは、主ボタンと並べても「やることがある」と目に入るようにする */
+.quiz-start-primary > #generalReviewButton.is-due {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 760;
 }
 
 /* .settings-section の summary（シェブロン・hover）を同じ書き方で再現しつつ、
@@ -6375,6 +6390,7 @@ accurate 正確な"
         <div id="quizSetup" class="quiz-setup">
           <!-- リロード等で中断したクイズがあるときだけ表示される再開ボタン -->
           <button id="resumeQuizButton" class="secondary" type="button" hidden>▶ 前回の続きから</button>
+          <p id="quizTodaySummary" class="quiz-today-summary" hidden></p>
           <div class="quiz-start-primary">
             <button id="startQuizButton" class="quiz-start-main" type="button" title="覚えていない単語を自動で選んで、エンドレスに出題します">クイズを始める（おまかせ）</button>
             <button id="generalReviewButton" class="secondary" type="button">今日の復習（0語）</button>
@@ -7072,8 +7088,9 @@ accurate 正確な"
               <div class="settings-row">
                 <button id="exportButton" class="secondary" type="button">JSONを書き出す</button>
                 <button id="exportCsvButton" class="secondary" type="button" title="単語・意味・単語帳・CEFR・品詞・成績を表計算ソフトで開ける形式で書き出します。復元には使えません（JSONを使ってください）">CSVを書き出す</button>
+                <button id="exportAnkiButton" class="secondary" type="button" title="Anki に読み込めるテキスト（タブ区切り）で書き出します。表面＝英単語、裏面＝意味。単語帳はAnkiのデッキ（WordBank::単語帳名）になります。Ankiの読み込み画面でノートタイプは「基本（Basic）」を選んでください">Anki用に書き出す</button>
               </div>
-              <p class="settings-desc">復元するときは「保存した単語」にある「JSONを読み込む」を使ってください。CSVは表計算ソフトやほかの単語帳ツールへ渡す用で、読み込みはできません。</p>
+              <p class="settings-desc">復元するときは「保存した単語」にある「JSONを読み込む」を使ってください。CSVは表計算ソフトやほかの単語帳ツールへ渡す用で、読み込みはできません。Anki用はAnkiの「ファイルを読み込む」で取り込めます。Ankiの読み込み画面でノートタイプは「基本（Basic）」を選んでください（学習記録は含みません）。</p>
             </div>
           </details>
 
@@ -7192,7 +7209,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.134</span>
+        <span class="app-footer-version">バージョン 1.0.135</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7330,7 +7347,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.134";
+  const APP_REV = "1.0.135";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7338,6 +7355,7 @@ const WordBankTelemetry = (() => {
     "ai-extract",
     "json-export",
     "csv-export",
+    "anki-export",
     "json-import",
     "sync-v2-upgrade",
     "sync-v2-create",
@@ -18040,6 +18058,7 @@ const elements = {
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   exportButton: document.querySelector("#exportButton"),
   exportCsvButton: document.querySelector("#exportCsvButton"),
+  exportAnkiButton: document.querySelector("#exportAnkiButton"),
   importJsonInput: document.querySelector("#importJsonInput"),
   importDeckShareInput: document.querySelector("#importDeckShareInput"),
   importConfirmBar: document.querySelector("#importConfirmBar"),
@@ -18126,6 +18145,7 @@ const elements = {
   adaptiveSrsToggle: document.querySelector("#adaptiveSrsToggle"),
   dailyGoalSelect: document.querySelector("#dailyGoalSelect"),
   quizDailyGoal: document.querySelector("#quizDailyGoal"),
+  quizTodaySummary: document.querySelector("#quizTodaySummary"),
   quizTimer: document.querySelector("#quizTimer"),
   quizTimerTrack: document.querySelector("#quizTimerTrack"),
   quizTimerFill: document.querySelector("#quizTimerFill"),
@@ -23880,7 +23900,15 @@ function initWordsnapSync() {
     if (activeStepId === "quiz") {
       stopQuizTimer();
       updateQuizControls();
+      // 日付をまたいで戻ったとき、今日の状況（updateQuizControls 内）と食い違わないよう
+      // 見出しの「今日 X/Y問」も同時に数え直す。
+      renderDailyGoalChip();
     }
+    // 連続記録はどのタブでも上部の🔥に出ているので、日付をまたいだ復帰ではタブに関係なく
+    // 描き直す（途切れた連続が古い日数のまま残らないように）。学習の記録を開いていれば
+    // カレンダーとサマリーも今日の日付で描き直す。どちらも表示だけで保存値は変えない。
+    renderStreakBadge();
+    if (elements.streakPanel && !elements.streakPanel.hidden) renderStreakCalendar();
   };
   window.addEventListener("focus", pullIfConnected);
   // 別アプリや別ウィンドウへ移っただけでは document.hidden にならない環境があるため、
@@ -27802,6 +27830,8 @@ function renderQuiz() {
     const count = eligibleSrsWords().length;
     elements.generalReviewButton.textContent = `今日の復習（${count}語）`;
     elements.generalReviewButton.disabled = count === 0;
+    // 復習が溜まっているときだけ強調する（0語のときは disabled で十分伝わる）
+    elements.generalReviewButton.classList.toggle("is-due", count > 0);
   }
   if (elements.difficultQuizButton) {
     const count = difficultQuizWords().length;
@@ -28012,6 +28042,8 @@ function updateQuizControls() {
   // フラッシュカードは自己評価の高速周回であり、思い出してから裏返す時間を急かさないため
   // クイズの制限時間を適用しない。4択・例文問題だけを既存タイマーの対象にする。
   syncQuizTimer(questionActive && !showingResult && !inFlashcard);
+  // 出題設定欄の出し入れと同じタイミングで、「今日の状況」の1行も合わせる
+  renderQuizTodaySummary();
 }
 
 function renderAccuracy() {
@@ -32008,20 +32040,40 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
   return picked;
 }
 
+// 表示する「いまの連続日数」。最後に解いたのが今日か昨日なら保存済みの count、
+// それより前なら連続は途切れているので 0（次に解くと updateStreakOnAnswer が1日目から数え直す）。
+// 保存値は書き換えない。表示だけを揃える純関数で、ヘッダーの🔥と開始画面の「今日の状況」が共有する。
+// 端末の時計が1日先の記録（normalizeStreak が許す範囲）は、今日と同じく続いているものとして扱う。
+function currentStreakCount(streak, todayKey = localDateString()) {
+  const count = Math.max(0, Math.floor(Number(streak?.count) || 0));
+  const last = String(streak?.last || "");
+  if (count === 0 || !last) return 0;
+  // 回答時の更新（updateStreakOnAnswer）と同じ境界にする: 最後が「今日」か「昨日」なら継続、
+  // それ以外（途切れた・端末の時計が進んでいて未来の日付）は、次に解くと1日目から数え直されるので0。
+  // 未来の日付を継続扱いにすると「連続5日」と出ていたのに、1問解くと「1日」へ戻る食い違いが起きる。
+  if (last === todayKey) return count;
+  const [y, m, d] = todayKey.split("-").map(Number);
+  return last === localDateString(new Date(y, m - 1, d - 1)) ? count : 0;
+}
+
 // ヘッダーの🔥ピルを最新の連続学習日数に合わせて更新する（count=0なら非表示）
 function renderStreakBadge() {
   const badge = elements.streakBadge;
   if (!badge) return;
-  const streak = normalizeStreak(appState.streak);
+  const saved = normalizeStreak(appState.streak);
   badge.hidden = false;
+  const today = localDateString();
+  // 表示する連続日数（途切れていれば 0）。保存値の saved は書き換えない。
+  const streak = { count: currentStreakCount(saved, today), last: saved.last };
   if (elements.streakBadgeCount) elements.streakBadgeCount.textContent = String(streak.count);
-  const isToday = streak.last === localDateString();
-  const hasStreak = streak.count > 0;
-  // 今日まだ解いていなければ薄く表示する（今日やれば継続が分かるように）
-  badge.classList.toggle("is-stale", hasStreak && !isToday);
+  // 今日まだ解いていなければ薄く表示する（今日やれば継続が分かるように）。
+  // 途切れた記録は 0 日表示なので薄くしない（stale は昨日までは続いているときだけ）。
+  badge.classList.toggle("is-stale", streak.count > 0 && streak.last < today);
   const streakLabel = `連続学習 ${streak.count}日`;
   badge.title = streakLabel;
   badge.setAttribute("aria-label", streakLabel);
+  // 開始画面の「今日の状況」も連続記録を出しているので、同じタイミングで描き直す
+  renderQuizTodaySummary();
 }
 
 // ---------- 学習カレンダー ----------
@@ -32055,19 +32107,26 @@ function buildDailyActivity(words = appState.words || []) {
     }
     // 生の履歴から押し出された古い解答分。1解答＝1トークンなので、トークン数がその日の
     // 解答数、"+" の数が正解数になる。その日に学習した語としても term を数える。
-    // キーはUTC日付なので、その日の正午(12:00Z)をローカル日付へ直して寄せる。
-    // 端から取ると時差でほぼ必ず1日ずれるが、正午なら±11時間までは同じ暦日に落ちる。
+    // キーはUTC日付、トークンはその日の秒（36進）。UTC日の0時にその秒を足せば解答の実時刻に
+    // 戻るので、トークンごとにローカル日付を決める。日キー全体を正午でローカル日へ寄せると、
+    // 時差のある端末（東京で月曜01:00の解答が日曜になる等）で日・週の境界がずれる。
     const days = word.historyDaily?.days;
     for (const key of Object.keys(days || {})) {
       const tokens = days[key];
       // 正規化を通っていない語（取り込み直後など）が混じっても、壊れた日を作らない
       if (typeof tokens !== "string" || !tokens || !/^\d{4}-\d{2}-\d{2}$/.test(key)) continue;
-      const day = dayFor(localDateString(new Date(`${key}T12:00:00Z`)));
-      for (const token of tokens.split(",")) {
+      const dayStart = Date.UTC(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)));
+      if (!Number.isFinite(dayStart)) continue;
+      for (const raw of tokens.split(",")) {
+        const token = raw.trim();
+        // 秒が読めない壊れたトークンも1解答として数える（従来どおり）。時刻は正午に置く。
+        const seconds = /^[0-9a-z]{1,4}[+-]$/.test(token) ? parseInt(token.slice(0, -1), 36) : NaN;
+        const at = dayStart + (seconds >= 0 && seconds < 86400 ? seconds : 43200) * 1000;
+        const day = dayFor(localDateString(new Date(at)));
         day.answers += 1;
         if (token.endsWith("+")) day.correct += 1;
+        if (word.term) day.terms.add(word.term);
       }
-      if (word.term) day.terms.add(word.term);
     }
   }
   return byDay;
@@ -32155,7 +32214,9 @@ function renderStreakCalendar() {
   const { year, month } = streakCalMonth;
 
   // サマリー：現在の連続・過去最高・今月の学習日数と回答数
-  const streak = normalizeStreak(appState.streak);
+  // 「現在の連続」はヘッダーの🔥と同じく、途切れた記録を数えない（保存値は書き換えない）
+  const savedStreak = normalizeStreak(appState.streak);
+  const streak = { ...savedStreak, count: currentStreakCount(savedStreak) };
   let busiest = 0;
   for (const day of byDay.values()) {
     if (day.answers > busiest) busiest = day.answers;
@@ -33001,6 +33062,119 @@ function statsAccuracyCard(byDay) {
   );
 }
 
+// 日付 YYYY-MM-DD の週（月曜始まり・端末ローカル）の月曜の日付を返す。
+// 日曜は前の週の末尾に入る。Date のローカル日付成分で組むので、時差・夏時間に依存しない。
+function weekStartKey(date) {
+  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  return localDateString(monday);
+}
+
+// 週ごとの推移（古い週→新しい週の weeks 件）。
+// byDay は buildDailyActivity の日別 Map。events は学習の記録（回答時間の中央値用）。
+// 回答時間は「わからない」を除き、数値のものだけを週ごとに集める。3件未満の週は
+// 当てにならないので中央値を出さない（null）。
+function buildWeeklyTrend(byDay, events, nowMs = Date.now(), weeks = 8) {
+  const now = new Date(nowMs);
+  const thisMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  thisMonday.setDate(thisMonday.getDate() - ((thisMonday.getDay() + 6) % 7));
+  const timesByWeek = new Map();
+  for (const e of events || []) {
+    if (!e || e.result === "dont-know" || !Number.isFinite(e.responseTimeMs)) continue;
+    if (!Number.isFinite(e.occurredAt)) continue;
+    const key = weekStartKey(new Date(e.occurredAt));
+    if (!timesByWeek.has(key)) timesByWeek.set(key, []);
+    timesByWeek.get(key).push(e.responseTimeMs);
+  }
+  const result = [];
+  for (let i = weeks - 1; i >= 0; i -= 1) {
+    const monday = new Date(thisMonday.getFullYear(), thisMonday.getMonth(), thisMonday.getDate() - 7 * i);
+    let answers = 0;
+    let correct = 0;
+    for (let d = 0; d < 7; d += 1) {
+      const day = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + d);
+      const entry = byDay?.get?.(localDateString(day));
+      if (!entry) continue;
+      answers += entry.answers || 0;
+      correct += entry.correct || 0;
+    }
+    const start = localDateString(monday);
+    const times = (timesByWeek.get(start) || []).slice().sort((a, b) => a - b);
+    let medianMs = null;
+    if (times.length >= 3) {
+      const mid = Math.floor(times.length / 2);
+      medianMs = times.length % 2 === 1 ? times[mid] : (times[mid - 1] + times[mid]) / 2;
+    }
+    result.push({ start, answers, correct, medianMs });
+  }
+  return result;
+}
+
+// B2) 週ごとの正答率の推移（直近8週）。日別の14日では見えない、数週間かけた伸びを見せる。
+// 回答時間の中央値は学習の記録がオンのときだけ棒の上に添える。
+function statsWeeklyCard(ctx) {
+  const weeks = buildWeeklyTrend(ctx.activity, reviewLogEnabled() ? statsScopedEvents() : []);
+  if (weeks.filter((w) => w.answers > 0).length < 2) return "";
+  const W = 240;
+  const H = 72;
+  const pad = 4;
+  const top = 10; // 棒の上に中央値の数字を置く余白
+  const chartH = 56; // 棒の底の位置（下に日付ラベル）
+  const barMax = chartH - top;
+  const slot = (W - pad * 2) / weeks.length;
+  const barW = slot * 0.62;
+  // 色の規則は日別の正答率（statsAccuracyCard）と同じ。判定は画面に出す丸めた%で行う。
+  const colorFor = (rate) => {
+    const pct = Math.round(rate * 100);
+    return pct >= 80 ? "--success" : pct >= 50 ? "--accent" : "--danger";
+  };
+  const items = weeks.map((w) => {
+    const [, m, d] = w.start.split("-");
+    const label = `${Number(m)}/${Number(d)}`;
+    const median = w.medianMs === null ? "" : `${(w.medianMs / 1000).toFixed(1)}秒`;
+    const pct = w.answers > 0 ? Math.round((w.correct / w.answers) * 100) : null;
+    const text =
+      pct === null
+        ? `${label}〜の週 回答なし`
+        : `${label}〜の週 正答率${pct}%（${w.answers}問）` + (median ? `・回答の中央値${median}` : "");
+    return { ...w, label, median, pct, text };
+  });
+  const bars = items
+    .map((w, i) => {
+      const cx = pad + slot * i + (slot - barW) / 2;
+      const mid = (cx + barW / 2).toFixed(2);
+      let bar;
+      let medianY = chartH - 4;
+      if (w.pct === null) {
+        // 回答なし: 底に薄い線
+        bar = `<rect x="${cx.toFixed(2)}" y="${(chartH - 2).toFixed(2)}" width="${barW.toFixed(2)}" height="2" rx="1" ${svgFill("--surface-3")}><title>${escapeHtml(w.text)}</title></rect>`;
+      } else {
+        const rate = w.correct / w.answers;
+        const h = Math.max(2, rate * barMax);
+        const y = chartH - h;
+        medianY = y - 2;
+        bar = `<rect x="${cx.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${h.toFixed(2)}" rx="2" ${svgFill(colorFor(rate))}><title>${escapeHtml(w.text)}</title></rect>`;
+      }
+      const medianText = w.median
+        ? `<text x="${mid}" y="${medianY.toFixed(2)}" text-anchor="middle" style="fill:var(--muted);font-size:8px">${escapeHtml(w.median)}</text>`
+        : "";
+      return (
+        bar + medianText +
+        `<text x="${mid}" y="${(chartH + 11).toFixed(2)}" text-anchor="middle" style="fill:var(--muted);font-size:8px">${escapeHtml(w.label)}</text>`
+      );
+    })
+    .join("");
+  const srItems = items.map((w) => `<li>${escapeHtml(w.text)}</li>`).join("");
+  return (
+    `<div class="stats-card">` +
+    statsCardHeader("週ごとの推移", `直近${weeks.length}週`) +
+    `<svg class="stats-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>` +
+    `<ul class="sr-only">${srItems}</ul>` +
+    `<p class="stats-caption">棒の高さ＝その週の正答率。数字は回答時間の中央値（学習の記録がオンのときだけ）。</p>` +
+    `</div>`
+  );
+}
+
 // C) 回答速度の分布（任意の学習イベントが記録されている場合のみ）。
 // 成績を単語帳で絞り込む（複数選択可・空＝すべて）。
 // 1.0.99 では「回答速度の分布」だけに付けていたが、同じパネルの中でカードごとに
@@ -33400,6 +33574,11 @@ const STATS_CARDS = [
     pending: () => ["正答率の推移", "直近14日にクイズを解くと、日ごとの正答率が出ます。"],
   },
   {
+    key: "weekly",
+    build: (ctx) => statsWeeklyCard(ctx),
+    pending: () => ["週ごとの推移", "2週以上クイズを解くと、週ごとの正答率が出ます。"],
+  },
+  {
     key: "format",
     build: () => statsFormatCard(),
     // 数え方はカードの実条件に合わせる。総イベント数で「あと何回」と書くと、
@@ -33635,6 +33814,51 @@ function renderDailyGoalChip() {
   const count = todayAnswerCount();
   chip.hidden = false;
   chip.textContent = count >= goal ? `🎯 今日 ${count}/${goal}問 達成！` : `🎯 今日 ${count}/${goal}問`;
+}
+
+// クイズ開始画面の「今日の状況」の1行を組み立てる（純関数）。
+// 連続記録と今日の回答数を「・」でつなぐ。どちらも出すものが無ければ "" を返す。
+// 連続は今日まだ解いていなければ「今日解くと○日」と添えて、続ける動機にする。
+function describeTodaySummary({ streakCount = 0, streakIsToday = false, todayAnswers = 0, dailyGoal = 0 } = {}) {
+  const parts = [];
+  const streak = Math.max(0, Math.floor(Number(streakCount) || 0));
+  if (streak > 0) {
+    parts.push(streakIsToday ? `🔥 連続${streak}日` : `🔥 連続${streak}日（今日解くと${streak + 1}日）`);
+  }
+  const answers = Math.max(0, Math.floor(Number(todayAnswers) || 0));
+  const goal = Math.max(0, Math.floor(Number(dailyGoal) || 0));
+  if (goal > 0) {
+    parts.push(`今日 ${answers}/${goal}問${answers >= goal ? "✓" : ""}`);
+  } else if (answers > 0) {
+    parts.push(`今日 ${answers}問`);
+  }
+  return parts.join("・");
+}
+
+// 開始画面（#quizSetup）が見えているときだけ「今日の状況」を出す。
+// 出題中・結果表示中は #quizSetup ごと隠れるので（updateQuizControls と同じ条件）、ここも隠す。
+// 単語が0語の初回は、状況を伝える相手がまだ何も始めていないので出さない。
+function renderQuizTodaySummary() {
+  const el = elements.quizTodaySummary;
+  if (!el) return;
+  const quizActive = !!reviewSession || !!flashcardSession || quizStarted;
+  const showingResult = !!reviewResult && !reviewSession;
+  if ((appState.words || []).length === 0 || quizActive || showingResult) {
+    el.hidden = true;
+    return;
+  }
+  const today = localDateString();
+  const streak = normalizeStreak(appState.streak);
+  // 途切れた連続は 0 日として扱う（ヘッダーの🔥と同じ currentStreakCount）。
+  // 保存済みの count をそのまま見せると「今日解くと○日」が事実と食い違う。
+  const text = describeTodaySummary({
+    streakCount: currentStreakCount(streak, today),
+    streakIsToday: streak.last >= today,
+    todayAnswers: todayAnswerCount(),
+    dailyGoal: dailyGoalWords(),
+  });
+  el.textContent = text;
+  el.hidden = text === "";
 }
 
 // 現在の問題の出題形式ラベルを1箇所で決める。採点・SRS更新・確信度検証・ログ記録の
@@ -36044,7 +36268,9 @@ elements.resumeQuizButton?.addEventListener("click", resumeSavedReview);
 // 🔥ピル：タップで連続学習日数の説明を表示する
 // 連続記録バッジ：状況をひとことで伝えつつ、学習カレンダーを開閉する
 elements.streakBadge?.addEventListener("click", () => {
-  const streak = normalizeStreak(appState.streak);
+  // ヘッダーの🔥と同じ数を案内する（途切れた記録は0日として扱う）
+  const savedStreak = normalizeStreak(appState.streak);
+  const streak = { ...savedStreak, count: currentStreakCount(savedStreak) };
   if (elements.streakPanel?.hidden !== false) {
     if (streak.count === 0) {
       setStatus("学習の記録を開きました。クイズに1問答えると記録が始まります。");
@@ -36684,6 +36910,85 @@ function buildCsvExport(words, decks) {
   const csvBody = rows.map((row) => row.map(csvEscapeCell).join(",")).join("\r\n");
   return `﻿${csvBody}`;
 }
+
+// Anki のテキスト読み込みは、タブ区切りの1行＝1ノート。フィールド内のタブ・改行は
+// 列や行の区切りに化けるので、半角スペースにして1行に収める。
+function ankiField(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .replace(/\r\n|[\r\n\t]/g, " ")
+    .trim();
+}
+
+// Anki のタグは空白で区切られる。空白は「_」に置き換え、検索や区切りで問題になる引用符・
+// バックスラッシュ・制御文字は除く。
+function ankiTag(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/["“”\\\u0000-\u001f]/g, "");
+}
+
+// Anki の読み込みは各フィールドの引用符（"）を解釈する。意味が「"こんにちは」のように
+// 引用符で始まると、閉じ引用符を探して後続の行まで1つのフィールドに吸い込んでしまう。
+// また「#hashtag」のように # で始まる語が行頭に来ると、コメント行として捨てられる。
+// 全フィールドを " で囲み、中の " は "" に二重化する。行頭が必ず " になるので # の問題も避けられる。
+function ankiQuote(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+// 単語一覧を Anki のテキスト読み込み用（タブ区切り）に変換する。学習記録は含めない書き出し専用の形式。
+// Anki 2.1.55 以降のファイルヘッダーで区切り・デッキ列・タグ列を宣言する。
+// ノートタイプと列名（#notetype / #columns）は宣言しない。日本語表示の Anki では標準ノートタイプの
+// フィールド名が「表面」「裏面」で、Front / Back と名前で対応づけると裏面が空になる。宣言しなければ
+// 1列目→1番目のフィールド、2列目→2番目の位置順で入るので、読み込み画面で「基本（Basic）」を選んでもらう。
+// BOM を付けるとヘッダー行（#separator など）を認識できなくなるので付けない。
+// 単語帳名の「::」はそのままだと Anki のデッキ階層になるため、全角の「：」に置き換える。
+function buildAnkiExport(words, decks) {
+  const lines = [
+    "#separator:tab",
+    "#html:false",
+    "#deck column:3",
+    "#tags column:4",
+  ];
+  for (const word of words || []) {
+    if (!word) continue; // 破損データ等でnullが混ざっていても書き出しは続ける
+    const term = ankiField(word.term);
+    if (!term) continue;
+    const deck = (decks || []).find((d) => d && d.id === word.deckId);
+    const deckName = ankiField(deck?.name).replace(/::/g, "：");
+    const tags = ["WordBank"];
+    if (word.cefr?.level) tags.push(ankiTag(`CEFR_${word.cefr.level}`));
+    if (word.pos?.tag) tags.push(ankiTag(`pos_${word.pos.tag}`));
+    if (word.favorite) tags.push("favorite");
+    lines.push(
+      [
+        term,
+        ankiField(word.meaning),
+        deckName ? `WordBank::${deckName}` : "WordBank",
+        tags.filter(Boolean).join(" "),
+      ]
+        .map(ankiQuote)
+        .join("\t"),
+    );
+  }
+  return lines.join("\n");
+}
+
+elements.exportAnkiButton?.addEventListener("click", () => {
+  try {
+    if (appState.words.length === 0) {
+      setStatus("書き出す単語がありません。");
+      return;
+    }
+    const text = buildAnkiExport(appState.words, appState.decks);
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    downloadBlob(blob, `wordbank-anki-${localDateString()}.txt`);
+    trackUsage("anki-export");
+    setStatus("Anki用のファイルを書き出しました。Ankiの「ファイルを読み込む」で取り込めます。Ankiの読み込み画面でノートタイプは「基本（Basic）」を選んでください（学習記録は含みません）。");
+  } catch {
+    setStatus("Anki用のファイルを書き出せませんでした。空き容量を確認して、もう一度お試しください。");
+  }
+});
 
 elements.exportCsvButton?.addEventListener("click", () => {
   try {
