@@ -844,27 +844,78 @@ test("buildDailyActivity: 秒が読めない壊れたトークンも1解答と�
 // 日付をまたいで戻ったときの更新
 // ============================================================================
 
-test("復帰処理: 出題画面に戻ったら、今日の状況（updateQuizControls）と目標チップを一緒に更新する", () => {
+test("復帰処理: 出題画面なら今日の状況と目標チップ、どのタブでも🔥とパネルを描き直す", () => {
   const start = html.indexOf("const resetQuizTimerOnResume = () => {");
   assert.ok(start >= 0);
   const end = html.indexOf("\n  };", start) + 5;
-  const run = (activeStepId) => {
+  const run = (activeStepId, panelOpen) => {
     const calls = [];
     const sandbox = {
       Date,
       currentQuiz: { answered: false, shownAt: 0 },
       activeStepId,
+      elements: { streakPanel: { hidden: !panelOpen } },
       stopQuizTimer: () => calls.push("stop"),
       updateQuizControls: () => calls.push("controls"),
       renderDailyGoalChip: () => calls.push("goalChip"),
+      renderStreakBadge: () => calls.push("badge"),
+      renderStreakCalendar: () => calls.push("calendar"),
     };
     vm.createContext(sandbox);
     vm.runInContext(`${html.slice(start, end)}\nresetQuizTimerOnResume();`, sandbox);
     return calls;
   };
-  const onQuiz = run("quiz");
-  assert.ok(onQuiz.includes("controls") && onQuiz.includes("goalChip"), "両方呼ぶ");
-  assert.deepEqual(run("words"), [], "クイズ画面でなければ何もしない");
+  const onQuiz = run("quiz", false);
+  assert.ok(onQuiz.includes("controls") && onQuiz.includes("goalChip") && onQuiz.includes("badge"));
+  assert.ok(!onQuiz.includes("calendar"), "パネルが閉じていればカレンダーは描かない");
+  assert.deepEqual(run("library", false), ["badge"], "クイズ以外のタブでも🔥は描き直す");
+  assert.deepEqual(run("library", true), ["badge", "calendar"], "パネルを開いていれば一緒に描き直す");
+});
+
+test("時計を2日進めて復帰すると、🔥は途切れた連続を0日と表示し、保存値は変えない", () => {
+  const today = new Date();
+  const twoDaysAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 2);
+  const badge = {
+    hidden: true,
+    title: "",
+    attrs: {},
+    classList: { set: new Set(), toggle(name, on) { on ? this.set.add(name) : this.set.delete(name); } },
+    setAttribute(name, value) { this.attrs[name] = value; },
+  };
+  const count = { textContent: "" };
+  const saved = { count: 5, last: localKey(twoDaysAgo), best: 8 };
+  const sandbox = {
+    elements: { streakBadge: badge, streakBadgeCount: count },
+    appState: { streak: { ...saved } },
+    renderQuizTodaySummary() {},
+  };
+  load(["localDateString", "normalizeStreak", "currentStreakCount", "renderStreakBadge"], sandbox);
+  sandbox.renderStreakBadge();
+  assert.equal(count.textContent, "0");
+  assert.equal(badge.attrs["aria-label"], "連続学習 0日");
+  assert.equal(JSON.stringify(sandbox.appState.streak), JSON.stringify(saved), "保存値は書き換えない");
+});
+
+test("表示の判定（currentStreakCount）と回答時の更新（updateStreakOnAnswer）は同じ境界になる", () => {
+  // 表示が「継続」なら、今日1問解いた後も日数は保たれる（今日済みならそのまま、昨日なら+1）。
+  // 表示が0なら、今日1問解くと1日目から数え直される。未来の日付（時計が進んだ端末）も含めて確かめる。
+  const today = new Date();
+  const key = (offset) => localKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset));
+  for (const offset of [1, 0, -1, -2, -5]) {
+    const sandbox = {
+      appState: { streak: { count: 5, last: key(offset), best: 8 } },
+      renderStreakBadge() {},
+    };
+    load(["localDateString", "normalizeStreak", "currentStreakCount", "updateStreakOnAnswer"], sandbox);
+    const shown = sandbox.currentStreakCount(sandbox.normalizeStreak(sandbox.appState.streak), key(0));
+    sandbox.updateStreakOnAnswer();
+    const after = sandbox.appState.streak.count;
+    if (shown === 0) {
+      assert.equal(after, 1, `最後が${offset}日: 表示0なら回答後は1日目`);
+    } else {
+      assert.ok(after >= shown, `最後が${offset}日: 表示${shown}日が回答後に減らない（${after}日）`);
+    }
+  }
 });
 
 // ============================================================================
@@ -880,7 +931,7 @@ test("currentStreakCount: 今日・昨日なら count、それより前は 0（�
   assert.equal(currentStreakCount(streak(key(-1)), key(0)), 5, "昨日");
   assert.equal(currentStreakCount(streak(key(-2)), key(0)), 0, "一昨日");
   assert.equal(currentStreakCount(streak(key(-3)), key(0)), 0, "3日前");
-  assert.equal(currentStreakCount(streak(key(1)), key(0)), 5, "時計が1日進んだ端末の記録は続いているものとして扱う");
+  assert.equal(currentStreakCount(streak(key(1)), key(0)), 0, "未来の日付は回答時に1日目へ戻るので、表示も0（updateStreakOnAnswer と同じ境界）");
   assert.equal(currentStreakCount(streak(""), key(0)), 0);
   assert.equal(currentStreakCount(streak(key(0), 0), key(0)), 0);
   assert.equal(currentStreakCount(null, key(0)), 0);

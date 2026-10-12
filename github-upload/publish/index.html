@@ -23904,6 +23904,11 @@ function initWordsnapSync() {
       // 見出しの「今日 X/Y問」も同時に数え直す。
       renderDailyGoalChip();
     }
+    // 連続記録はどのタブでも上部の🔥に出ているので、日付をまたいだ復帰ではタブに関係なく
+    // 描き直す（途切れた連続が古い日数のまま残らないように）。学習の記録を開いていれば
+    // カレンダーとサマリーも今日の日付で描き直す。どちらも表示だけで保存値は変えない。
+    renderStreakBadge();
+    if (elements.streakPanel && !elements.streakPanel.hidden) renderStreakCalendar();
   };
   window.addEventListener("focus", pullIfConnected);
   // 別アプリや別ウィンドウへ移っただけでは document.hidden にならない環境があるため、
@@ -32043,7 +32048,10 @@ function currentStreakCount(streak, todayKey = localDateString()) {
   const count = Math.max(0, Math.floor(Number(streak?.count) || 0));
   const last = String(streak?.last || "");
   if (count === 0 || !last) return 0;
-  if (last >= todayKey) return count;
+  // 回答時の更新（updateStreakOnAnswer）と同じ境界にする: 最後が「今日」か「昨日」なら継続、
+  // それ以外（途切れた・端末の時計が進んでいて未来の日付）は、次に解くと1日目から数え直されるので0。
+  // 未来の日付を継続扱いにすると「連続5日」と出ていたのに、1問解くと「1日」へ戻る食い違いが起きる。
+  if (last === todayKey) return count;
   const [y, m, d] = todayKey.split("-").map(Number);
   return last === localDateString(new Date(y, m - 1, d - 1)) ? count : 0;
 }
