@@ -108,7 +108,7 @@ function summarySandbox(overrides = {}) {
     dailyGoalWords: () => 20,
     ...overrides,
   };
-  load(["describeTodaySummary", "localDateString", "normalizeStreak", "renderQuizTodaySummary"], sandbox);
+  load(["describeTodaySummary", "localDateString", "normalizeStreak", "currentStreakCount", "renderQuizTodaySummary"], sandbox);
   return { sandbox, el };
 }
 
@@ -444,9 +444,30 @@ test("statsWeeklyCard: 学習の記録がオンなら、中央値を棒の上と
   assert.match(on, /font-size:8px">1\.8秒<\/text>/, "棒の上の小さな文字");
 });
 
-test("statsWeeklyCard: 利用者のデータはHTMLエスケープされる（日付ラベルは数字だけ）", () => {
-  const out = weeklyCard(thisAndLastWeekActivity());
-  assert.ok(!/<script/i.test(out));
+test("statsWeeklyCard: 動的な文字列（見出し・週ラベル・中央値・title・読み上げ）はすべて escapeHtml を通る", () => {
+  // escapeHtml を印付きのスタブにして、通っていない文字列があれば印が付かないことで検出する。
+  const sandbox = {
+    reviewLogEnabled: () => true,
+    statsScopedEvents: () => events,
+    escapeHtml: (value) => `[E:${value}]`,
+  };
+  const { activity, monday } = thisAndLastWeekActivity();
+  const at = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate(), 10).getTime();
+  const events = [1500, 1800, 2100].map((ms) => ({ occurredAt: at, responseTimeMs: ms, result: "correct" }));
+  load(["svgFill", "statsCardHeader", ...weeklyNames, "statsWeeklyCard"], sandbox);
+  const out = sandbox.statsWeeklyCard({ activity });
+
+  assert.ok(out.includes("<h4>[E:週ごとの推移]</h4>"), "見出し");
+  assert.ok(out.includes("[E:直近8週]"), "見出しの右側");
+  assert.equal((out.match(/<li>\[E:[^\]]*\]<\/li>/g) || []).length, 8, "読み上げ用リストの8項目");
+  assert.equal((out.match(/<title>\[E:[^\]]*\]<\/title>/g) || []).length, 8, "棒ごとの title");
+  assert.match(out, /font-size:8px">\[E:1\.8秒\]<\/text>/, "棒の上の中央値");
+  assert.equal((out.match(/font-size:8px">\[E:\d+\/\d+\]<\/text>/g) || []).length, 8, "週の開始日ラベル");
+  // 印付きの文字列を取り除いた残りに、動的な値（日付・秒・正答率・問数）が裸で残っていない
+  const rest = out.replace(/\[E:[^\]]*\]/g, "");
+  assert.doesNotMatch(rest, /\d+\/\d+/, "日付が裸で出ている");
+  assert.doesNotMatch(rest, /\d(\.\d)?秒/, "中央値が裸で出ている");
+  assert.doesNotMatch(rest, /正答率\d|\d+問|回答なし|〜の週/, "title・読み上げの文言が裸で出ている");
 });
 
 test("配線: STATS_CARDS の accuracy の直後に weekly があり、出ていない理由を案内する", () => {
@@ -461,7 +482,7 @@ test("配線: STATS_CARDS の accuracy の直後に weekly があり、出てい
 // 3. Anki 形式の書き出し
 // ============================================================================
 
-const ankiNames = ["ankiField", "ankiTag", "buildAnkiExport"];
+const ankiNames = ["ankiField", "ankiTag", "ankiQuote", "buildAnkiExport"];
 
 test("ankiField: タブ・改行を半角スペースにして、前後の空白を除く", () => {
   const { ankiField } = load(ankiNames);
@@ -493,42 +514,93 @@ const decks = [
   { id: "d3", name: "" },
 ];
 
-test("buildAnkiExport: Anki 2.1.55 以降のヘッダー6行・BOM なし・行区切りは \\n", () => {
+// Anki の読み込みと同じ規則の小さなパーサー。
+// 行頭が # の行はヘッダー（コメント）として除き、それ以外はタブ区切り・" 囲み・"" を " に戻す。
+// split("\t") では引用符を解釈しないので、引用の不具合（後続行の吸い込み・# の取りこぼし）を見逃す。
+function parseAnkiText(text) {
+  const headers = [];
+  const records = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    if (text[i] === "#") {
+      const end = text.indexOf("\n", i);
+      const stop = end < 0 ? n : end;
+      headers.push(text.slice(i, stop));
+      i = stop + 1;
+      continue;
+    }
+    const row = [];
+    for (;;) {
+      let field = "";
+      if (text[i] === '"') {
+        i += 1;
+        for (;;) {
+          if (i >= n) throw new Error("閉じていない引用符で最後まで吸い込まれた");
+          if (text[i] === '"') {
+            if (text[i + 1] === '"') {
+              field += '"';
+              i += 2;
+              continue;
+            }
+            i += 1;
+            break;
+          }
+          field += text[i];
+          i += 1;
+        }
+      } else {
+        while (i < n && text[i] !== "\t" && text[i] !== "\n") {
+          field += text[i];
+          i += 1;
+        }
+      }
+      row.push(field);
+      if (text[i] === "\t") {
+        i += 1;
+        continue;
+      }
+      i += 1; // 改行（または末尾）
+      break;
+    }
+    records.push(row);
+  }
+  return { headers, records };
+}
+
+test("buildAnkiExport: ヘッダーは区切り・html・デッキ列・タグ列の4行だけ。ノートタイプと列名は宣言しない", () => {
   const { buildAnkiExport } = load(ankiNames);
   const text = buildAnkiExport([{ term: "apple", meaning: "りんご", deckId: "d1" }], decks);
   assert.notEqual(text.charCodeAt(0), 0xfeff, "BOM を付けるとヘッダーを認識できない");
   assert.ok(!text.includes("\r"));
   const lines = text.split("\n");
-  assert.deepEqual(lines.slice(0, 6), [
-    "#separator:tab",
-    "#html:false",
-    "#notetype:Basic",
-    "#deck column:3",
-    "#tags column:4",
-    "#columns:Front\tBack\tDeck\tTags",
-  ]);
-  assert.equal(lines.length, 7);
+  assert.deepEqual(lines.slice(0, 4), ["#separator:tab", "#html:false", "#deck column:3", "#tags column:4"]);
+  // 日本語の Anki は標準ノートタイプのフィールド名が「表面／裏面」。Front/Back の名前対応だと裏面が空になる
+  assert.ok(!/#notetype|#columns/.test(text), "名前対応を呼ぶ宣言を出さない（位置順に任せる）");
+  const { headers, records } = parseAnkiText(text);
+  assert.equal(headers.length, 4);
+  assert.equal(records.length, 1);
+  assert.equal(lines.length, 5);
 });
 
 test("buildAnkiExport: 1語1行・4列。単語帳名の解決、:: の置換、単語帳なしは WordBank", () => {
   const { buildAnkiExport } = load(ankiNames);
-  const rows = buildAnkiExport(
-    [
-      { term: "apple", meaning: "りんご", deckId: "d1" },
-      { term: "meeting", meaning: "会議", deckId: "d2" },
-      { term: "orphan", meaning: "孤児", deckId: null },
-      { term: "ghost", meaning: "幽霊", deckId: "missing" },
-      { term: "blank", meaning: "空の名前", deckId: "d3" },
-    ],
-    decks,
-  )
-    .split("\n")
-    .slice(6)
-    .map((line) => line.split("\t"));
-  assert.ok(rows.every((cols) => cols.length === 4), "全行が4列");
-  assert.deepEqual(rows.map((c) => c[0]), ["apple", "meeting", "orphan", "ghost", "blank"]);
-  assert.deepEqual(rows.map((c) => c[1]), ["りんご", "会議", "孤児", "幽霊", "空の名前"]);
-  assert.deepEqual(rows.map((c) => c[2]), [
+  const { records } = parseAnkiText(
+    buildAnkiExport(
+      [
+        { term: "apple", meaning: "りんご", deckId: "d1" },
+        { term: "meeting", meaning: "会議", deckId: "d2" },
+        { term: "orphan", meaning: "孤児", deckId: null },
+        { term: "ghost", meaning: "幽霊", deckId: "missing" },
+        { term: "blank", meaning: "空の名前", deckId: "d3" },
+      ],
+      decks,
+    ),
+  );
+  assert.ok(records.every((cols) => cols.length === 4), "全行が4列");
+  assert.deepEqual(records.map((c) => c[0]), ["apple", "meeting", "orphan", "ghost", "blank"]);
+  assert.deepEqual(records.map((c) => c[1]), ["りんご", "会議", "孤児", "幽霊", "空の名前"]);
+  assert.deepEqual(records.map((c) => c[2]), [
     "WordBank::TOEIC",
     "WordBank::仕事：会議 用",
     "WordBank",
@@ -539,21 +611,20 @@ test("buildAnkiExport: 1語1行・4列。単語帳名の解決、:: の置換、
 
 test("buildAnkiExport: タグは WordBank と CEFR・品詞・お気に入り（スペース区切り）", () => {
   const { buildAnkiExport } = load(ankiNames);
-  const rows = buildAnkiExport(
-    [
-      { term: "a", meaning: "A", cefr: { level: "B1" }, pos: { tag: "n" }, favorite: true },
-      { term: "b", meaning: "B", cefr: { level: "C2" } },
-      { term: "c", meaning: "C", pos: { tag: "adj" } },
-      { term: "d", meaning: "D" },
-      { term: "e", meaning: "E", favorite: true },
-      { term: "f", meaning: "F", pos: { tag: 'a "b"' } },
-    ],
-    [],
-  )
-    .split("\n")
-    .slice(6)
-    .map((line) => line.split("\t")[3]);
-  assert.deepEqual(rows, [
+  const { records } = parseAnkiText(
+    buildAnkiExport(
+      [
+        { term: "a", meaning: "A", cefr: { level: "B1" }, pos: { tag: "n" }, favorite: true },
+        { term: "b", meaning: "B", cefr: { level: "C2" } },
+        { term: "c", meaning: "C", pos: { tag: "adj" } },
+        { term: "d", meaning: "D" },
+        { term: "e", meaning: "E", favorite: true },
+        { term: "f", meaning: "F", pos: { tag: 'a "b"' } },
+      ],
+      [],
+    ),
+  );
+  assert.deepEqual(records.map((c) => c[3]), [
     "WordBank CEFR_B1 pos_n favorite",
     "WordBank CEFR_C2",
     "WordBank pos_adj",
@@ -577,17 +648,51 @@ test("buildAnkiExport: null が混ざっても止まらず、term が空の語�
     ],
     [null, ...decks],
   );
-  const rows = text.split("\n").slice(6);
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows[0].split("\t"), ["tab here", "複数行 の 意味", "WordBank::TOEIC", "WordBank"]);
-  assert.deepEqual(rows[1].split("\t"), ["ok", "", "WordBank", "WordBank"]);
-  assert.equal(buildAnkiExport(null, null).split("\n").length, 6, "語が無ければヘッダーだけ");
+  const { records } = parseAnkiText(text);
+  assert.equal(records.length, 2);
+  assert.deepEqual(records[0], ["tab here", "複数行 の 意味", "WordBank::TOEIC", "WordBank"]);
+  assert.deepEqual(records[1], ["ok", "", "WordBank", "WordBank"]);
+  assert.equal(text.split("\n").length, 4 + 2, "改行を含む意味でも1語1行");
+  assert.equal(parseAnkiText(buildAnkiExport(null, null)).records.length, 0, "語が無ければヘッダーだけ");
+});
+
+test("ankiQuote: 全体を \" で囲み、中の \" は \"\" に二重化する", () => {
+  const { ankiQuote } = load(ankiNames);
+  assert.equal(ankiQuote("abc"), '"abc"');
+  assert.equal(ankiQuote('a"b'), '"a""b"');
+  assert.equal(ankiQuote('"'), '""""');
+  assert.equal(ankiQuote(""), '""');
+});
+
+test("引用: \" で始まる意味・途中に \" がある語・# で始まる語・タブや改行入りの意味が、1行4列で元の文字に戻る", () => {
+  const { buildAnkiExport } = load(ankiNames);
+  const words = [
+    { term: "hello", meaning: '"こんにちは', deckId: "d1" }, // 閉じない引用符が後続行を吸い込む
+    { term: 'a"b', meaning: 'ab"', deckId: "d1" },
+    { term: "#hashtag", meaning: "ハッシュタグ", deckId: "d1" }, // 行頭 # はコメントとして捨てられる
+    { term: "multi", meaning: "1行目\n2行目\t3列目\r\n4行目", deckId: "d1" },
+    { term: '""', meaning: '"""', deckId: "d1" },
+    { term: "last", meaning: "最後", deckId: "d1" },
+  ];
+  const text = buildAnkiExport(words, decks);
+  const { headers, records } = parseAnkiText(text);
+  assert.equal(headers.length, 4, "ヘッダー以外の行を # でコメント扱いしない");
+  assert.equal(records.length, words.length, "後続の行を吸い込まない");
+  assert.ok(records.every((cols) => cols.length === 4));
+  assert.deepEqual(records.map((c) => c[0]), ["hello", 'a"b', "#hashtag", "multi", '""', "last"]);
+  assert.deepEqual(records.map((c) => c[1]), ['"こんにちは', 'ab"', "ハッシュタグ", "1行目 2行目 3列目 4行目", '"""', "最後"]);
+  // 語の行はすべて " で始まるので、# で始まる語もヘッダーと取り違えられない
+  const bodyLines = text.split("\n").slice(4);
+  assert.ok(bodyLines.every((line) => line.startsWith('"')));
+  // ヘッダー行は引用しない
+  assert.ok(text.split("\n").slice(0, 4).every((line) => line.startsWith("#") && !line.includes('"')));
 });
 
 test("書き出しボタンがHTMLにあり、USAGE_NAMES に anki-export がある", () => {
   assert.match(html, /<button id="exportAnkiButton" class="secondary" type="button" title="[^"]*">Anki用に書き出す<\/button>/);
   assert.ok(html.indexOf('id="exportCsvButton"') < html.indexOf('id="exportAnkiButton"'), "CSV ボタンの隣");
-  assert.match(html, /Anki用はAnkiの「ファイルを読み込む」でそのまま取り込めます（学習記録は含みません）。/);
+  assert.match(html, /Anki用はAnkiの「ファイルを読み込む」で取り込めます。Ankiの読み込み画面でノートタイプは「基本（Basic）」を選んでください（学習記録は含みません）。/);
+  assert.match(html, /title="[^"]*Ankiの読み込み画面でノートタイプは「基本（Basic）」を選んでください">Anki用に書き出す/, "ボタンの title にも案内を入れる");
   assert.match(html, /exportAnkiButton:\s*document\.querySelector\("#exportAnkiButton"\)/);
   const block = /const USAGE_NAMES = new Set\(\[([\s\S]*?)\]\);/.exec(html);
   assert.ok(block);
@@ -629,4 +734,206 @@ test("書き出しのクリック処理: 0語なら案内だけ、語があれ�
   assert.deepEqual(plain(ok.download[0].blob.parts), ["built:1"]);
   assert.deepEqual(ok.usage, ["anki-export"]);
   assert.match(ok.status[0], /Anki用のファイルを書き出しました/);
+  assert.match(ok.status[0], /Ankiの読み込み画面でノートタイプは「基本（Basic）」を選んでください/);
+});
+
+// ============================================================================
+// buildDailyActivity: 日別の記録を実時刻に戻してローカル日へ寄せる
+// ============================================================================
+
+// 日別のトークン（UTC日キー＋その日の秒の36進＋正誤）。本体の historyDailyTokenFor と同じ規則。
+function dailyTokensFrom(entries) {
+  const { historyDailyTokenFor } = load(["historyDailyTokenFor"]);
+  const days = {};
+  for (const entry of entries) {
+    const t = historyDailyTokenFor(entry);
+    days[t.key] = days[t.key] ? `${days[t.key]},${t.token}` : t.token;
+  }
+  return days;
+}
+
+function withTimeZone(zone, fn) {
+  const before = process.env.TZ;
+  process.env.TZ = zone;
+  try {
+    fn();
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+}
+
+const dailyNames = ["localDateString", "buildDailyActivity"];
+
+function activityPlain(byDay) {
+  return [...byDay.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([key, v]) => [key, v.answers, v.correct, [...v.terms].sort()]);
+}
+
+test("buildDailyActivity: 東京で月曜01:00（UTCでは日曜16:00）の解答は、畳み込み後も月曜として数える", () => {
+  withTimeZone("Asia/Tokyo", () => {
+    const { buildDailyActivity } = load(dailyNames);
+    assert.equal(new Date(2026, 9, 12, 1, 0).getTimezoneOffset(), -540, "テストの前提: 東京");
+    const at = "2026-10-11T16:00:00.000Z"; // 東京の 2026-10-12（月）01:00
+    const word = { term: "apple", history: [], historyDaily: { days: dailyTokensFrom([{ at, correct: true }]) } };
+    const byDay = buildDailyActivity([word]);
+    assert.deepEqual(activityPlain(byDay), [["2026-10-12", 1, 1, ["apple"]]], "日曜ではなく月曜");
+  });
+});
+
+test("buildDailyActivity: 畳み込み前（生の履歴）と畳み込み後（日別のトークン）で、日ごとの合計が時差に関わらず一致する", () => {
+  for (const zone of ["Asia/Tokyo", "America/Los_Angeles", "Pacific/Auckland", "UTC", "Asia/Kolkata"]) {
+    withTimeZone(zone, () => {
+      const { buildDailyActivity } = load(dailyNames);
+      // 3日ぶんを1時間おきに。0時台・日付境界・正誤が入り混じるように偶数番を正解にする
+      const base = Date.parse("2026-10-10T00:00:00.000Z");
+      const entries = Array.from({ length: 72 }, (_, i) => ({
+        at: new Date(base + i * 3600 * 1000 + (i % 7) * 61 * 1000).toISOString(),
+        correct: i % 2 === 0,
+      }));
+      const raw = buildDailyActivity([{ term: "apple", history: entries }]);
+      const folded = buildDailyActivity([{ term: "apple", history: [], historyDaily: { days: dailyTokensFrom(entries) } }]);
+      assert.deepEqual(activityPlain(folded), activityPlain(raw), zone);
+      // 期待値は「各解答の実時刻のローカル日」で独立に数える
+      const expected = new Map();
+      for (const entry of entries) {
+        const key = localKey(new Date(entry.at));
+        const row = expected.get(key) || [0, 0];
+        row[0] += 1;
+        if (entry.correct) row[1] += 1;
+        expected.set(key, row);
+      }
+      assert.deepEqual(
+        activityPlain(folded).map(([k, a, c]) => [k, a, c]),
+        [...expected.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, [a, c]]) => [k, a, c]),
+        zone,
+      );
+    });
+  }
+});
+
+test("buildDailyActivity: 週カードの「2週以上」の判定も畳み込みで変わらない（東京の月曜01:00が週の境界）", () => {
+  withTimeZone("Asia/Tokyo", () => {
+    const { buildDailyActivity, buildWeeklyTrend } = load([...dailyNames, "weekStartKey", "buildWeeklyTrend"]);
+    const now = new Date(2026, 9, 14, 12).getTime();
+    // 東京の 10/5（月）01:00 と 10/12（月）01:00。日付をそのまま正午で寄せると、どちらも前の日曜に入って週が1つ前へずれる
+    const entries = [
+      { at: "2026-10-04T16:00:00.000Z", correct: true },
+      { at: "2026-10-11T16:00:00.000Z", correct: false },
+    ];
+    const raw = buildDailyActivity([{ term: "a", history: entries }]);
+    const folded = buildDailyActivity([{ term: "a", history: [], historyDaily: { days: dailyTokensFrom(entries) } }]);
+    const weeksOf = (byDay) => plain(buildWeeklyTrend(byDay, [], now)).filter((w) => w.answers > 0);
+    assert.deepEqual(weeksOf(folded), weeksOf(raw));
+    assert.deepEqual(weeksOf(folded).map((w) => [w.start, w.answers]), [["2026-10-05", 1], ["2026-10-12", 1]]);
+  });
+});
+
+test("buildDailyActivity: 秒が読めない壊れたトークンも1解答として数え、正解は + で数える（従来どおり）", () => {
+  withTimeZone("UTC", () => {
+    const { buildDailyActivity } = load(dailyNames);
+    const byDay = buildDailyActivity([{ term: "a", historyDaily: { days: { "2026-10-12": "1+,zzzzz-,abc+,99999+" } } }]);
+    const row = byDay.get("2026-10-12");
+    assert.deepEqual([row.answers, row.correct], [4, 3]);
+    assert.ok(row.terms.has("a"));
+  });
+});
+
+// ============================================================================
+// 日付をまたいで戻ったときの更新
+// ============================================================================
+
+test("復帰処理: 出題画面に戻ったら、今日の状況（updateQuizControls）と目標チップを一緒に更新する", () => {
+  const start = html.indexOf("const resetQuizTimerOnResume = () => {");
+  assert.ok(start >= 0);
+  const end = html.indexOf("\n  };", start) + 5;
+  const run = (activeStepId) => {
+    const calls = [];
+    const sandbox = {
+      Date,
+      currentQuiz: { answered: false, shownAt: 0 },
+      activeStepId,
+      stopQuizTimer: () => calls.push("stop"),
+      updateQuizControls: () => calls.push("controls"),
+      renderDailyGoalChip: () => calls.push("goalChip"),
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(`${html.slice(start, end)}\nresetQuizTimerOnResume();`, sandbox);
+    return calls;
+  };
+  const onQuiz = run("quiz");
+  assert.ok(onQuiz.includes("controls") && onQuiz.includes("goalChip"), "両方呼ぶ");
+  assert.deepEqual(run("words"), [], "クイズ画面でなければ何もしない");
+});
+
+// ============================================================================
+// 連続記録: 途切れた記録はヘッダーの🔥と開始画面で同じ扱いにする
+// ============================================================================
+
+test("currentStreakCount: 今日・昨日なら count、それより前は 0（保存値は変えない）", () => {
+  const { currentStreakCount } = load(["localDateString", "currentStreakCount"]);
+  const today = new Date(2026, 9, 12);
+  const key = (offset) => localKey(new Date(2026, 9, 12 + offset));
+  const streak = (last, count = 5) => ({ count, last, best: 9 });
+  assert.equal(currentStreakCount(streak(key(0)), key(0)), 5, "今日");
+  assert.equal(currentStreakCount(streak(key(-1)), key(0)), 5, "昨日");
+  assert.equal(currentStreakCount(streak(key(-2)), key(0)), 0, "一昨日");
+  assert.equal(currentStreakCount(streak(key(-3)), key(0)), 0, "3日前");
+  assert.equal(currentStreakCount(streak(key(1)), key(0)), 5, "時計が1日進んだ端末の記録は続いているものとして扱う");
+  assert.equal(currentStreakCount(streak(""), key(0)), 0);
+  assert.equal(currentStreakCount(streak(key(0), 0), key(0)), 0);
+  assert.equal(currentStreakCount(null, key(0)), 0);
+  // 月・年をまたいでも昨日を取り違えない
+  assert.equal(currentStreakCount(streak("2026-09-30"), "2026-10-01"), 5);
+  assert.equal(currentStreakCount(streak("2025-12-31"), "2026-01-01"), 5);
+  assert.equal(currentStreakCount(streak("2025-12-30"), "2026-01-01"), 0);
+  assert.ok(today instanceof Date);
+});
+
+function badgeSandbox(streak) {
+  const classes = new Set();
+  const attrs = {};
+  const badge = {
+    hidden: true,
+    title: "",
+    classList: { toggle: (name, force) => (force ? classes.add(name) : classes.delete(name)) },
+    setAttribute: (name, value) => (attrs[name] = value),
+  };
+  const count = { textContent: "" };
+  const sandbox = {
+    elements: { streakBadge: badge, streakBadgeCount: count },
+    appState: { streak },
+    renderQuizTodaySummary: () => {},
+  };
+  load(["localDateString", "normalizeStreak", "currentStreakCount", "renderStreakBadge"], sandbox);
+  sandbox.renderStreakBadge();
+  return { badge, count, classes, attrs, appState: sandbox.appState };
+}
+
+test("renderStreakBadge: 今日解いた→count、昨日まで→count（薄く）、3日前→0日（薄くしない）。保存値は書き換えない", () => {
+  const key = (offset) => localKey(new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + offset));
+  const today = badgeSandbox({ count: 5, last: key(0), best: 8 });
+  assert.equal(today.count.textContent, "5");
+  assert.equal(today.classes.has("is-stale"), false);
+  assert.equal(today.badge.title, "連続学習 5日");
+  assert.equal(today.attrs["aria-label"], "連続学習 5日");
+
+  const yesterday = badgeSandbox({ count: 5, last: key(-1), best: 8 });
+  assert.equal(yesterday.count.textContent, "5");
+  assert.equal(yesterday.classes.has("is-stale"), true);
+  assert.equal(yesterday.badge.title, "連続学習 5日");
+
+  const lapsedStreak = { count: 5, last: key(-3), best: 8 };
+  const lapsed = badgeSandbox(lapsedStreak);
+  assert.equal(lapsed.count.textContent, "0");
+  assert.equal(lapsed.classes.has("is-stale"), false);
+  assert.equal(lapsed.badge.title, "連続学習 0日");
+  assert.equal(lapsed.attrs["aria-label"], "連続学習 0日");
+  assert.deepEqual(plain(lapsed.appState.streak), { count: 5, last: key(-3), best: 8 }, "保存値（最高記録を含む）は変えない");
+});
+
+test("配線: 開始画面の今日の状況も currentStreakCount を使う", () => {
+  assert.match(extractFunction("renderQuizTodaySummary"), /currentStreakCount\(/);
+  assert.match(extractFunction("renderStreakBadge"), /currentStreakCount\(/);
 });
