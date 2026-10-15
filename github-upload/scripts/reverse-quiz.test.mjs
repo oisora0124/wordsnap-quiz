@@ -145,7 +145,7 @@ function buildQuizSandbox() {
     extractFunction("quizDirectionSetting"),
     extractFunction("resolveQuizReverse"),
     extractFunction("pickDistractors"),
-    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => [];", // 取り違えの記録は空（従来どおり）
+    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => []; const confusedIdsWithinScope = () => [];", // 取り違えの記録は空（従来どおり）
     extractFunction("pickDistractorsWithFallback"),
     extractFunction("buildQuiz"),
     extractFunction("quizSrsSnapshot"),
@@ -754,7 +754,7 @@ function buildReviewQuizSandbox() {
     extractFunction("normalizeTerm"),
     extractFunction("choiceCountNote"),
     extractFunction("pickDistractors"),
-    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => [];", // 取り違えの記録は空（従来どおり）
+    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => []; const confusedIdsWithinScope = () => [];", // 取り違えの記録は空（従来どおり）
     extractFunction("pickDistractorsWithFallback"),
     extractFunction("isMasteryVerificationDue"),
     extractFunction("mixedFormatUsesContext"),

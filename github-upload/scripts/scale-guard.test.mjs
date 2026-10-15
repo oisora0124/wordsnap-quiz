@@ -286,6 +286,9 @@ test("一覧の絞り込み・並び替えは語数に対して線形（画面�
   }));
 
   // 絞り込みが強い条件ほど1回が速くなるので、まとめて測る回数を増やす。
+  // 計測が負荷で失敗しても後片付けは必ず行う（try/finally）。片付けの前に投げると、
+  // 次のテストへ「単語帳2で絞った状態」が残り、無関係な正しさのテストまで連鎖して落ちる。
+  try {
   for (const [label, repeat, setup] of [
     ["全件・並び替えのみ", 20, { activeDeckId: "all", favoritesOnly: false, libraryCefrLevel: "all", wordSearchQuery: "", wordSortMode: "accuracy" }],
     ["単語帳で絞る", 20, { activeDeckId: "deck2", favoritesOnly: false, libraryCefrLevel: "all", wordSearchQuery: "", wordSortMode: "accuracy" }],
@@ -303,11 +306,13 @@ test("一覧の絞り込み・並び替えは語数に対して線形（画面�
     );
   }
 
-  // 後続のテストへ状態を持ち越さない。
-  Object.assign(lib.context, {
-    favoritesOnly: false, libraryCefrLevel: "all", wordSearchQuery: "", wordSortMode: "added",
-  });
-  lib.context.appState.activeDeckId = "all";
+  } finally {
+    // 後続のテストへ状態を持ち越さない。
+    Object.assign(lib.context, {
+      activeDeckId: "all", favoritesOnly: false, libraryCefrLevel: "all", wordSearchQuery: "", wordSortMode: "added",
+    });
+    lib.context.appState.activeDeckId = "all";
+  }
 });
 
 test("一覧の絞り込みは、条件どおりの結果を返す（速度だけを見ない）", () => {

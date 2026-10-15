@@ -51,12 +51,13 @@ function extractConstLine(name) {
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 // ---- 記録・忘却・保存の純関数 ----
-function confusionSandbox({ stored = null, throwOnSet = false, throwOnGet = false } = {}) {
+function confusionSandbox({ stored = null, throwOnSet = false, throwOnGet = false, syncId = "" } = {}) {
   const sandbox = { __log: [] };
   new Script(
     [
       "const __store = {};",
-      `if (${JSON.stringify(stored)} !== null) __store["wordsnap-confusions:v1"] = ${JSON.stringify(stored)};`,
+      `let __syncId = ${JSON.stringify(syncId)};`,
+      "const syncRequestRoute = () => ({ expectedSyncId: __syncId });",
       "const localStorage = {",
       `  getItem: (k) => { if (${throwOnGet}) throw new Error('blocked'); return k in __store ? __store[k] : null; },`,
       `  setItem: (k, v) => { if (${throwOnSet}) throw new Error('quota'); __store[k] = String(v); },`,
@@ -66,15 +67,20 @@ function confusionSandbox({ stored = null, throwOnSet = false, throwOnGet = fals
       extractConstLine("CONFUSION_MAX_COUNT"),
       extractConstLine("CONFUSION_MAX_PARTNERS"),
       extractConstLine("CONFUSION_MAX_WORDS"),
+      extractFunction("shortKeyFingerprint"),
+      extractFunction("confusedIdsWithinScope"),
       extractFunction("pruneConfusionStore"),
       extractFunction("recordConfusion"),
       extractFunction("relaxConfusion"),
       extractFunction("confusionPartnersFor"),
+      extractFunction("confusionStoreKey"),
       extractFunction("loadConfusionStore"),
       extractFunction("saveConfusionStore"),
       extractFunction("confusionUpdateForAnswer"),
-      "globalThis.__api = { pruneConfusionStore, recordConfusion, relaxConfusion, confusionPartnersFor," +
-        " loadConfusionStore, saveConfusionStore, confusionUpdateForAnswer, raw: () => __store['wordsnap-confusions:v1'] };",
+      `if (${JSON.stringify(stored)} !== null) __store[confusionStoreKey()] = ${JSON.stringify(stored)};`,
+      "globalThis.__api = { pruneConfusionStore, recordConfusion, relaxConfusion, confusionPartnersFor, confusedIdsWithinScope," +
+        " loadConfusionStore, saveConfusionStore, confusionUpdateForAnswer, confusionStoreKey," +
+        " setSyncId: (id) => { __syncId = id; }, storageKeys: () => Object.keys(__store), raw: () => __store[confusionStoreKey()] };",
     ].join("\n"),
     { filename: "confusion-store.js" },
   ).runInNewContext(sandbox);
@@ -122,8 +128,9 @@ test("recordConfusion: 1語あたり相手は5つまで。超えたら at が古
   assert.equal(Object.keys(store.a).length, 5);
   store = api.recordConfusion(store, "a", "p6", 600);
   assert.deepEqual(Object.keys(store.a).sort(), ["p2", "p3", "p4", "p5", "p6"], "最も古い p1 が落ちる");
-  // p1 側の「a への記録」は残る（落とすのは a の行だけ）。p1 の行自体は別の語の記録として独立
-  assert.ok(store.p1.a);
+  // 落ちた組は双方向に消える（a→p1 だけ消えて p1→a が残る、という片方向を作らない）
+  assert.equal(store.p1, undefined, "p1→a も同時に消える");
+  assert.ok(store.p2.a, "残った組は双方向のまま");
   // 同じ時刻で6つ目を足しても、いま記録した相手が消えない
   let tie = {};
   for (const partner of ["q1", "q2", "q3", "q4", "q5", "q6"]) tie = api.recordConfusion(tie, "x", partner, 5);
@@ -205,6 +212,12 @@ test("confusionPartnersFor: n の大きい順→at の新しい順。記録の�
   assert.deepEqual(plain(api.confusionPartnersFor(null, "a")), []);
 });
 
+test("saveConfusionStore: 成功なら true、保存できなければ false を返す", () => {
+  assert.equal(confusionSandbox().saveConfusionStore({ a: { b: { n: 1, at: 1 } } }), true);
+  assert.equal(confusionSandbox().saveConfusionStore({}), true, "空にする（キーを消す）のも成功");
+  assert.equal(confusionSandbox({ throwOnSet: true }).saveConfusionStore({ a: { b: { n: 1, at: 1 } } }), false);
+});
+
 test("loadConfusionStore/saveConfusionStore: 往復でき、壊れた JSON・取得/保存の例外でも例外を出さない", () => {
   const ok = confusionSandbox();
   ok.saveConfusionStore(ok.recordConfusion({}, "a", "b", 7));
@@ -220,6 +233,85 @@ test("loadConfusionStore/saveConfusionStore: 往復でき、壊れた JSON・取
   assert.deepEqual(plain(noRead.loadConfusionStore()), {});
   const noWrite = confusionSandbox({ throwOnSet: true });
   assert.doesNotThrow(() => noWrite.saveConfusionStore({ a: { b: { n: 1, at: 1 } } }));
+});
+
+test("pruneConfusionStore: 1語5相手の上限で A→B が落ちたら B→A も落とす（片方向を残さない）", () => {
+  const api = confusionSandbox();
+  let store = api.recordConfusion({}, "A", "B", 100);
+  for (let i = 1; i <= 5; i += 1) store = api.recordConfusion(store, "A", `x${i}`, 200 + i);
+  assert.equal(store.A.B, undefined, "A に6つ目の相手を足すと、最も古い B が A の行から落ちる");
+  assert.equal(store.B, undefined, "B→A も同時に消える");
+  // 逆向きから見ても同じ（Aに正解してもB→Aが減らないという崩れが起きない）
+  assert.equal(api.confusionPartnersFor(store, "B").includes("A"), false);
+});
+
+test("pruneConfusionStore: 全体500語の上限で語を落とすとき、その語を相手に持つ行からも消す", () => {
+  const api = confusionSandbox();
+  const store = { OLD: { NEW: { n: 1, at: 1 } }, NEW: { OLD: { n: 1, at: 99999 }, KEEP0: { n: 1, at: 99999 } } };
+  for (let i = 0; i < 499; i += 1) store[`w${i}`] = { z: { n: 1, at: 1000 + i } };
+  store.KEEP0 = { NEW: { n: 1, at: 99999 } };
+  const pruned = api.pruneConfusionStore(store);
+  assert.equal(Object.keys(pruned).length, 500);
+  assert.equal(pruned.OLD, undefined, "最終 at が最も古い OLD の行が落ちる");
+  assert.equal(pruned.NEW.OLD, undefined, "OLD を相手に持つ NEW の行からも消す");
+  assert.ok(pruned.NEW.KEEP0, "他の相手は残る");
+});
+
+test("保存キーは同期の識別ごとに分かれ、別の識別の記録は見えず、キー名に生の識別子を含めない", () => {
+  const api = confusionSandbox({ syncId: "personal-key-AAAA" });
+  api.saveConfusionStore(api.recordConfusion({}, "a", "b", 1));
+  assert.equal(api.loadConfusionStore().a.b.n, 1);
+  const keyA = api.confusionStoreKey();
+  api.setSyncId("room-BBBB");
+  assert.deepEqual(plain(api.loadConfusionStore()), {}, "別の識別では空");
+  api.saveConfusionStore(api.recordConfusion({}, "a", "c", 2));
+  assert.notEqual(api.confusionStoreKey(), keyA);
+  assert.equal(api.confusionPartnersFor(api.loadConfusionStore(), "a")[0], "c");
+  api.setSyncId("personal-key-AAAA");
+  assert.deepEqual(plain(api.confusionPartnersFor(api.loadConfusionStore(), "a")), ["b"], "元の識別に戻ると残っている");
+  for (const key of api.storageKeys()) {
+    assert.equal(key.includes("AAAA") || key.includes("BBBB"), false, "キー名に識別子を出さない");
+    assert.match(key, /^wordsnap-confusions:v1:/);
+  }
+  // 識別が取れないとき（未同期）は local 扱いで、例外を出さず保存・読み出しできる
+  api.setSyncId("");
+  api.saveConfusionStore(api.recordConfusion({}, "x", "y", 3));
+  assert.equal(api.loadConfusionStore().x.y.n, 1);
+  assert.equal(api.storageKeys().length, 3);
+});
+
+test("旧キー wordsnap-confusions:v1（識別なし）は読まない", () => {
+  const api = confusionSandbox();
+  const keyed = api.confusionStoreKey();
+  assert.notEqual(keyed, "wordsnap-confusions:v1");
+});
+
+// ---- 範囲外の相手を混ぜない ----
+test("confusedIdsWithinScope: 選んだ範囲の語の id だけを残す", () => {
+  const api = confusionSandbox();
+  const scope = [{ id: "a" }, { id: "b" }, { id: 7 }];
+  assert.deepEqual(plain(api.confusedIdsWithinScope(["x", "b", "7", "y", "a"], scope)), ["b", "7", "a"]);
+  assert.deepEqual(plain(api.confusedIdsWithinScope(["x"], scope)), []);
+  assert.deepEqual(plain(api.confusedIdsWithinScope(null, scope)), []);
+  assert.deepEqual(plain(api.confusedIdsWithinScope(["a"], null)), []);
+});
+
+test("範囲が小さくて全単語へ広がる出題でも、範囲外の相手 X は優先されない（呼び出し元と同じ手順）", () => {
+  const api = confusionSandbox();
+  const p = pickSandbox();
+  // 選んだ範囲は2語（<3）なので、呼び出し元は basePool を全単語へ広げる。X は範囲外の相手。
+  const scope = [W("s1", "table", "机", "noun"), W("s2", "river", "川", "noun")];
+  const everyone = [...scope, W("X", "balloon", "風船", "noun"), W("p3", "window", "窓", "noun"), W("p4", "garden", "庭", "noun"), W("p5", "pencil", "鉛筆", "noun")];
+  const run = (confusedIds) => {
+    p.reset();
+    return ids(p.pickDistractorsWithFallback(everyone, everyone, ANSWER, false, confusedIds));
+  };
+  // 絞らずに渡すと X が必ず入ってしまう（これが直す前の問題）
+  assert.ok(run(["X"]).includes("X"));
+  // 範囲で絞れば X は渡らず、記録なしと完全に同じ結果になる
+  assert.deepEqual(run(api.confusedIdsWithinScope(["X"], scope)), run([]));
+  // 範囲内の相手は絞っても残り、必ず入る
+  assert.ok(run(api.confusedIdsWithinScope(["X", "s1"], scope)).includes("s1"));
 });
 
 // ---- 選択肢への反映（pickDistractors） ----
@@ -282,6 +374,21 @@ test("pickDistractors: 取り違えが複数あっても引っかけは1つ。�
     assert.ok(picked.includes("c2"), "先頭の相手が入る");
     assert.equal(picked.includes("c1"), false, "2つ目の取り違えは同じ問題に入れない");
   }
+});
+
+test("pickDistractors: 候補が足りず制限を緩めるときも、記録相手は合計1つまで", () => {
+  const p = pickSandbox();
+  // B・C・D の3候補しかなく、制限を外して補充する経路（takeFrom(true)）に入る
+  const tight = [W("B", "balloon", "風船", "noun"), W("C", "pencil", "鉛筆", "noun"), W("D", "window", "窓", "noun")];
+  for (let round = 0; round < 30; round += 1) {
+    const picked = ids(p.pickDistractors(tight, W("ans", "garden", "庭", "noun"), 3, [], { confusedIds: ["B", "C"] }));
+    assert.ok(picked.includes("B"), "先頭の相手が入る");
+    assert.equal(picked.includes("C"), false, "2つ目の記録相手は補充でも入れない");
+    assert.ok(picked.includes("D"));
+  }
+  // 記録なしの従来の緩和は変わらない（候補が足りなければ綴りの近い語を複数入れて埋める）
+  const near = [W("n1", "gardens", "庭園", "noun"), W("n2", "garder", "ガーダー", "noun"), W("n3", "gardeb", "ガーデブ", "noun")];
+  assert.equal(p.pickDistractors(near, W("ans", "garden", "庭", "noun"), 3, [], {}).length, 3);
 });
 
 test("pickDistractors: confusedIds の語でも、意味が近すぎる語・同じ見出し語は入らない（正解が2つになる問題は作らない）", () => {
@@ -398,6 +505,8 @@ function learnSandbox({ words, throwOnSet = false }) {
       "  removeItem: (k) => { delete __store[k]; },",
       "};",
       `const appState = { words: ${JSON.stringify(words)} };`,
+      "const syncRequestRoute = () => ({ expectedSyncId: '' });",
+      extractFunction("shortKeyFingerprint"),
       extractConstLine("CONFUSION_STORE_KEY"),
       extractConstLine("CONFUSION_MAX_COUNT"),
       extractConstLine("CONFUSION_MAX_PARTNERS"),
@@ -406,6 +515,7 @@ function learnSandbox({ words, throwOnSet = false }) {
       extractFunction("recordConfusion"),
       extractFunction("relaxConfusion"),
       extractFunction("confusionPartnersFor"),
+      extractFunction("confusionStoreKey"),
       extractFunction("loadConfusionStore"),
       extractFunction("saveConfusionStore"),
       extractFunction("confusionUpdateForAnswer"),
@@ -465,6 +575,8 @@ test("learnConfusionFromAnswer: 相手の語が見つからなければ案内用
   assert.equal(l.learn(forwardQuiz(), "b", false), null);
   const blocked = learnSandbox({ words: LEARN_WORDS, throwOnSet: true });
   assert.doesNotThrow(() => blocked.learn(forwardQuiz(), "b", false));
+  // 保存に失敗したときは「次から並べて出します」の案内用の語を返さない
+  assert.equal(blocked.learn(forwardQuiz(), "b", false), null);
 });
 
 // ---- 配線（実コードの該当箇所が繋がっていること） ----
@@ -472,8 +584,12 @@ test("配線: 通常クイズ・復習セッションは取り違えの相手を
   const review = extractFunction("buildReviewQuiz");
   const normal = extractFunction("buildQuiz");
   for (const body of [review, normal]) {
-    assert.match(body, /confusionPartnersFor\(loadConfusionStore\(\), answer\.id\)/);
+    assert.match(body, /confusedIdsWithinScope\(\s*confusionPartnersFor\(loadConfusionStore\(\), answer\.id\),/);
   }
+  // 範囲を全単語へ広げる前の語（復習は scopeWords、通常クイズは pool）を基準にしている
+  assert.match(review, /const scopeWords = pool;[\s\S]*?if \(pool\.length < 3\) pool = others;/);
+  assert.match(review, /answer\.id\), scopeWords\)/);
+  assert.match(normal, /answer\.id\), pool\)/);
   const grade = extractFunction("gradeQuiz");
   assert.match(grade, /learnConfusionFromAnswer\(currentQuiz, choiceId, dontKnow\)/);
   assert.equal((grade.match(/\+= confusionNote;/g) || []).length, 2, "復習・通常の誤答フィードバックの両方に添える");
@@ -494,6 +610,6 @@ test("案内: クイズ開始画面の「？ 詳しく」に取り違えた語�
 
 test("同期しない: 取り違えの記録は appState・同期データに入れず、専用の localStorage キーだけを使う", () => {
   assert.match(html, /const CONFUSION_STORE_KEY = "wordsnap-confusions:v1";/);
-  const writers = html.split("CONFUSION_STORE_KEY").length - 1;
-  assert.equal(writers, 4, "定義・取得・保存・削除のみ（同期やエクスポートの経路に出てこない）");
+  const uses = html.split("CONFUSION_STORE_KEY").length - 1;
+  assert.equal(uses, 2, "定義と、識別つきのキーを作る関数だけ（同期やエクスポートの経路に出てこない）");
 });
