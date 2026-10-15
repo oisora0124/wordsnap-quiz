@@ -23332,6 +23332,9 @@ async function adoptForeignSyncId(newId) {
   syncState.pushQueued = false;
   // 進行中の旧キーへのGET/PUTを中断し、遅れて届く応答が新キーへ混ざるのを防ぐ
   bumpSyncRequestGen();
+  // 識別は先に新しいキーへ変わるが、画面のデータ（appState）は GET が返るまで前の利用者のまま。
+  // その間（失敗したらそのまま）に作った問題の取り違えを新しい利用者の領域へ書かないよう止める。
+  confusionIdentityPending = true;
   syncState.id = newId;
   syncState.rev = 0;
   syncState.connected = false;
@@ -23362,6 +23365,8 @@ async function adoptForeignSyncId(newId) {
     // applyingRemote 中の persist は再pushしない（切り替え先の内容をそのまま採用するため）
     syncState.applyingRemote = true;
     appState = normalizeState(remote.state || defaultState());
+    // 画面のデータが新しい利用者のものになったので、取り違えの記録を再開する
+    confusionIdentityPending = false;
     invalidatePersonalFactorCache();
     currentQuiz = null;
     selectedIds.clear();
@@ -32210,7 +32215,12 @@ function confusionPartnersFor(store, wordId) {
 // いまの同期の識別に対応する保存キー。識別そのもの（個人キーなど）をキー名に出さないよう、
 // 短いハッシュにする（暗号用途ではなく、キー名を分けるだけなので軽いFNV-1aで足りる）。
 // 識別が取れない（起動直後の未確定・取得に失敗）ときは null を返し、読み書きしない。
+// 個人キーの切り替え（adoptForeignSyncId）で、識別だけ先に変わり画面のデータがまだ前の利用者の
+// ままの間は true。この間は取り違えを読み書きしない（別の利用者の領域へ混ぜない）。
+let confusionIdentityPending = false;
+
 function confusionStoreKey() {
+  if (confusionIdentityPending) return null;
   let syncId = "";
   try {
     syncId = String(syncRequestRoute().expectedSyncId || "");

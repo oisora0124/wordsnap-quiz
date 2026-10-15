@@ -58,6 +58,7 @@ function confusionSandbox({ stored = null, throwOnSet = false, throwOnGet = fals
       "const __store = {};",
       `let __syncId = ${JSON.stringify(syncId)};`,
       "const syncRequestRoute = () => ({ expectedSyncId: __syncId });",
+      "let confusionIdentityPending = false;",
       "const localStorage = {",
       `  getItem: (k) => { if (${throwOnGet}) throw new Error('blocked'); return k in __store ? __store[k] : null; },`,
       `  setItem: (k, v) => { if (${throwOnSet}) throw new Error('quota'); __store[k] = String(v); },`,
@@ -522,6 +523,7 @@ function learnSandbox({ words, throwOnSet = false, syncId = "learn-sync" }) {
       `const appState = { words: ${JSON.stringify(words)} };`,
       `let __syncId = ${JSON.stringify(syncId)};`,
       "const syncRequestRoute = () => ({ expectedSyncId: __syncId });",
+      "let confusionIdentityPending = false;",
       extractFunction("shortKeyFingerprint"),
       extractConstLine("CONFUSION_STORE_KEY"),
       extractConstLine("CONFUSION_MAX_COUNT"),
@@ -538,7 +540,7 @@ function learnSandbox({ words, throwOnSet = false, syncId = "learn-sync" }) {
       extractFunction("currentQuizPromptMode"),
       extractFunction("learnConfusionFromAnswer"),
       "globalThis.__l = { learn: learnConfusionFromAnswer, store: (key) => (key === undefined ? loadConfusionStore() : loadConfusionStore(key))," +
-        " key: () => confusionStoreKey(), setSyncId: (id) => { __syncId = id; }, storageKeys: () => Object.keys(__store) };",
+        " key: () => confusionStoreKey(), setSyncId: (id) => { __syncId = id; }, setPending: (v) => { confusionIdentityPending = v; }, storageKeys: () => Object.keys(__store) };",
     ].join("\n"),
     { filename: "confusion-learn.js" },
   ).runInNewContext(sandbox);
@@ -674,3 +676,40 @@ test("同期しない: 取り違えの記録は appState・同期データに入
   const uses = html.split("CONFUSION_STORE_KEY").length - 1;
   assert.equal(uses, 2, "定義と、識別つきのキーを作る関数だけ（同期やエクスポートの経路に出てこない）");
 });
+
+test("個人キーの切り替えで識別だけ先に変わっている間は、作り直した問題でも取り違えを記録しない", () => {
+  // 切り替えの応答待ち（または失敗後）は、画面のデータは前の利用者のまま識別だけが新しい利用者になる。
+  // この間に「次の問題」で作り直した問題は、作成時と採点時の識別が一致してしまうので、照合だけでは防げない。
+  const words = [{ id: "a", term: "affect" }, { id: "b", term: "effect" }, { id: "c", term: "cat" }];
+  const l = learnSandbox({ words, syncId: "user-a" });
+  l.setSyncId("user-b"); // adoptForeignSyncId が先に識別を変える
+  l.setPending(true); // 同時に保留フラグを立てる
+  const quiz = {
+    answer: { id: "a" },
+    choices: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    reverse: false,
+    confusionKey: l.key(), // 保留中に作り直した問題（キーは null になる）
+  };
+  assert.equal(quiz.confusionKey, null, "保留中は記録先を決めない");
+  assert.equal(l.learn(quiz, "b", false), null);
+  assert.equal(l.storageKeys().length, 0, "どの領域にも書かない");
+  // GET が返って画面のデータが新しい利用者に替わったら再開する
+  l.setPending(false);
+  const next = { ...quiz, confusionKey: l.key() };
+  assert.ok(next.confusionKey);
+  l.learn(next, "b", false);
+  assert.equal(l.storageKeys().length, 1, "切り替え完了後は新しい利用者の領域へ記録する");
+});
+
+test("配線: adoptForeignSyncId は識別を変える前に保留を立て、データを差し替えた後でだけ外す（失敗時は外さない）", () => {
+  const body = extractFunction("adoptForeignSyncId");
+  const raise = body.indexOf("confusionIdentityPending = true;");
+  const change = body.indexOf("syncState.id = newId;");
+  const replace = body.indexOf("appState = normalizeState(remote.state || defaultState());");
+  const clear = body.indexOf("confusionIdentityPending = false;");
+  assert.ok(raise >= 0 && raise < change, "識別を変える前に保留を立てる");
+  assert.ok(replace >= 0 && clear > replace, "切り替え先のデータへ差し替えた後で外す");
+  const catchBlock = body.slice(body.indexOf("} catch (error) {"));
+  assert.doesNotMatch(catchBlock, /confusionIdentityPending = false/, "失敗したら保留のまま（前の利用者のデータが残るため）");
+});
+
