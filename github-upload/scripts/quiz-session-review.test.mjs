@@ -221,8 +221,8 @@ test("誤答の補充: 範囲が全単語そのもの（補充先が同じ配列
 test("配線: buildReviewQuiz と buildQuiz は補充つきの選び方を通す", () => {
   const review = extractFunction("buildReviewQuiz");
   const normal = extractFunction("buildQuiz");
-  assert.match(review, /pickDistractorsWithFallback\(\s*pool,\s*others,\s*answer,\s*reverse,\s*confusedIdsWithinScope\(confusionPartnersFor\(loadConfusionStore\(\), answer\.id\), (?:scopeWords|pool)\),?\s*\)/);
-  assert.match(normal, /pickDistractorsWithFallback\(\s*basePool,\s*others,\s*answer,\s*reverse,\s*confusedIdsWithinScope\(confusionPartnersFor\(loadConfusionStore\(\), answer\.id\), (?:scopeWords|pool)\),?\s*\)/);
+  assert.match(review, /pickDistractorsWithFallback\(\s*pool,\s*others,\s*answer,\s*reverse,\s*confusedIdsWithinScope\(confusionPartnersFor\(loadConfusionStore\(confusionKey\), answer\.id\), (?:scopeWords|pool)\),?\s*\)/);
+  assert.match(normal, /pickDistractorsWithFallback\(\s*basePool,\s*others,\s*answer,\s*reverse,\s*confusedIdsWithinScope\(confusionPartnersFor\(loadConfusionStore\(confusionKey\), answer\.id\), (?:scopeWords|pool)\),?\s*\)/);
   assert.doesNotMatch(review, /pickDistractors\(pool, answer/, "直接呼ぶと補充が効かない");
   assert.doesNotMatch(normal, /pickDistractors\(basePool, answer/, "直接呼ぶと補充が効かない");
   // 復習側は Set で範囲判定する（allIds.includes を毎語に回さない）
@@ -257,7 +257,7 @@ test("実配線: 同じ訳だけの復習セッションでも、他の語があ
     extractFunction("spellingDistance"),
     extractFunction("normalizeTerm"),
     extractFunction("pickDistractors"),
-    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => []; const confusedIdsWithinScope = () => [];", // 取り違えの記録は空（従来どおり）
+    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => []; const confusedIdsWithinScope = () => []; const confusionStoreKey = () => null;", // 取り違えの記録は空（従来どおり）
     extractFunction("pickDistractorsWithFallback"),
     extractFunction("buildReviewQuiz"),
     extractFunction("quizSrsSnapshot"),

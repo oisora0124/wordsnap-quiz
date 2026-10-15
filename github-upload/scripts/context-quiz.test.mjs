@@ -473,7 +473,7 @@ function buildPendingSandbox() {
     extractFunction("normalizeTerm"),
     extractFunction("choiceCountNote"),
     extractFunction("pickDistractors"),
-    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => []; const confusedIdsWithinScope = () => [];", // 取り違えの記録は空（従来どおり）
+    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => []; const confusedIdsWithinScope = () => []; const confusionStoreKey = () => null;", // 取り違えの記録は空（従来どおり）
     extractFunction("pickDistractorsWithFallback"),
     extractFunction("isMasteryVerificationDue"),
     extractFunction("mixedFormatUsesContext"),

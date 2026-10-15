@@ -31517,12 +31517,14 @@ function buildReviewQuiz() {
     const reverse = Boolean(reviewSession.reverse) && !isMasteryVerificationDue(answer);
     // 過去に取り違えた相手が出題範囲に居れば、誤答に1つ混ぜる（居なければ従来どおり）。
     // 範囲を全単語へ広げる前の語（scopeWords）に居る相手だけを渡す。
+    // 記録の領域（利用者ごと）は問題を作った時点で決め、問題に持たせる（採点時の照合に使う）。
+    const confusionKey = confusionStoreKey();
     const distractors = pickDistractorsWithFallback(
       pool,
       others,
       answer,
       reverse,
-      confusedIdsWithinScope(confusionPartnersFor(loadConfusionStore(), answer.id), scopeWords),
+      confusedIdsWithinScope(confusionPartnersFor(loadConfusionStore(confusionKey), answer.id), scopeWords),
     );
     if (distractors.length === 0) {
       // 正解だけの1択で採点するとSRSが不当に進む。通常・総復習・苦手復習・resumeの
@@ -31557,6 +31559,7 @@ function buildReviewQuiz() {
       context: null,
       ...srs,
       reverse, // 日→英かどうか（採点・promptMode判定・自動読み上げの答え漏れ対策に使う）
+      confusionKey, // 取り違えの記録先（作成時の利用者。採点時に識別が変わっていたら記録しない）
     };
   }
   return null;
@@ -31649,12 +31652,14 @@ function buildQuiz() {
   const reverse = resolveQuizReverse() && !isMasteryVerificationDue(answer);
   // 過去に取り違えた相手が出題範囲に居れば、誤答に1つ混ぜる（居なければ従来どおり）
   // 範囲が小さくて basePool が全単語へ広がっていても、相手は選んだ範囲（pool）の語に限る。
+  // 記録の領域（利用者ごと）は問題を作った時点で決め、問題に持たせる（採点時の照合に使う）。
+  const confusionKey = confusionStoreKey();
   const distractors = pickDistractorsWithFallback(
     basePool,
     others,
     answer,
     reverse,
-    confusedIdsWithinScope(confusionPartnersFor(loadConfusionStore(), answer.id), pool),
+    confusedIdsWithinScope(confusionPartnersFor(loadConfusionStore(confusionKey), answer.id), pool),
   );
   if (distractors.length === 0) {
     // 1択のまま正解扱いにできないよう、通常クイズも問題生成の時点で止める。
@@ -31679,6 +31684,7 @@ function buildQuiz() {
     shownAt: Date.now(), // 回答時間の計測起点（速度による習得判定に使う）
     ...quizSrsSnapshot(answer), // srsDueAtStart と progressStamp
     reverse, // 日→英クイズかどうか（採点・promptMode判定・自動読み上げの答え漏れ対策に使う）
+    confusionKey, // 取り違えの記録先（作成時の利用者。採点時に識別が変わっていたら記録しない）
   };
 }
 
@@ -32203,7 +32209,7 @@ function confusionPartnersFor(store, wordId) {
 
 // いまの同期の識別に対応する保存キー。識別そのもの（個人キーなど）をキー名に出さないよう、
 // 短いハッシュにする（暗号用途ではなく、キー名を分けるだけなので軽いFNV-1aで足りる）。
-// 識別が取れない（同期していない・取得に失敗）ときは "local" として扱う。
+// 識別が取れない（起動直後の未確定・取得に失敗）ときは null を返し、読み書きしない。
 function confusionStoreKey() {
   let syncId = "";
   try {
@@ -32211,12 +32217,16 @@ function confusionStoreKey() {
   } catch {
     syncId = "";
   }
-  return `${CONFUSION_STORE_KEY}:${shortKeyFingerprint(syncId || "local")}`;
+  // 識別がまだ決まっていない（起動直後の同期初期化前など）ときは、どの利用者の記録か分からないので
+  // 読み書きしない（null）。共通の領域へ入れると、初期化後には参照されず、別の利用者とも混ざる。
+  if (!syncId) return null;
+  return `${CONFUSION_STORE_KEY}:${shortKeyFingerprint(syncId)}`;
 }
 
-function loadConfusionStore() {
+function loadConfusionStore(key = confusionStoreKey()) {
+  if (!key) return {};
   try {
-    const raw = JSON.parse(localStorage.getItem(confusionStoreKey()));
+    const raw = JSON.parse(localStorage.getItem(key));
     return raw && typeof raw === "object" && !Array.isArray(raw) ? pruneConfusionStore(raw) : {};
   } catch {
     // 壊れた JSON・localStorage が使えない環境（file:// など）は「記録なし」として扱う
@@ -32226,9 +32236,9 @@ function loadConfusionStore() {
 
 // 保存できたら true。失敗（容量切れ・保存不可）は false を返すだけで、学習そのものは止めない。
 // 呼び出し側は成否を見て「次から並べて出します」の案内を出すか決める。
-function saveConfusionStore(store) {
+function saveConfusionStore(store, key = confusionStoreKey()) {
+  if (!key) return false;
   try {
-    const key = confusionStoreKey();
     if (!store || Object.keys(store).length === 0) localStorage.removeItem(key);
     else localStorage.setItem(key, JSON.stringify(store));
     return true;
@@ -32266,13 +32276,18 @@ function learnConfusionFromAnswer(quiz, choiceId, dontKnow) {
       mode: currentQuizPromptMode(quiz),
     });
     if (!update) return null;
-    const store = loadConfusionStore();
+    // 記録は「その問題を作ったときの利用者」に結び付ける。アカウント切り替えの応答待ちの間は
+    // 識別だけが先に新しい利用者へ変わり、画面と問題は前の利用者のままなので、採点時の識別と
+    // 食い違ったら記録しない（別の利用者の領域へ書き込まない）。
+    const key = quiz.confusionKey;
+    if (!key || key !== confusionStoreKey()) return null;
+    const store = loadConfusionStore(key);
     if (update.type === "record") {
       // 保存できなかったときは、次から出ないので案内も出さない
-      if (!saveConfusionStore(recordConfusion(store, update.a, update.b, Date.now()))) return null;
+      if (!saveConfusionStore(recordConfusion(store, update.a, update.b, Date.now()), key)) return null;
       return appState.words.find((item) => item.id === update.b) || null;
     }
-    saveConfusionStore(relaxConfusion(store, update.a, update.shownIds));
+    saveConfusionStore(relaxConfusion(store, update.a, update.shownIds), key);
     return null;
   } catch {
     return null;

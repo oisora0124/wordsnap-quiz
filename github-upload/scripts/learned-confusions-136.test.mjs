@@ -51,7 +51,7 @@ function extractConstLine(name) {
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 // ---- 記録・忘却・保存の純関数 ----
-function confusionSandbox({ stored = null, throwOnSet = false, throwOnGet = false, syncId = "" } = {}) {
+function confusionSandbox({ stored = null, throwOnSet = false, throwOnGet = false, syncId = "sync-default" } = {}) {
   const sandbox = { __log: [] };
   new Script(
     [
@@ -273,11 +273,26 @@ test("保存キーは同期の識別ごとに分かれ、別の識別の記録�
     assert.equal(key.includes("AAAA") || key.includes("BBBB"), false, "キー名に識別子を出さない");
     assert.match(key, /^wordsnap-confusions:v1:/);
   }
-  // 識別が取れないとき（未同期）は local 扱いで、例外を出さず保存・読み出しできる
-  api.setSyncId("");
-  api.saveConfusionStore(api.recordConfusion({}, "x", "y", 3));
-  assert.equal(api.loadConfusionStore().x.y.n, 1);
-  assert.equal(api.storageKeys().length, 3);
+  assert.equal(api.storageKeys().length, 2, "識別ごとに1つずつ");
+});
+
+test("同期の識別が空（起動直後で未確定）なら、キーは null・読むと空・保存は false で、何も書かない", () => {
+  const api = confusionSandbox({ syncId: "" });
+  assert.equal(api.confusionStoreKey(), null);
+  assert.deepEqual(plain(api.loadConfusionStore()), {});
+  assert.equal(api.saveConfusionStore({ a: { b: { n: 1, at: 1 } } }), false);
+  assert.equal(api.saveConfusionStore({}), false, "空にする保存も、領域が決まらなければ何もしない");
+  assert.deepEqual(plain(api.storageKeys()), [], "localStorage に何も書かない");
+  // key を引数で渡せば、識別が空でもその領域を読み書きできる（問題作成時に決めたキーを使うため）
+  const key = "wordsnap-confusions:v1:explicit";
+  assert.equal(api.saveConfusionStore({ a: { b: { n: 1, at: 1 } } }, key), true);
+  assert.equal(api.loadConfusionStore(key).a.b.n, 1);
+  assert.equal(api.loadConfusionStore(null).a, undefined, "key が null なら空");
+  assert.equal(api.saveConfusionStore({ a: { b: { n: 1, at: 1 } } }, null), false);
+  // 識別が取れない例外でも、キーは null（例外を外へ出さない）
+  const broken = confusionSandbox({ syncId: "x" });
+  broken.setSyncId(undefined);
+  assert.equal(broken.confusionStoreKey(), null);
 });
 
 test("旧キー wordsnap-confusions:v1（識別なし）は読まない", () => {
@@ -494,7 +509,7 @@ test("confusionUpdateForAnswer: 4択の誤答は記録、正解は忘却、dontK
 });
 
 // gradeQuiz から呼ぶ learnConfusionFromAnswer を、保存まで含めて動かす
-function learnSandbox({ words, throwOnSet = false }) {
+function learnSandbox({ words, throwOnSet = false, syncId = "learn-sync" }) {
   const sandbox = {};
   new Script(
     [
@@ -505,7 +520,8 @@ function learnSandbox({ words, throwOnSet = false }) {
       "  removeItem: (k) => { delete __store[k]; },",
       "};",
       `const appState = { words: ${JSON.stringify(words)} };`,
-      "const syncRequestRoute = () => ({ expectedSyncId: '' });",
+      `let __syncId = ${JSON.stringify(syncId)};`,
+      "const syncRequestRoute = () => ({ expectedSyncId: __syncId });",
       extractFunction("shortKeyFingerprint"),
       extractConstLine("CONFUSION_STORE_KEY"),
       extractConstLine("CONFUSION_MAX_COUNT"),
@@ -521,7 +537,8 @@ function learnSandbox({ words, throwOnSet = false }) {
       extractFunction("confusionUpdateForAnswer"),
       extractFunction("currentQuizPromptMode"),
       extractFunction("learnConfusionFromAnswer"),
-      "globalThis.__l = { learn: learnConfusionFromAnswer, store: () => loadConfusionStore() };",
+      "globalThis.__l = { learn: learnConfusionFromAnswer, store: (key) => (key === undefined ? loadConfusionStore() : loadConfusionStore(key))," +
+        " key: () => confusionStoreKey(), setSyncId: (id) => { __syncId = id; }, storageKeys: () => Object.keys(__store) };",
     ].join("\n"),
     { filename: "confusion-learn.js" },
   ).runInNewContext(sandbox);
@@ -533,26 +550,28 @@ const LEARN_WORDS = [
   { id: "b", term: "effect", meaning: "効果" },
   { id: "c", term: "table", meaning: "机" },
 ];
-const forwardQuiz = (extra = {}) => ({
+// 問題作成時の識別の領域（confusionKey）を持たせた問題。buildQuiz/buildReviewQuiz が返す形に合わせる
+const forwardQuiz = (l, extra = {}) => ({
   answer: { id: "a", term: "affect", meaning: "影響する" },
   choices: LEARN_WORDS,
+  confusionKey: l.key(),
   ...extra,
 });
 
 test("learnConfusionFromAnswer: 誤答で双方向に記録して相手の語を返し、正解で選択肢にいた相手を減らして外す", () => {
   const l = learnSandbox({ words: LEARN_WORDS });
-  const partner = l.learn(forwardQuiz(), "b", false);
+  const partner = l.learn(forwardQuiz(l), "b", false);
   assert.equal(partner.term, "effect", "案内文に使う相手の語を返す");
   assert.deepEqual(plain(l.store()).a.b.n, 1);
   assert.deepEqual(plain(l.store()).b.a.n, 1, "双方向");
   // 正解し、選択肢に相手（b）が居たので外れる
-  assert.equal(l.learn(forwardQuiz(), "a", false), null, "正解では案内用の語を返さない");
+  assert.equal(l.learn(forwardQuiz(l), "a", false), null, "正解では案内用の語を返さない");
   assert.deepEqual(plain(l.store()), {});
 });
 
 test("learnConfusionFromAnswer: 日→英（{id,label}の選択肢）でも記録でき、dontKnow・フラッシュカード・例文は記録しない", () => {
   const l = learnSandbox({ words: LEARN_WORDS });
-  const reverse = forwardQuiz({
+  const reverse = forwardQuiz(l, {
     reverse: true,
     choices: LEARN_WORDS.map((word) => ({ id: word.id, label: word.term })),
   });
@@ -560,10 +579,10 @@ test("learnConfusionFromAnswer: 日→英（{id,label}の選択肢）でも記�
   assert.equal(plain(l.store()).a.c.n, 1);
 
   const fresh = learnSandbox({ words: LEARN_WORDS });
-  assert.equal(fresh.learn(forwardQuiz(), "b", true), null, "わからないは記録しない");
-  assert.equal(fresh.learn(forwardQuiz({ flashcard: true }), "b", false), null, "フラッシュカードは記録しない");
+  assert.equal(fresh.learn(forwardQuiz(fresh), "b", true), null, "わからないは記録しない");
+  assert.equal(fresh.learn(forwardQuiz(fresh, { flashcard: true }), "b", false), null, "フラッシュカードは記録しない");
   assert.equal(
-    fresh.learn(forwardQuiz({ context: { en: "x", ja: null, src: "" } }), "b", false),
+    fresh.learn(forwardQuiz(fresh, { context: { en: "x", ja: null, src: "" } }), "b", false),
     null,
     "例文（空所補充）は記録しない",
   );
@@ -572,11 +591,48 @@ test("learnConfusionFromAnswer: 日→英（{id,label}の選択肢）でも記�
 
 test("learnConfusionFromAnswer: 相手の語が見つからなければ案内用の語は返さず、保存できなくても例外を出さない", () => {
   const l = learnSandbox({ words: [LEARN_WORDS[0]] }); // b が appState に居ない
-  assert.equal(l.learn(forwardQuiz(), "b", false), null);
+  assert.equal(l.learn(forwardQuiz(l), "b", false), null);
   const blocked = learnSandbox({ words: LEARN_WORDS, throwOnSet: true });
-  assert.doesNotThrow(() => blocked.learn(forwardQuiz(), "b", false));
+  assert.doesNotThrow(() => blocked.learn(forwardQuiz(blocked), "b", false));
   // 保存に失敗したときは「次から並べて出します」の案内用の語を返さない
-  assert.equal(blocked.learn(forwardQuiz(), "b", false), null);
+  assert.equal(blocked.learn(forwardQuiz(blocked), "b", false), null);
+});
+
+test("learnConfusionFromAnswer: 問題作成時と採点時で識別が違えば、どちらの領域にも記録しない", () => {
+  const l = learnSandbox({ words: LEARN_WORDS, syncId: "user-A" });
+  const keyA = l.key();
+  const quiz = forwardQuiz(l); // 利用者 A のときに作った問題
+  // 先に A の記録を1つ作っておき、変わらないことも確かめる
+  assert.equal(l.learn(quiz, "b", false).term, "effect");
+  const before = JSON.stringify(plain(l.store(keyA)));
+  // アカウント切り替えの応答待ち中: 識別だけが B に変わり、画面の問題は A のまま
+  l.setSyncId("user-B");
+  const keyB = l.key();
+  assert.notEqual(keyA, keyB);
+  assert.equal(l.learn(quiz, "c", false), null, "誤答は記録せず、案内用の語も返さない");
+  assert.equal(l.learn(quiz, "a", false), null, "正解による忘却もしない");
+  assert.equal(JSON.stringify(plain(l.store(keyA))), before, "A の領域は変わらない");
+  assert.deepEqual(plain(l.store(keyB)), {}, "B の領域にも書かない");
+  assert.equal(l.storageKeys().length, 1, "新しいキーを作らない");
+  // 識別が空に戻っても（作成時のキーとは違う）記録しない
+  l.setSyncId("");
+  assert.equal(l.learn(quiz, "c", false), null);
+  assert.equal(l.storageKeys().length, 1);
+});
+
+test("learnConfusionFromAnswer: 同じ識別なら従来どおり記録・忘却する。confusionKey の無い問題は記録しない", () => {
+  const l = learnSandbox({ words: LEARN_WORDS, syncId: "user-A" });
+  const quiz = forwardQuiz(l);
+  assert.equal(l.learn(quiz, "b", false).term, "effect");
+  assert.equal(plain(l.store()).a.b.n, 1);
+  assert.equal(plain(l.store()).b.a.n, 1);
+  assert.equal(l.learn(quiz, "a", false), null);
+  assert.deepEqual(plain(l.store()), {}, "正解で外れる");
+  // 作成時に識別が空だった問題（confusionKey が null）や、キーを持たない古い問題は記録しない
+  const unknown = learnSandbox({ words: LEARN_WORDS, syncId: "" });
+  assert.equal(unknown.learn(forwardQuiz(unknown), "b", false), null);
+  assert.equal(l.learn({ ...quiz, confusionKey: undefined }, "b", false), null);
+  assert.deepEqual(plain(l.store()), {});
 });
 
 // ---- 配線（実コードの該当箇所が繋がっていること） ----
@@ -584,7 +640,10 @@ test("配線: 通常クイズ・復習セッションは取り違えの相手を
   const review = extractFunction("buildReviewQuiz");
   const normal = extractFunction("buildQuiz");
   for (const body of [review, normal]) {
-    assert.match(body, /confusedIdsWithinScope\(\s*confusionPartnersFor\(loadConfusionStore\(\), answer\.id\),/);
+    assert.match(body, /confusedIdsWithinScope\(\s*confusionPartnersFor\(loadConfusionStore\(confusionKey\), answer\.id\),/);
+    // 記録の領域は問題を作った時点で決め、返す問題に持たせる（採点時に識別が変わっていないか照合する）
+    assert.match(body, /const confusionKey = confusionStoreKey\(\);/);
+    assert.match(body, /\n\s+confusionKey, \/\/[^\n]*\n\s*\};/, "返す問題オブジェクトに confusionKey が入る");
   }
   // 範囲を全単語へ広げる前の語（復習は scopeWords、通常クイズは pool）を基準にしている
   assert.match(review, /const scopeWords = pool;[\s\S]*?if \(pool\.length < 3\) pool = others;/);
@@ -592,6 +651,8 @@ test("配線: 通常クイズ・復習セッションは取り違えの相手を
   assert.match(normal, /answer\.id\), pool\)/);
   const grade = extractFunction("gradeQuiz");
   assert.match(grade, /learnConfusionFromAnswer\(currentQuiz, choiceId, dontKnow\)/);
+  const learn = extractFunction("learnConfusionFromAnswer");
+  assert.match(learn, /if \(!key \|\| key !== confusionStoreKey\(\)\) return null;/, "作成時と採点時の識別が違えば記録しない");
   assert.equal((grade.match(/\+= confusionNote;/g) || []).length, 2, "復習・通常の誤答フィードバックの両方に添える");
   assert.match(html, /（次から「\$\{confusedWord\.term\}」と並べて出します）/);
   // 例文の作問（buildContextChoices）は別経路で、今回は触らない
