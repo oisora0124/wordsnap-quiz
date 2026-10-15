@@ -340,20 +340,38 @@ test("一度も触っていないproviderは封筒に入らない（未設定を
 });
 
 // 6.2: キーだけ変えても単語は変わらないので、これが無いと封筒が永久に送られない
+// 送信予約は WebCrypto の暗号化（非同期）の後に入る。固定時間の待ちは高負荷時に足りず落ちるため、
+// 条件を満たすまで短い間隔で見に行く（上限つき）。
+async function waitUntil(condition, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  return true;
+}
+
 test("キーを変えると送信が予約される（トグルONのときだけ）", async () => {
   const app = makeApp();
   app.ctx.setAiKey("gemini", GEMINI);
-  await new Promise((r) => setTimeout(r, 10));
-  assert.ok(app.pushes.length >= 1, "送信が予約されること");
+  assert.ok(await waitUntil(() => app.pushes.length >= 1), "送信が予約されること");
 });
 
 test("同じ値を入れ直しても送信予約は増えない", async () => {
   const app = makeApp();
   app.ctx.setAiKey("gemini", GEMINI);
-  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(await waitUntil(() => app.pushes.length >= 1), "1回目は送信が予約されること");
   const before = app.pushes.length;
+  // 2回目が暗号化を始めていたら、時間ではなくその完了を待ってから比べる。
+  const started = [];
+  const refresh = app.ctx.refreshAiSecretEnvelope;
+  app.ctx.refreshAiSecretEnvelope = (...args) => {
+    const pending = refresh(...args);
+    started.push(pending);
+    return pending;
+  };
   app.ctx.setAiKey("gemini", GEMINI);
-  await new Promise((r) => setTimeout(r, 10));
+  await Promise.all(started);
   assert.equal(app.pushes.length, before, "値が変わらなければ予約しないこと");
 });
 
