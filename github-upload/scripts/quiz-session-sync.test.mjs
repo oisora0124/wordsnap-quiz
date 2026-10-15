@@ -198,6 +198,7 @@ test("buildReviewQuiz: 消えた語を dropWordFromReviewSession で total ご�
     "const choiceCountNote = () => '';",
     "const isMasteryVerificationDue = () => false;",
     "const pickDistractorsWithFallback = (pool) => pool.slice(0, 3);",
+    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => [];", // 取り違えの記録は空（従来どおり）
     extractFunction("quizSrsSnapshot"),
     extractFunction("dropWordFromReviewSession"),
     extractFunction("buildReviewQuiz"),

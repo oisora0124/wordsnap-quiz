@@ -145,6 +145,7 @@ function buildQuizSandbox() {
     extractFunction("quizDirectionSetting"),
     extractFunction("resolveQuizReverse"),
     extractFunction("pickDistractors"),
+    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => [];", // 取り違えの記録は空（従来どおり）
     extractFunction("pickDistractorsWithFallback"),
     extractFunction("buildQuiz"),
     extractFunction("quizSrsSnapshot"),
@@ -611,6 +612,7 @@ function buildGradeQuizSandbox() {
     extractFunction("normalizeHistoryDaily"),
     extractFunction("historyDailyTokenFor"),
     extractFunction("foldHistoryIntoDaily"),
+    "const learnConfusionFromAnswer = () => null;", // 取り違えの記録は何もしない（従来どおり）
     extractFunction("gradeQuiz"),
     extractFunction("quizSrsSnapshot"),
     extractFunction("effectiveSrsDueAtStart"),
@@ -752,6 +754,7 @@ function buildReviewQuizSandbox() {
     extractFunction("normalizeTerm"),
     extractFunction("choiceCountNote"),
     extractFunction("pickDistractors"),
+    "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => [];", // 取り違えの記録は空（従来どおり）
     extractFunction("pickDistractorsWithFallback"),
     extractFunction("isMasteryVerificationDue"),
     extractFunction("mixedFormatUsesContext"),
