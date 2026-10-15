@@ -713,3 +713,10 @@ test("配線: adoptForeignSyncId は識別を変える前に保留を立て、�
   assert.doesNotMatch(catchBlock, /confusionIdentityPending = false/, "失敗したら保留のまま（前の利用者のデータが残るため）");
 });
 
+test("配線: 切り替えに失敗したあと「他の端末に合わせる」（forcePullReplace）で置き換えたら、記録を再開する", () => {
+  const body = extractFunction("forcePullReplace");
+  const replace = body.indexOf("appState = normalizeState(remote.state || defaultState());");
+  const clear = body.indexOf("confusionIdentityPending = false;");
+  assert.ok(replace >= 0 && clear > replace, "置き換えた後で保留を外す（復旧後も止まり続けない）");
+});
+

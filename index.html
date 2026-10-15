@@ -22805,6 +22805,9 @@ async function forcePullReplace() {
     // applyingRemote 中の persist は再プッシュしない（サーバー内容をそのまま採用するため）
     syncState.applyingRemote = true;
     appState = normalizeState(remote.state || defaultState());
+    // いまの識別のサーバー内容で丸ごと置き換えたので、画面のデータの持ち主は識別と一致した。
+    // 個人キーの切り替えに失敗したあとここで復旧した場合も、取り違えの記録を再開する。
+    confusionIdentityPending = false;
     invalidatePersonalFactorCache();
     currentQuiz = null;
     selectedIds.clear();
@@ -32217,6 +32220,12 @@ function confusionPartnersFor(store, wordId) {
 // 識別が取れない（起動直後の未確定・取得に失敗）ときは null を返し、読み書きしない。
 // 個人キーの切り替え（adoptForeignSyncId）で、識別だけ先に変わり画面のデータがまだ前の利用者の
 // ままの間は true。この間は取り違えを読み書きしない（別の利用者の領域へ混ぜない）。
+// 外すのは、切り替え先のデータへ差し替えたとき（adoptForeignSyncId の成功）と、いまの識別の
+// サーバー内容で丸ごと置き換えたとき（forcePullReplace）。
+// 既知の制限（端末内の補助データなので許容）: 切り替えに失敗したまま再読み込みすると、前の利用者の
+// データが新しい識別のもとで開かれ、その間の記録は新しい識別の領域へ入る。また、V2から旧キーへの
+// 切り替えで保存に失敗して戻す処理の途中にも短い窓がある。どちらも最悪で「選択肢に紛らわしい語が
+// 1つ混ざる」だけで、学習データ（appState・同期）には影響しない。
 let confusionIdentityPending = false;
 
 function confusionStoreKey() {
