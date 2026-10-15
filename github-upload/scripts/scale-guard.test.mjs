@@ -15,14 +15,21 @@
 //     経緯は docs/scale-guard.md に書いてある。）
 //
 // 測り方:
-//   各サイズを複数回まわして**最小値**を採る。CPU負荷のばらつきは常に
-//   「遅い方向」にしか出ないので、最小値がいちばん安定した推定になる。
+//   壁時計ではなく**CPU時間**（process.cpuUsage）で測り、他プロセスに待たされた時間を外す。
+//   比の検査は、小・大の規模を同じ仕事量にそろえて**交互に**まわし、
+//   隣り合った組ごとの比の**中央値**で判定する（理由は assertLinearish に書いた）。
+//   絶対時間の検査は、複数回の**最小値**を採る（ばらつきは遅い方向にしか出ないため）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import vm from "node:vm";
+import v8 from "node:v8";
+
+// 計測の直前にGCを走らせるため、実行時に gc() を取り出す（npm test のフラグは変えない）。
+v8.setFlagsFromString("--expose-gc");
+const collectGarbage = vm.runInNewContext("gc");
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(resolve(scriptDir, "..", "publish", "index.html"), "utf8");
@@ -195,16 +202,22 @@ const makeState = (count, seed) => ({
   trash: makeTrash(count, seed),
 });
 
-/** 最小所要時間（ms）。ばらつきは遅い方向にしか出ないので最小値が最も安定する。 */
+/**
+ * fn 1回ぶんに使ったCPU時間（ms）。壁時計ではなくCPU時間なのは、
+ * 他のプロセスにCPUを取られて待たされた時間やスワップ待ちを測定から外すため。
+ */
+function cpuMs(fn) {
+  const start = process.cpuUsage();
+  fn();
+  const used = process.cpuUsage(start);
+  return (used.user + used.system) / 1000;
+}
+
+/** 最小所要CPU時間（ms）。ばらつきは遅い方向にしか出ないので最小値が最も安定する。 */
 function fastest(runs, fn) {
   fn(); // ウォームアップ（JITの初回コストを測定から外す）
   let best = Infinity;
-  for (let i = 0; i < runs; i += 1) {
-    const start = process.hrtime.bigint();
-    fn();
-    const ms = Number(process.hrtime.bigint() - start) / 1e6;
-    if (ms < best) best = ms;
-  }
+  for (let i = 0; i < runs; i += 1) best = Math.min(best, cpuMs(fn));
   return best;
 }
 
@@ -224,13 +237,38 @@ function fastest(runs, fn) {
 function assertLinearish(label, run, repeat = 1) {
   // 1回が速すぎると測定の分解能に埋もれて比が意味を持たない。
   // repeat 回まとめて測れば、両方の規模に同じ倍率がかかるので比は変わらない。
-  const perWord = (n) => fastest(2, () => { for (let i = 0; i < repeat; i += 1) run(n); }) / (n * repeat);
-  const small = perWord(SMALL);
-  const large = perWord(LARGE);
+  // さらに小さい規模は LARGE/SMALL 倍まわし、1サンプルの仕事量（≒所要時間）を揃える。
+  // 長さが違うと、短い方だけ負荷の谷や遅いコアにまるごと当たり、比が偏る。
+  // 測る直前にGCを済ませる。交互に測ると、前のサンプルが残したゴミの回収が
+  // 次のサンプルに乗り、空きメモリが少ないときほど片方に偏る（並び替えで比が1.53倍まで揺れた）。
+  const once = (n) => {
+    collectGarbage();
+    const times = (repeat * LARGE) / n;
+    return cpuMs(() => { for (let i = 0; i < times; i += 1) run(n); }) / (n * times);
+  };
+  // 小・大を**交互に**測り、同じラウンドで隣り合った2サンプルの比を採って、その**中央値**で判定する。
+  // - 片方ずつまとめて測ると、負荷の波が片方だけに乗って比が跳ねる
+  //   （壁時計で片方ずつ測っていた頃、load average 5〜8 で 1.59倍、77 で 2.59倍の誤検知）。
+  // - 規模ごとの最小値どうしの比も使えない。高負荷のMacでは、どのコアに載ったかで
+  //   CPU時間が2〜5倍ぶれ、たまたま速かった1サンプルに比が引きずられる
+  //   （load 75〜113 で、何も注入していない状態の比が 1.40倍まで寄った）。
+  // 隣り合った組は同じ条件を共有するので比では打ち消し合い、外れた組は中央値が捨てる。
+  // 同条件の実測（組ごとの比の中央値）: いまの実装 1.04倍、二次を注入 3.28倍。
+  once(SMALL); // ウォームアップ（JITの初回コストを測定から外す）
+  once(LARGE);
+  const medianPair = () =>
+    Array.from({ length: ROUNDS }, () => {
+      const small = once(SMALL);
+      return { small, large: once(LARGE) };
+    }).sort((x, y) => x.large / x.small - y.large / y.small)[(ROUNDS - 1) / 2];
+  let { small, large } = medianPair();
+  // 負荷の山が全ラウンドに重なると、線形でも閾値を越えることがある（並び替えで1.63倍を実測）。
+  // 越えたときだけ時間をずらしてもう一度測る。本当に二次なら測り直しても越える。
+  if (large / small >= 1.5) ({ small, large } = medianPair());
   const detail = `${SMALL}語=${(small * 1000).toFixed(1)}µs/語, ${LARGE}語=${(large * 1000).toFixed(1)}µs/語`;
 
   // 速すぎると分解能の問題で比が意味を持たない。
-  assert.ok(small * SMALL * repeat > 1, `${label}: 基準が速すぎて比較できない（${detail}）`);
+  assert.ok(small * LARGE * repeat > 1, `${label}: 基準が速すぎて比較できない（${detail}）`);
   assert.ok(
     large / small < 1.5,
     `${label}: 1語あたりの時間が ${(large / small).toFixed(2)}倍に増えている。` +
@@ -240,6 +278,7 @@ function assertLinearish(label, run, repeat = 1) {
 
 const SMALL = 2000;
 const LARGE = 16000;
+const ROUNDS = 5; // 中央値を取るので奇数
 
 test("normalizeState は語数に対して線形（読み込み・同期のたびに全語を通る）", () => {
   const states = new Map([SMALL, LARGE].map((n) => [n, makeState(n, 0)]));
@@ -432,15 +471,8 @@ test("起動時の同期1回ぶんが、語数に対して線形にとどまる"
       rt.stateSignature(nr);
     };
   };
-  const small = run(SMALL);
-  const large = run(LARGE);
-  const perWordSmall = fastest(2, small) / SMALL;
-  const perWordLarge = fastest(2, large) / LARGE;
-  const detail = `${SMALL}語=${(perWordSmall * 1000).toFixed(1)}µs/語, ${LARGE}語=${(perWordLarge * 1000).toFixed(1)}µs/語`;
-  assert.ok(
-    perWordLarge / perWordSmall < 1.5,
-    `起動時の同期: 1語あたりが ${(perWordLarge / perWordSmall).toFixed(2)}倍に増えている（${detail}）`,
-  );
+  const runs = new Map([SMALL, LARGE].map((n) => [n, run(n)]));
+  assertLinearish("起動時の同期", (n) => runs.get(n)());
 });
 
 test("内蔵単語帳を全部入れた規模（9000語）の起動時同期が、現実的な時間で終わる", () => {
