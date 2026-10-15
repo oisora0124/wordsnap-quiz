@@ -372,6 +372,7 @@ test("due provisional mastery bypasses context formats in the actual review quiz
       "const prefetchNextContextItem = () => {};",
       "const buildContextChoices = () => [];",
       "const pickDistractors = (pool) => pool.slice(0, 3);",
+      "const loadConfusionStore = () => ({}); const confusionPartnersFor = () => []; const confusedIdsWithinScope = () => []; const confusionStoreKey = () => null;", // 取り違えの記録は空（従来どおり）
       extractFunction("pickDistractorsWithFallback"),
       "const shuffle = (items) => items;",
       "const choiceCountNote = () => '';",

@@ -6465,6 +6465,7 @@ accurate 正確な"
                   <li><strong>苦手だけ／今日の復習：</strong>正答率80%未満の誤答歴がある単語、または復習日が来た単語だけを1周します。</li>
                   <li><strong>やさしい順：</strong>未着手の単語をCEFRのA1→C2順で1周します。未判定の単語は最後です。</li>
                   <li><strong>出題の向き：</strong>4択クイズ全体（おまかせ・この設定で出題・今日の復習・苦手だけ など）に適用されます。日→英は日本語の意味を見て英単語を選ぶ形式です。ミックスは、おまかせでは1問ごと、それ以外はセッション開始時に向きが決まります。例文問題とフラッシュカードは形式が違うため対象外です。また、フラッシュカードで覚えた語を確かめる回だけは、設定に関わらず英→日で出ます。</li>
+                  <li><strong>取り違えた語：</strong>間違えて選んだ語の組を覚えて、次から選択肢に1つ混ぜます。正解が続くと外れます（この端末だけに保存）。</li>
                 </ul>
               </div>
             </div>
@@ -7209,7 +7210,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.135</span>
+        <span class="app-footer-version">バージョン 1.0.136</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7347,7 +7348,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.135";
+  const APP_REV = "1.0.136";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -22804,6 +22805,9 @@ async function forcePullReplace() {
     // applyingRemote 中の persist は再プッシュしない（サーバー内容をそのまま採用するため）
     syncState.applyingRemote = true;
     appState = normalizeState(remote.state || defaultState());
+    // いまの識別のサーバー内容で丸ごと置き換えたので、画面のデータの持ち主は識別と一致した。
+    // 個人キーの切り替えに失敗したあとここで復旧した場合も、取り違えの記録を再開する。
+    confusionIdentityPending = false;
     invalidatePersonalFactorCache();
     currentQuiz = null;
     selectedIds.clear();
@@ -23331,6 +23335,9 @@ async function adoptForeignSyncId(newId) {
   syncState.pushQueued = false;
   // 進行中の旧キーへのGET/PUTを中断し、遅れて届く応答が新キーへ混ざるのを防ぐ
   bumpSyncRequestGen();
+  // 識別は先に新しいキーへ変わるが、画面のデータ（appState）は GET が返るまで前の利用者のまま。
+  // その間（失敗したらそのまま）に作った問題の取り違えを新しい利用者の領域へ書かないよう止める。
+  confusionIdentityPending = true;
   syncState.id = newId;
   syncState.rev = 0;
   syncState.connected = false;
@@ -23361,6 +23368,8 @@ async function adoptForeignSyncId(newId) {
     // applyingRemote 中の persist は再pushしない（切り替え先の内容をそのまま採用するため）
     syncState.applyingRemote = true;
     appState = normalizeState(remote.state || defaultState());
+    // 画面のデータが新しい利用者のものになったので、取り違えの記録を再開する
+    confusionIdentityPending = false;
     invalidatePersonalFactorCache();
     currentQuiz = null;
     selectedIds.clear();
@@ -31431,6 +31440,7 @@ function buildReviewQuiz() {
     const sessionIds = new Set(reviewSession.allIds);
     const others = appState.words.filter((word) => word.id !== answer.id);
     let pool = others.filter((word) => sessionIds.has(word.id));
+    const scopeWords = pool; // 取り違えた相手を混ぜてよい範囲（下で広げる前のセッションの語）
     if (pool.length < 3) pool = others;
     const srs = quizSrsSnapshot(answer); // srsDueAtStart と progressStamp
 
@@ -31513,7 +31523,17 @@ function buildReviewQuiz() {
     // 使っている間その語は永久に仮習得のまま残り、フラッシュカードの対象からも
     // 外れ続ける。上で例文形式を抑止しているのと同じ理由・同じ対象。
     const reverse = Boolean(reviewSession.reverse) && !isMasteryVerificationDue(answer);
-    const distractors = pickDistractorsWithFallback(pool, others, answer, reverse);
+    // 過去に取り違えた相手が出題範囲に居れば、誤答に1つ混ぜる（居なければ従来どおり）。
+    // 範囲を全単語へ広げる前の語（scopeWords）に居る相手だけを渡す。
+    // 記録の領域（利用者ごと）は問題を作った時点で決め、問題に持たせる（採点時の照合に使う）。
+    const confusionKey = confusionStoreKey();
+    const distractors = pickDistractorsWithFallback(
+      pool,
+      others,
+      answer,
+      reverse,
+      confusedIdsWithinScope(confusionPartnersFor(loadConfusionStore(confusionKey), answer.id), scopeWords),
+    );
     if (distractors.length === 0) {
       // 正解だけの1択で採点するとSRSが不当に進む。通常・総復習・苦手復習・resumeの
       // どの入口でも、誤答を1件も作れない場合は問題を返さず共通の空状態へ合流させる。
@@ -31547,6 +31567,7 @@ function buildReviewQuiz() {
       context: null,
       ...srs,
       reverse, // 日→英かどうか（採点・promptMode判定・自動読み上げの答え漏れ対策に使う）
+      confusionKey, // 取り違えの記録先（作成時の利用者。採点時に識別が変わっていたら記録しない）
     };
   }
   return null;
@@ -31637,7 +31658,17 @@ function buildQuiz() {
   // 仮習得の検証待ちの語だけは必ず英→日にする（本習得への確定は意味4択の正解が
   // 条件で、日→英では永久に確定しない）。理由は buildReviewQuiz 側と同じ。
   const reverse = resolveQuizReverse() && !isMasteryVerificationDue(answer);
-  const distractors = pickDistractorsWithFallback(basePool, others, answer, reverse);
+  // 過去に取り違えた相手が出題範囲に居れば、誤答に1つ混ぜる（居なければ従来どおり）
+  // 範囲が小さくて basePool が全単語へ広がっていても、相手は選んだ範囲（pool）の語に限る。
+  // 記録の領域（利用者ごと）は問題を作った時点で決め、問題に持たせる（採点時の照合に使う）。
+  const confusionKey = confusionStoreKey();
+  const distractors = pickDistractorsWithFallback(
+    basePool,
+    others,
+    answer,
+    reverse,
+    confusedIdsWithinScope(confusionPartnersFor(loadConfusionStore(confusionKey), answer.id), pool),
+  );
   if (distractors.length === 0) {
     // 1択のまま正解扱いにできないよう、通常クイズも問題生成の時点で止める。
     quizEmptyReason =
@@ -31661,6 +31692,7 @@ function buildQuiz() {
     shownAt: Date.now(), // 回答時間の計測起点（速度による習得判定に使う）
     ...quizSrsSnapshot(answer), // srsDueAtStart と progressStamp
     reverse, // 日→英クイズかどうか（採点・promptMode判定・自動読み上げの答え漏れ対策に使う）
+    confusionKey, // 取り違えの記録先（作成時の利用者。採点時に識別が変わっていたら記録しない）
   };
 }
 
@@ -31954,9 +31986,15 @@ function meaningsTooClose(a, b) {
 // 呼び出し側は「単語が足りません」でセッションごと終了する。他に何百語あっても
 // 「もう1語登録してください」と言われるのは不合理なので、範囲内で0件のときだけ
 // 全単語から選び直す。範囲内で1件以上作れた場合は従来どおり（選択肢の数や中身は変えない）。
-function pickDistractorsWithFallback(pool, fallbackPool, answer, reverse) {
+//
+// confusedIds: 過去に取り違えた相手の語 id（confusionPartnersFor の結果）。出題範囲（pool）に
+// 居るときだけ誤答へ1つ混ぜる。範囲内に居なければ何もしない＝範囲外から引っ張ってこないので、
+// 範囲内で0件のときの全単語フォールバックには渡さない。空のときは従来と完全に同じ動き。
+function pickDistractorsWithFallback(pool, fallbackPool, answer, reverse, confusedIds = []) {
   const options = { dedupeBy: reverse ? "term" : "meaning" };
-  const picked = pickDistractors(pool, answer, 3, [], options);
+  const scopedOptions =
+    Array.isArray(confusedIds) && confusedIds.length > 0 ? { ...options, confusedIds } : options;
+  const picked = pickDistractors(pool, answer, 3, [], scopedOptions);
   if (picked.length > 0 || pool === fallbackPool) return picked;
   return pickDistractors(fallbackPool, answer, 3, [], options);
 }
@@ -31981,14 +32019,30 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
   // まず shuffle して同点をランダム化してから、紛らわしさスコアの高い順に並べる。
   // Array.prototype.sort は安定なので、同スコアはシャッフル順（＝ランダム）のまま残る。
   const preferDifferentPos = Boolean(options.preferDifferentPos);
+  // options.confusedIds: 過去にこの答えと取り違えた語の id（並びは「強い相手」が先）。
+  // 綴りが似た語（+3）より強く優先する（+5）。引っかけ枠は綴りの紛らわしさと共有で合計1つまで。
+  // 空なら confused は常に false で、スコアも乱数の消費も従来と変わらない。
+  const confusedIds = Array.isArray(options.confusedIds) ? options.confusedIds.map(String) : [];
+  const confusedRank = new Map();
+  confusedIds.forEach((id, index) => {
+    if (!confusedRank.has(id)) confusedRank.set(id, index);
+  });
   const ranked = shuffle(pool)
     .map((word) => {
       let score = 0;
       const dist = spellingDistance(answer.term, word.term);
+      const confusedAt = confusedRank.has(String(word.id)) ? confusedRank.get(String(word.id)) : -1;
+      const confused = confusedAt >= 0;
       // 紛らわしさはスコアと別に持つ。スコアで判定すると、空所補充で品詞が同じ場合の
       // 減点と相殺されて（3-3=0）上限チェックをすり抜けてしまう。
-      const confusable = dist > 0 && dist <= 2;
-      if (confusable) score += 3; // 綴りが紛らわしい（affect/effect 等）
+      const confusable = confused || (dist > 0 && dist <= 2);
+      if (confused) {
+        // 取り違えた語は綴りの近さより優先する。端数は、取り違えが複数あるときに
+        // 渡された並び（強い相手が先）を同点の決め手にするためで、整数の序列は崩さない。
+        score += 5 + (confusedIds.length - confusedAt) / (confusedIds.length + 1);
+      } else if (confusable) {
+        score += 3; // 綴りが紛らわしい（affect/effect 等）
+      }
       if (answerPos && word.pos?.tag) {
         const samePos = word.pos.tag === answerPos;
         if (preferDifferentPos) {
@@ -31999,7 +32053,7 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
           score += 1; // 意味の4択：同じ品詞＝意味カテゴリが近い
         }
       }
-      return { word, score, confusable };
+      return { word, score, confusable, confused };
     })
     .sort((a, b) => b.score - a.score);
   // 紛らわしい誤答は1つまでにする。上位スコアだけで3つ埋めると、どれも似た語になって
@@ -32012,7 +32066,10 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
       const d = spellingDistance(answer.term, w.term);
       return d > 0 && d <= 2;
     }).length;
-    for (const { word, confusable } of ranked) {
+    // 記録相手（confusedIds 由来）は、緩和パスでも合計1つまで。綴りの近さの上限（MAX_CONFUSABLE）は
+    // 候補が足りないと外れるが、取り違えた語まで何個も並べると引っかけだらけの問題になる。
+    let confusedUsed = picked.filter((w) => confusedRank.has(String(w.id))).length;
+    for (const { word, confusable, confused } of ranked) {
       if (picked.length >= count) return;
       const key = labelKey(word);
       if (seen.has(key)) continue;
@@ -32026,10 +32083,12 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
       // 訳が近すぎる語は「難易度」ではなく「正解が2つ」の問題になるので、
       // 選択肢が足りなくなる場合でも必ず除外する（allowConfusable でも緩めない）。
       if (meaningsTooClose(answer.meaning, word.meaning)) continue;
+      if (confused && confusedUsed >= MAX_CONFUSABLE) continue;
       if (!allowConfusable && confusable) {
         if (confusableUsed >= MAX_CONFUSABLE) continue;
         confusableUsed += 1;
       }
+      if (confused) confusedUsed += 1;
       seen.add(key);
       picked.push(word);
     }
@@ -32038,6 +32097,220 @@ function pickDistractors(pool, answer, count = 3, excludeMeanings = [], options 
   // 制限のせいで4択に満たない場合だけ、制限を外して埋める（出題機会は落とさない）
   if (picked.length < count) takeFrom(true);
   return picked;
+}
+
+// ---------- 取り違えた語の組（この端末だけ） ----------
+// 4択で「Aの問題にBを選んだ」組を覚え、次からAの問題にBを誤答として1つ混ぜる。
+// 綴りや品詞の近さではなく、その人が実際に取り違えた語を出すので、弱点がそのまま練習になる。
+// 端末ごとの学習の癖なので同期しない（appState・同期データの形式と容量は増やさない）。
+// 保存キーは同期の識別（個人キー／V2のroomId）ごとに分ける。同じブラウザで別アカウントへ
+// 切り替えたり、JSON取り込みで語idが重なったりしても、他人の記録を混ぜないため。
+// キーの再発行などで識別が変わると記録は引き継がない（端末の補助情報で、失っても学習データは無事。
+// 引き継ぎの仕組みを足すより、忘れて作り直す方が安全で単純）。
+// 形: { "<語A>": { "<語B>": { n: 取り違えの強さ(1〜5), at: 最後に取り違えた時刻(ms) } } }
+// 双方向に持つ（AにもBにも相手を混ぜたいので、A→BとB→Aを両方記録する）。
+const CONFUSION_STORE_KEY = "wordsnap-confusions:v1"; // 実際のキーは末尾に識別のハッシュが付く
+const CONFUSION_MAX_COUNT = 5; // 強さの上限。これ以上は「何度間違えても同じ重み」
+const CONFUSION_MAX_PARTNERS = 5; // 1語あたりの相手の上限
+const CONFUSION_MAX_WORDS = 500; // 全体の語数の上限（localStorageを太らせない）
+
+// 取り違えた相手のうち、出題範囲（scopeWords）の語だけを残す。
+// 範囲が小さいと pool を全単語へ広げて出題するため、広げた後の pool を基準にすると
+// 範囲外の相手まで混ざってしまう。範囲の語（広げる前）の id だけを基準にする。
+function confusedIdsWithinScope(ids, scopeWords) {
+  const inScope = new Set((Array.isArray(scopeWords) ? scopeWords : []).map((word) => String(word.id)));
+  return (Array.isArray(ids) ? ids : []).filter((id) => inScope.has(String(id)));
+}
+
+// 保存値を整える。壊れた項目・自分自身との組・強さ0以下を捨て、1語あたり5相手・全体500語に収める。
+// 超えたら at の古いものから落とす。同点のとき protectIds の語（いま更新した組）を残す。
+// 相手を落とすときは組として双方向に落とす（A→Bだけ消えてB→Aが残ると、Aに正解してもB→Aが
+// 減らず、片方向の記録が溜まり続けるため）。語ごと落とすときも、その語を相手に持つ行から消す。
+// 入力は変異させず、新しいオブジェクトを返す。
+function pruneConfusionStore(store, protectIds = []) {
+  const protect = new Set((protectIds || []).map(String));
+  const rows = new Map(); // wordId -> [[partnerId, {n, at}], ...]（at の新しい順）
+  const droppedPairs = [];
+  for (const wordId of Object.keys(store && typeof store === "object" ? store : {})) {
+    const row = store[wordId];
+    if (!row || typeof row !== "object") continue;
+    const entries = [];
+    for (const partnerId of Object.keys(row)) {
+      const entry = row[partnerId];
+      const n = Math.floor(Number(entry?.n));
+      const at = Number(entry?.at);
+      if (partnerId === wordId || !(n >= 1) || !Number.isFinite(at)) continue;
+      entries.push([partnerId, { n: Math.min(n, CONFUSION_MAX_COUNT), at }]);
+    }
+    entries.sort((x, y) => y[1].at - x[1].at || Number(protect.has(y[0])) - Number(protect.has(x[0])));
+    for (const [partnerId] of entries.slice(CONFUSION_MAX_PARTNERS)) droppedPairs.push([wordId, partnerId]);
+    rows.set(wordId, entries.slice(0, CONFUSION_MAX_PARTNERS));
+  }
+  const dropEntry = (wordId, partnerId) => {
+    const entries = rows.get(wordId);
+    if (entries) rows.set(wordId, entries.filter(([id]) => id !== partnerId));
+  };
+  for (const [wordId, partnerId] of droppedPairs) dropEntry(partnerId, wordId);
+  const ranked = [...rows.entries()]
+    .filter(([, entries]) => entries.length > 0)
+    .map(([wordId, entries]) => ({ wordId, lastAt: entries[0][1].at }))
+    .sort((x, y) => y.lastAt - x.lastAt || Number(protect.has(y.wordId)) - Number(protect.has(x.wordId)));
+  for (const { wordId } of ranked.slice(CONFUSION_MAX_WORDS)) {
+    rows.delete(wordId);
+    for (const other of [...rows.keys()]) dropEntry(other, wordId);
+  }
+  const result = {};
+  for (const [wordId, entries] of rows) {
+    if (entries.length > 0) result[wordId] = Object.fromEntries(entries);
+  }
+  return result;
+}
+
+// 正解 a の問題で誤答 b を選んだ組を、双方向に1回分足す。n は上限5、at は nowMs に更新。
+function recordConfusion(store, a, b, nowMs) {
+  const idA = String(a ?? "");
+  const idB = String(b ?? "");
+  const base = pruneConfusionStore(store);
+  if (!idA || !idB || idA === idB) return base;
+  const bump = (from, to) => {
+    const row = { ...(base[from] || {}) };
+    row[to] = { n: Math.min((row[to]?.n || 0) + 1, CONFUSION_MAX_COUNT), at: Number(nowMs) || 0 };
+    base[from] = row;
+  };
+  bump(idA, idB);
+  bump(idB, idA);
+  return pruneConfusionStore(base, [idA, idB]);
+}
+
+// 正解 a の問題の選択肢（shownIds）に a の取り違え相手が居たら、その組の n を双方向に1つ減らす。
+// 0になったら削除する（同じ並びで区別できたので、覚えておく必要がなくなった組）。
+// 相手が選択肢に居なかったときは区別できたかどうか分からないので何もしない。
+function relaxConfusion(store, a, shownIds) {
+  const idA = String(a ?? "");
+  const base = pruneConfusionStore(store);
+  const shown = new Set((Array.isArray(shownIds) ? shownIds : []).map(String));
+  const row = base[idA];
+  if (!row) return base;
+  const lower = (from, to) => {
+    const entry = base[from]?.[to];
+    if (!entry) return;
+    const rest = { ...base[from] };
+    if (entry.n - 1 <= 0) delete rest[to];
+    else rest[to] = { n: entry.n - 1, at: entry.at };
+    if (Object.keys(rest).length === 0) delete base[from];
+    else base[from] = rest;
+  };
+  for (const partnerId of Object.keys(row)) {
+    if (!shown.has(partnerId)) continue;
+    lower(idA, partnerId);
+    lower(partnerId, idA);
+  }
+  return base;
+}
+
+// 語 wordId の取り違え相手の id を、強い順（n の大きい順→新しい順）に返す。
+function confusionPartnersFor(store, wordId) {
+  const row = pruneConfusionStore(store)[String(wordId ?? "")];
+  if (!row) return [];
+  return Object.keys(row).sort((x, y) => row[y].n - row[x].n || row[y].at - row[x].at);
+}
+
+// いまの同期の識別に対応する保存キー。識別そのもの（個人キーなど）をキー名に出さないよう、
+// 短いハッシュにする（暗号用途ではなく、キー名を分けるだけなので軽いFNV-1aで足りる）。
+// 識別が取れない（起動直後の未確定・取得に失敗）ときは null を返し、読み書きしない。
+// 個人キーの切り替え（adoptForeignSyncId）で、識別だけ先に変わり画面のデータがまだ前の利用者の
+// ままの間は true。この間は取り違えを読み書きしない（別の利用者の領域へ混ぜない）。
+// 外すのは、切り替え先のデータへ差し替えたとき（adoptForeignSyncId の成功）と、いまの識別の
+// サーバー内容で丸ごと置き換えたとき（forcePullReplace）。
+// 既知の制限（端末内の補助データなので許容）: 切り替えに失敗したまま再読み込みすると、前の利用者の
+// データが新しい識別のもとで開かれ、その間の記録は新しい識別の領域へ入る。また、V2から旧キーへの
+// 切り替えで保存に失敗して戻す処理の途中にも短い窓がある。どちらも最悪で「選択肢に紛らわしい語が
+// 1つ混ざる」だけで、学習データ（appState・同期）には影響しない。
+let confusionIdentityPending = false;
+
+function confusionStoreKey() {
+  if (confusionIdentityPending) return null;
+  let syncId = "";
+  try {
+    syncId = String(syncRequestRoute().expectedSyncId || "");
+  } catch {
+    syncId = "";
+  }
+  // 識別がまだ決まっていない（起動直後の同期初期化前など）ときは、どの利用者の記録か分からないので
+  // 読み書きしない（null）。共通の領域へ入れると、初期化後には参照されず、別の利用者とも混ざる。
+  if (!syncId) return null;
+  return `${CONFUSION_STORE_KEY}:${shortKeyFingerprint(syncId)}`;
+}
+
+function loadConfusionStore(key = confusionStoreKey()) {
+  if (!key) return {};
+  try {
+    const raw = JSON.parse(localStorage.getItem(key));
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? pruneConfusionStore(raw) : {};
+  } catch {
+    // 壊れた JSON・localStorage が使えない環境（file:// など）は「記録なし」として扱う
+    return {};
+  }
+}
+
+// 保存できたら true。失敗（容量切れ・保存不可）は false を返すだけで、学習そのものは止めない。
+// 呼び出し側は成否を見て「次から並べて出します」の案内を出すか決める。
+function saveConfusionStore(store, key = confusionStoreKey()) {
+  if (!key) return false;
+  try {
+    if (!store || Object.keys(store).length === 0) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(store));
+    return true;
+  } catch {
+    // 取り違えの記録は補助データ。
+    return false;
+  }
+}
+
+// 1問の解答から、取り違えの記録をどう更新するかを決める純関数（保存や画面は触らない）。
+// 対象は 4択（英→日 meaning-choice／日→英 term-choice）だけ。フラッシュカードと空所補充は
+// 選択肢の性質が違う（自己申告／文脈）ので対象外。「わからない」は取り違えではないので対象外。
+// 戻り値: { type: "record", a, b } 誤答を選んだ／{ type: "relax", a, shownIds } 正解した／null 何もしない
+function confusionUpdateForAnswer({ answerId, choiceId, choiceIds, dontKnow, mode }) {
+  if (mode !== "meaning-choice" && mode !== "term-choice") return null;
+  if (dontKnow || answerId == null || choiceId == null) return null;
+  const ids = (Array.isArray(choiceIds) ? choiceIds : []).map(String);
+  if (String(choiceId) === String(answerId)) {
+    return { type: "relax", a: String(answerId), shownIds: ids.filter((id) => id !== String(answerId)) };
+  }
+  // 選択肢に無い id は誤答として扱わない（古い画面状態からの呼び出しで、別の語を巻き込まないため）
+  if (!ids.includes(String(choiceId))) return null;
+  return { type: "record", a: String(answerId), b: String(choiceId) };
+}
+
+// gradeQuiz から呼ぶ。記録を更新して保存し、誤答を記録できたときだけ相手の語を返す（案内文用）。
+// 補助機能なので、何が起きても採点は止めない。
+function learnConfusionFromAnswer(quiz, choiceId, dontKnow) {
+  try {
+    const update = confusionUpdateForAnswer({
+      answerId: quiz.answer.id,
+      choiceId,
+      choiceIds: (quiz.choices || []).map((choice) => choice.id),
+      dontKnow,
+      mode: currentQuizPromptMode(quiz),
+    });
+    if (!update) return null;
+    // 記録は「その問題を作ったときの利用者」に結び付ける。アカウント切り替えの応答待ちの間は
+    // 識別だけが先に新しい利用者へ変わり、画面と問題は前の利用者のままなので、採点時の識別と
+    // 食い違ったら記録しない（別の利用者の領域へ書き込まない）。
+    const key = quiz.confusionKey;
+    if (!key || key !== confusionStoreKey()) return null;
+    const store = loadConfusionStore(key);
+    if (update.type === "record") {
+      // 保存できなかったときは、次から出ないので案内も出さない
+      if (!saveConfusionStore(recordConfusion(store, update.a, update.b, Date.now()), key)) return null;
+      return appState.words.find((item) => item.id === update.b) || null;
+    }
+    saveConfusionStore(relaxConfusion(store, update.a, update.shownIds), key);
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // 表示する「いまの連続日数」。最後に解いたのが今日か昨日なら保存済みの count、
@@ -34009,6 +34282,13 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
       ? `「${currentQuiz.answer.term}」`
       : `「${currentQuiz.answer.meaning}」`;
 
+  // 取り違えた語の組を覚える／区別できた組を外す（この端末だけ・4択のみ）。
+  // 誤答を記録したときだけ、次から並べて出すことを一言添える。
+  const confusedWord = learnConfusionFromAnswer(currentQuiz, choiceId, dontKnow);
+  const confusionNote = confusedWord?.term
+    ? `（次から「${confusedWord.term}」と並べて出します）`
+    : "";
+
   if (currentQuiz.flashcard) {
     persistAppState();
     renderAccuracy();
@@ -34033,6 +34313,7 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
         ? "正解！すべてクリアしました。「次の問題」で結果を表示します。"
         : "正解！「次の問題」で続けます。"
       : `正解は${answerFeedback}。あとでもう一度出します。`;
+    elements.quizFeedback.textContent += confusionNote;
     elements.quizFeedback.textContent += adaptiveScheduleNote(srsInfo);
     elements.quizScope.textContent = reviewScopeText();
     renderQuizProgress();
@@ -34053,6 +34334,7 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
     : dontKnow
       ? `正解は${answerFeedback}です。2〜3問後にもう一度出します。`
       : `惜しい。正解は${answerFeedback}。2〜3問後にもう一度出します。`;
+  elements.quizFeedback.textContent += confusionNote;
   elements.quizFeedback.textContent += adaptiveScheduleNote(srsInfo);
   persistAppState();
   renderAccuracy();
