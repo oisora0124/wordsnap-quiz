@@ -87,7 +87,7 @@ function parseSandbox(words = []) {
     extractFunction("looksLikeHeadword"),
     extractFunction("validPair"),
     extractFunction("parseVocabulary"),
-    "globalThis.__p = { parseVocabulary, cleanTermText, firstMeaning, stripNoise };",
+    "globalThis.__p = { parseVocabulary, cleanTermText, firstMeaning, stripNoise, validPair, normalizeTerm };",
   ];
   const sandbox = {};
   new Script(pieces.join("\n\n"), { filename: "import-quality-parse.js" }).runInNewContext(sandbox);
@@ -164,6 +164,27 @@ test("取り込み: 従来どおり読める形は変わらない", () => {
     ["give up", "あきらめる"],
     ["beautiful", "美しい"],
   ]);
+});
+
+test("取り込み: 日本語の品詞の括弧書き（名）（動）が訳に混じらない（OCRレビュー 2026-10）", () => {
+  const p = parseSandbox();
+  assert.deepEqual(pairs(p.parseVocabulary("apple（名）りんご\nrun (動) 走る\nbank(n)銀行\nbook (n) 本", null)), [
+    ["apple", "りんご"],
+    ["run", "走る"],
+    ["bank", "銀行"],
+    ["book", "本"],
+  ]);
+  // 後ろに訳が無い括弧は訳そのもの（従来どおり「名」を訳として残す）
+  assert.deepEqual(pairs(p.parseVocabulary("name（名）", null)), [["name", "名"]]);
+});
+
+test("候補の保存: 手で直した語も読み取り時と同じ表記に直す（don’t が don t にならない）", () => {
+  const p = parseSandbox();
+  assert.equal(p.validPair("don’t", "しない").term, "don't");
+  assert.equal(p.validPair("well‑known", "有名な").term, "well-known");
+  assert.equal(p.validPair("ａｐｐｌｅ", "りんご").term, "apple");
+  // 保存済みの don't との重複判定が、読み取り時と保存時で同じ鍵になる
+  assert.equal(p.normalizeTerm(p.validPair("don’t", "しない").term), p.normalizeTerm("don't"));
 });
 
 // ============================================================================
