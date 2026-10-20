@@ -467,3 +467,99 @@ test("端末内OCR: 2列モードで中断しても未処理の切り出しCanva
   const ocr = extractHandlerBody('elements.ocrButton.addEventListener("click", async () => {');
   assert.match(ocr, /const hiAcc = Boolean\(elements\.hiAccToggle\?\.checked\);[\s\S]*?高精度モードは言語データを外部から取得します/);
 });
+
+// ============================================================================
+// OCRレビュー（2026-10）で直した点
+// ============================================================================
+test("OCRの結果: 何も読み取れなかったときは入力欄を消さない", () => {
+  const pieces = [
+    "const elements = { ocrText: { value: '' } };",
+    extractFunction("applyOcrText"),
+    "globalThis.__o = { apply: applyOcrText, el: elements.ocrText };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "import-library-ocr-empty.js" }).runInNewContext(sandbox);
+  const o = sandbox.__o;
+  for (const empty of ["", "  \n ", null]) {
+    o.el.value = "apple りんご";
+    assert.equal(o.apply(empty, "apple りんご"), false);
+    assert.equal(o.el.value, "apple りんご", "書きかけの単語リストが消えた");
+  }
+});
+
+function ocrWorkerSandbox() {
+  const pieces = [
+    "let ocrWorker = null; let ocrWorkerMode = null; let ocrWorkerPromise = null;",
+    "let ocrWorkerToken = 0; let ocrWorkerTokenSerial = 0; let activeOcrRun = null;",
+    "const terminatingOcrWorkers = new WeakMap();",
+    extractConst("OCR_CANCELLED_CODE"),
+    extractConst("TESSDATA_VERSION"),
+    "const TESSERACT_ASSET_BASE = '/t/'; const TESSDATA_ASSET_BASE = '/d';",
+    "function reportOcrProgress() {}",
+    extractFunction("ocrCancelledError"),
+    extractFunction("isOcrCancelledError"),
+    extractFunction("ensureOcrRunActive"),
+    extractFunction("terminateOcrWorkerInstance"),
+    // extractFunction は "function" から切り出すので async を付け直す
+    "async " + extractFunction("resetOcrWorker"),
+    "async " + extractFunction("getOcrWorker"),
+    extractFunction("abandonOcrWorkerInit"),
+    "globalThis.__w = { getOcrWorker, abandonOcrWorkerInit, setActive: (r) => { activeOcrRun = r; } };",
+  ];
+  const sandbox = {};
+  new Script(pieces.join("\n\n"), { filename: "ocr-worker-cancel.js" }).runInNewContext(sandbox);
+  return sandbox.__w;
+}
+
+test("OCRの中止: 初期化が終わらないまま中止しても、次の実行は待たずに始まり、遅れて出来た worker は終了する", async () => {
+  const w = ocrWorkerSandbox();
+  const created = [];
+  const options = [];
+  let releaseFirst;
+  const Tesseract = {
+    OEM: { LSTM_ONLY: 1 },
+    createWorker: (_langs, _oem, opts) => {
+      options.push(opts);
+      const worker = { terminated: false, terminate: async () => { worker.terminated = true; } };
+      created.push(worker);
+      if (created.length === 1) return new Promise((resolve) => { releaseFirst = () => resolve(worker); });
+      return Promise.resolve(worker);
+    },
+  };
+  const run1 = { id: 1, cancelled: false };
+  w.setActive(run1);
+  const first = w.getOcrWorker(Tesseract, false, run1);
+  first.catch(() => {});
+  await new Promise((r) => setImmediate(r));
+  run1.cancelled = true; // 中止（画面側は初期化を待たずに戻る）
+  w.abandonOcrWorkerInit(run1);
+
+  // 言語データの取得失敗で createWorker が終わらないことがある。それを待たずに次が動く
+  const run2 = { id: 2, cancelled: false };
+  w.setActive(run2);
+  const worker2 = await w.getOcrWorker(Tesseract, false, run2);
+  assert.equal(worker2, created[1], "前の（終わらない）初期化を待って次の実行が止まっている");
+
+  // 前の初期化が遅れて終わったら、その worker は捨てる（使用中の worker2 は残す）
+  releaseFirst();
+  await assert.rejects(first, (e) => e.code === "OCR_CANCELLED");
+  assert.equal(created[0].terminated, true, "中止後に出来た worker を終了していない");
+  assert.equal(created[1].terminated, false, "使用中の worker まで終了している");
+  // 言語データのキャッシュはモード・版ごとに分ける（混ざると別モードのデータが使われ続ける）
+  assert.equal(options[0].cachePath, "wordbank-tessdata/4.0.0_best_int");
+  w.setActive(run2);
+  await w.getOcrWorker(Tesseract, true, run2);
+  assert.equal(options[2].cachePath, "wordbank-tessdata/4.0.0_best");
+});
+
+test("OCRの中止: 初期化の完了を待たずに画面を戻す配線", () => {
+  const cancel = extractFunction("cancelActiveOcrRun");
+  assert.match(cancel, /run\.cancel\(\);\s*abandonOcrWorkerInit\(run\);/);
+  assert.doesNotMatch(cancel, /await pending/, "中止処理が初期化の完了を待っている（止まると画面が戻らない）");
+  const runOcr = extractFunction("runOcr");
+  assert.match(runOcr, /await Promise\.race\(\[loadTesseract\(\), run\.cancelSignal\]\)/);
+  assert.match(runOcr, /await Promise\.race\(\[getOcrWorker\(Tesseract, hiAcc, run\), run\.cancelSignal\]\)/);
+  const ocr = extractHandlerBody('elements.ocrButton.addEventListener("click", async () => {');
+  assert.match(ocr, /run\.cancelSignal = new Promise\(\(_, reject\) => \{\s*run\.cancel = \(\) => reject\(ocrCancelledError\(\)\);/);
+  assert.match(ocr, /run\.cancelSignal\.catch\(\(\) => \{\}\);/);
+});

@@ -7210,7 +7210,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.136</span>
+        <span class="app-footer-version">バージョン 1.0.137</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7348,7 +7348,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.136";
+  const APP_REV = "1.0.137";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -24951,7 +24951,13 @@ function parseVocabulary(text, deckId = null) {
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const lineNo = i + 1;
-    const line = stripNoise(lines[i]);
+    // 品詞の括弧は日本語の位置で語と訳を分ける前に外す。「apple（名）りんご」は「名」で分かれ、
+    // 訳が「名）りんご」になっていた。
+    // 後ろに何も無い括弧は訳そのものの場合がある（「name（名）」の訳は「名」）ので残す。
+    const line = stripNoise(lines[i])
+      .replace(TERM_POS_PAREN, (mark, at, all) => (all.slice(at + mark.length).trim() ? " " : mark))
+      .replace(/\s+/g, " ")
+      .trim();
     if (!line) continue;
     if (IPA_CHARS.test(line) && !JP_CHAR.test(line)) continue; // pure phonetic noise
 
@@ -25103,7 +25109,13 @@ function buildParseResultMessage(result) {
 }
 
 function validPair(term, meaning) {
-  const cleanTerm = term.replace(/[^A-Za-z0-9' .-]/g, " ").replace(/\s+/g, " ").trim();
+  // 候補を手で直した語も、読み取り時（stripNoise）と同じく曲がったアポストロフィ・語中のダッシュ・
+  // 全角英数字を直してから判定する。iPhone の入力は既定で ’ になり、「don t」として重複をすり抜けていた。
+  const cleanTerm = term
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/[’‘‛]/g, "'")
+    .replace(/([A-Za-z])[‐‑‒–—](?=[A-Za-z])/g, "$1-")
+    .replace(/[^A-Za-z0-9' .-]/g, " ").replace(/\s+/g, " ").trim();
   const cleanMeaning = meaning.replace(/\s+/g, " ").trim();
 
   if (!/[A-Za-z]/.test(cleanTerm) || cleanTerm.length < 2 || cleanMeaning.length < 1) {
@@ -26995,7 +27007,9 @@ async function getOcrWorker(Tesseract, highAccuracy, run) {
     return ocrWorker;
   }
   if (ocrWorkerPromise) {
-    await ocrWorkerPromise.promise;
+    // 中止済みの実行が残した初期化でも、終わるまで待ってから作り直す（同時に2つ作らない）。
+    // その初期化の失敗・中止は、この実行の失敗ではない。
+    await ocrWorkerPromise.promise.catch(() => {});
     ensureOcrRunActive(run);
     if (ocrWorker && ocrWorkerMode === mode) {
       run.workerToken = ocrWorkerToken;
@@ -27020,6 +27034,9 @@ async function getOcrWorker(Tesseract, highAccuracy, run) {
     // 出ず、connect-src から CDN を消せる。高精度モードだけは 12MB×2 と大きく
     // 利用実績も無いため、従来どおり projectnaptha から取得する（要オンライン）。
     options.langPath = highAccuracy ? "https://tessdata.projectnaptha.com/4.0.0_best" : TESSDATA_ASSET_BASE;
+    // Tesseract は言語データを `${cachePath}/eng.traineddata` の名前で IndexedDB に残し、langPath は
+    // 名前に入らない。分けないと、先に使ったモードのデータが別モードや版を上げた後にも使われ続ける。
+    options.cachePath = highAccuracy ? "wordbank-tessdata/4.0.0_best" : `wordbank-tessdata/${TESSDATA_VERSION}`;
     // LSTM_ONLY 固定。worker はこの指定に応じて core の -lstm 版を選ぶため、
     // 置いてある自前ファイルもその3種（素/simd/relaxedsimd）だけでよい。
     // 変えるなら VENDOR.md の手順で -lstm 無しの3種も追加すること。
@@ -27145,9 +27162,11 @@ async function runOcr(source, run) {
   );
   let worker;
   try {
-    const Tesseract = await loadTesseract();
+    // 初期化は途中で止められない（Tesseract.js の createWorker に中止手段が無い）ので、
+    // 待つことだけを中止で打ち切る。遅れて出来た worker は getOcrWorker 側で終了させる。
+    const Tesseract = await Promise.race([loadTesseract(), run.cancelSignal]);
     ensureOcrRunActive(run);
-    worker = await getOcrWorker(Tesseract, hiAcc, run);
+    worker = await Promise.race([getOcrWorker(Tesseract, hiAcc, run), run.cancelSignal]);
   } catch (error) {
     releaseTemporaryCanvas(normalCanvas, source);
     releaseTemporaryCanvas(adaptiveCanvas, source);
@@ -35490,6 +35509,8 @@ window.addEventListener("pointercancel", editorPointerUp);
 // 戻り値は「足した」かどうか（案内文の出し分け用）。
 function applyOcrText(text, inputAtStart) {
   const current = elements.ocrText.value;
+  // 何も読み取れなかったときは入力欄に触らない（書きかけの単語リストが消えていた）
+  if (!String(text || "").trim()) return false;
   if (current === inputAtStart || !current.trim()) {
     elements.ocrText.value = text;
     return false;
@@ -35536,29 +35557,27 @@ function finishOcrUiRun(run) {
   syncParseButtonLock();
 }
 
+// 中止した実行の初期化は待たずに手放す。同梱の Tesseract は言語データの取得に失敗すると
+// createWorker が終わらないことがあり、待ち続けると次の実行まで止まる。
+// 遅れて出来た worker は getOcrWorker 側が（実行が中止済みなので）終了させる。
+function abandonOcrWorkerInit(run) {
+  if (ocrWorkerPromise && ocrWorkerPromise.runId === run.id) ocrWorkerPromise = null;
+}
+
 async function cancelActiveOcrRun() {
   const run = activeOcrRun;
   if (!run || run.cancelled) return;
   run.cancelled = true;
+  run.cancel();
+  abandonOcrWorkerInit(run);
   elements.ocrCancelButton.disabled = true;
   setStatus("端末内OCRを中止しています…");
   updateOcrProgress("端末内OCRを中止しています…");
 
-  // 生成済みworkerは即時停止する。生成途中なら、そのPromiseが解決した瞬間に
-  // getOcrWorker側でterminateし、キャンセル済みworkerをキャッシュへ残さない。
-  const pending =
-    ocrWorkerPromise && ocrWorkerPromise.runId === run.id
-      ? ocrWorkerPromise.promise
-      : null;
+  // 生成済みworkerは即時停止する。生成途中のものは待たない（初期化が止まると画面が戻らなかった）。
+  // そのPromiseが後で解決した時点で getOcrWorker 側がterminateし、キャッシュへ残さない。
   await resetOcrWorker();
   await terminateOcrWorkerInstance(run.worker);
-  if (pending) {
-    try {
-      await pending;
-    } catch {
-      // キャンセルによるrejectは、実行側の共通終了処理で扱う。
-    }
-  }
   if (activeOcrRun === run) {
     setStatus("端末内OCRを中止しました。入力欄の内容は変更していません。");
     finishOcrUiRun(run);
@@ -35583,7 +35602,14 @@ elements.ocrButton.addEventListener("click", async () => {
     worker: null,
     workerToken: 0,
     uiLock: null,
+    cancel: null,
+    cancelSignal: null,
   };
+  // 中止したときに reject する。初期化待ちを打ち切るのに使う
+  run.cancelSignal = new Promise((_, reject) => {
+    run.cancel = () => reject(ocrCancelledError());
+  });
+  run.cancelSignal.catch(() => {}); // 中止しないまま終わっても未処理の拒否にしない
   activeOcrRun = run;
   const inputAtStart = elements.ocrText.value;
   run.uiLock = lockOcrUiForRun();
@@ -38266,7 +38292,21 @@ async function purgeStaleAppCaches() {
     const current = `wordsnap-v7-${rev}`;
     const keys = await caches.keys();
     for (const key of keys) {
-      if (key.startsWith("wordsnap-") && key !== current) await caches.delete(key);
+      if (!key.startsWith("wordsnap-") || key === current) continue;
+      // SW の activate より先にここで消すこともあるので、同じくOCR資産だけは専用キャッシュへ移してから消す
+      // （名前・対象は wordsnap-sw.js の OCR_CACHE_NAME / isOcrAsset と揃える）
+      try {
+        const source = await caches.open(key);
+        const target = await caches.open("wordbank-ocr-assets-v1");
+        for (const request of await source.keys()) {
+          if (!/\/assets\/(?:tesseract|tessdata)\/[^/]+\//.test(new URL(request.url).pathname)) continue;
+          const response = await source.match(request);
+          if (response) await target.put(request, response);
+        }
+      } catch {
+        // 移せなくても次にOCRを使うとき取り直せる
+      }
+      await caches.delete(key);
     }
   } catch {
     // 掃除は補助。失敗してもアプリの動作には影響しない

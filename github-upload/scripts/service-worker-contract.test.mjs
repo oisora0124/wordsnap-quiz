@@ -130,6 +130,9 @@ class FakeCache {
     }
     return undefined;
   }
+  async keys() {
+    return [...this.entries.keys()].map((key) => new FakeRequest(key));
+  }
 }
 
 class FakeCacheStorage {
@@ -415,6 +418,47 @@ test("静的アセットがキャッシュに無ければ取得してキャッ�
   assert.ok(sw.caches.allPutKeys().includes(url), "取得した静的アセットをキャッシュしていない");
 });
 
+test("OCR資産はアプリ更新をまたいで残り、更新後オフラインでも取れる", async () => {
+  let online = true;
+  const sw = loadServiceWorker({
+    fetchImpl: async (_req, url) => {
+      if (!online) throw new TypeError("offline");
+      return new FakeResponse({ ok: true, url, tag: "network" });
+    },
+  });
+  const urls = [
+    `${ORIGIN}/assets/tesseract/7.0.0/worker.min.js`,
+    `${ORIGIN}/assets/tessdata/4.0.0_best_int/eng.traineddata.gz`,
+  ];
+  for (const url of urls) await dispatchFetch(sw, new FakeRequest(url));
+  assert.deepEqual(sw.caches.caches.get("wordbank-ocr-assets-v1")?.putKeys, urls, "OCR資産を専用キャッシュに入れていない");
+  // アプリ本体のキャッシュ（版ごとに消える）には入れない
+  assert.ok(!(sw.caches.caches.get(CACHE_NAME)?.putKeys || []).some((k) => k.includes("/assets/tess")));
+
+  await dispatchLifecycle(sw, "activate");
+  online = false;
+  for (const url of urls) {
+    const { response } = await dispatchFetch(sw, new FakeRequest(url));
+    assert.equal(response.tag, "network", `${url} が更新後オフラインで取れない`);
+  }
+});
+
+test("activate: 旧版のアプリキャッシュにあるOCR資産は専用キャッシュへ移してから消す", async () => {
+  const sw = loadServiceWorker({ fetchImpl: async () => { throw new TypeError("offline"); } });
+  const old = await sw.caches.open("wordsnap-v7-1.0.135");
+  const ocrUrl = `${ORIGIN}/assets/tesseract/7.0.0/worker.min.js`;
+  const legacyUrl = `${ORIGIN}/assets/tesseract/worker.min.js`; // 版なし（v7以前の残骸）は持ち越さない
+  await old.put(ocrUrl, new FakeResponse({ ok: true, url: ocrUrl, tag: "old-ocr" }));
+  await old.put(legacyUrl, new FakeResponse({ ok: true, url: legacyUrl, tag: "legacy" }));
+  await old.put(`${ORIGIN}/assets/icon-192.png`, new FakeResponse({ ok: true, tag: "icon" }));
+
+  await dispatchLifecycle(sw, "activate");
+  assert.ok(sw.caches.deleted.includes("wordsnap-v7-1.0.135"), "旧キャッシュを消していない");
+  assert.deepEqual(sw.caches.caches.get("wordbank-ocr-assets-v1")?.putKeys, [ocrUrl]);
+  const { response } = await dispatchFetch(sw, new FakeRequest(ocrUrl));
+  assert.equal(response.tag, "old-ocr", "更新後オフラインでOCR資産が取れない");
+});
+
 test("取得に失敗した静的アセット（404等）はキャッシュしない", async () => {
   const sw = loadServiceWorker({
     fetchImpl: async (_req, url) => new FakeResponse({ ok: false, url, tag: "404" }),
@@ -464,7 +508,10 @@ test("activate: 現行以外のキャッシュだけを削除する", async () =
   await sw.caches.open("wordsnap-v4");
   await sw.caches.open("wordsnap-v6");
 
+  await sw.caches.open("wordbank-ocr-assets-v1");
+
   await dispatchLifecycle(sw, "activate");
+  // OCRの実行コード・言語データは版付きパスなので、アプリ更新で消さない（消すとオフラインでOCRが使えなくなる）
   assert.deepEqual([...sw.caches.deleted].sort(), ["wordsnap-v4", "wordsnap-v6"]);
   assert.ok(!sw.caches.deleted.includes(CACHE_NAME), "現行のキャッシュを消している");
   assert.equal(sw.calls.claim, 1, "clients.claim() を呼んでいない");
@@ -515,7 +562,7 @@ test("Service Worker の版は package.json と一致する", () => {
 test("activate は今の版以外のキャッシュを消す（古い本体を残さない）", () => {
   assert.match(
     source,
-    /keys\.filter\(\(key\) => key !== CACHE_NAME\)\.map\(\(key\) => caches\.delete\(key\)\)/,
+    /keys\.filter\(\(key\) => key !== CACHE_NAME && key !== OCR_CACHE_NAME\);[\s\S]*?stale\.map\(\(key\) => caches\.delete\(key\)\)/,
     "版が変わったときに前の版のキャッシュを消していない",
   );
 });
@@ -544,15 +591,22 @@ function extractPurgeFunction() {
   throw new Error("unbalanced braces");
 }
 
-function buildPurgeSandbox({ shownVersion, existing }) {
+function buildPurgeSandbox({ shownVersion, existing, contents = {} }) {
   const deleted = [];
+  const moved = [];
   const sandbox = {
+    URL,
     caches: {
       keys: async () => existing.slice(),
       delete: async (key) => {
         deleted.push(key);
         return true;
       },
+      open: async (name) => ({
+        keys: async () => (contents[name] || []).map((url) => ({ url })),
+        match: async (request) => ({ url: request.url }),
+        put: async (request) => moved.push([name, request.url]),
+      }),
     },
     document: {
       querySelector: () => (shownVersion === null ? null : { textContent: shownVersion }),
@@ -561,8 +615,29 @@ function buildPurgeSandbox({ shownVersion, existing }) {
   new Script(`${extractPurgeFunction()}\nglobalThis.__p = purgeStaleAppCaches;`, {
     filename: "sw-purge-check.js",
   }).runInNewContext(sandbox);
-  return { run: sandbox.__p, deleted };
+  return { run: sandbox.__p, deleted, moved };
 }
+
+test("自己修復: 古いアプリキャッシュのOCR資産は専用キャッシュへ移してから消す", async () => {
+  const ocrUrl = `${ORIGIN}/assets/tessdata/4.0.0_best_int/jpn.traineddata.gz`;
+  const { run, deleted, moved } = buildPurgeSandbox({
+    shownVersion: "バージョン 1.0.136",
+    existing: ["wordsnap-v7-1.0.135", "wordsnap-v7-1.0.136"],
+    contents: { "wordsnap-v7-1.0.135": [ocrUrl, `${ORIGIN}/assets/icon-192.png`, `${ORIGIN}/assets/tesseract/worker.min.js`] },
+  });
+  await run();
+  assert.deepEqual(moved, [["wordbank-ocr-assets-v1", ocrUrl]]);
+  assert.deepEqual(deleted, ["wordsnap-v7-1.0.135"]);
+});
+
+test("OCR専用キャッシュの名前と対象は、SW とページ側の掃除で揃っている", () => {
+  const name = source.match(/const OCR_CACHE_NAME = "([^"]+)";/)[1];
+  assert.ok(!name.startsWith("wordsnap-"), "ページ側の掃除に消される名前になっている");
+  const purge = extractPurgeFunction();
+  assert.ok(purge.includes(`caches.open("${name}")`), "ページ側の移し先が SW と違う");
+  const swPattern = source.match(/const isOcrAsset = \(url\) => (\/.+\/)\.test\(url\.pathname\);/)[1];
+  assert.ok(purge.includes(swPattern), "ページ側とSWでOCR資産の判定が違う");
+});
 
 test("自己修復: いまの版と違うアプリキャッシュだけを消す", async () => {
   const { run, deleted } = buildPurgeSandbox({

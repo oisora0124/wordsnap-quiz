@@ -19,8 +19,34 @@
 // network-first のフォールバックでその古い本体が表示される（1.0.77 が出る事故）。
 // 版を埋め込めばリリースのたびに中身が変わり、入れ直し→本体の取り直し→
 // activate で旧キャッシュ削除、まで自動で起きる。
-const APP_REV = "1.0.136";
+const APP_REV = "1.0.137";
 const CACHE_NAME = `wordsnap-v7-${APP_REV}`;
+// OCRの実行コード・言語データ（計十数MB）はアプリの版と別のキャッシュに置き、更新で消さない。
+// 版ごとに消していた頃は、アプリ更新後にオフラインになると以前使えたOCRが起動できなかった。
+// パスに版が入っているので、中身が古くなることはない（版が変われば別URLとして取り直す）。
+// 名前を "wordsnap-" で始めないのは、ページ側の purgeStaleAppCaches() に消させないため。
+// shortcut: Tesseract・言語データの版を上げると旧版のファイルがこのキャッシュに残る。版を上げるときは名前の v を上げる。
+const OCR_CACHE_NAME = "wordbank-ocr-assets-v1";
+// 版のディレクトリ付きだけ（v7以前の版なし assets/tesseract/*.js は対象外にして持ち越さない）
+const isOcrAsset = (url) => /\/assets\/(?:tesseract|tessdata)\/[^/]+\//.test(url.pathname);
+
+// 旧版のアプリキャッシュに入っているOCR資産を、消す前に専用キャッシュへ移す。
+// 専用キャッシュを作る前の版でOCRを使った端末が、更新後オフラインでOCRを失わないように。
+async function moveOcrAssets(fromNames) {
+  try {
+    const target = await caches.open(OCR_CACHE_NAME);
+    for (const name of fromNames) {
+      const source = await caches.open(name);
+      for (const request of await source.keys()) {
+        if (!isOcrAsset(new URL(request.url))) continue;
+        const response = await source.match(request);
+        if (response) await target.put(request, response);
+      }
+    }
+  } catch {
+    // 移せなくても次にOCRを使うとき取り直せる。旧キャッシュの削除は止めない
+  }
+}
 
 // 最初に確保しておくファイル（アプリ本体は必須、アイコン等は1つ失敗しても他を続ける）
 // かつて wordsnap-quiz.html も入れていたが、このファイルは存在せず、配信側の
@@ -52,9 +78,11 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))),
-      )
+      .then(async (keys) => {
+        const stale = keys.filter((key) => key !== CACHE_NAME && key !== OCR_CACHE_NAME);
+        await moveOcrAssets(stale);
+        return Promise.all(stale.map((key) => caches.delete(key)));
+      })
       .then(() => self.clients.claim()),
   );
 });
@@ -101,7 +129,7 @@ self.addEventListener("fetch", (event) => {
         if (response.ok) {
           const copy = response.clone();
           return caches
-            .open(CACHE_NAME)
+            .open(isOcrAsset(url) ? OCR_CACHE_NAME : CACHE_NAME)
             .then((cache) => cache.put(request, copy))
             .catch(() => {})
             .then(() => response);
