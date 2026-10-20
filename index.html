@@ -6250,13 +6250,13 @@ accurate 正確な"
           <div class="ocr-body">
             <p class="ocr-notice">
               <strong>端末内OCRは無料で、写真を外部サービスへ送信しません。</strong>
-              初回だけ文字認識データをダウンロードします。読み取り後は必ず候補を確認してください
+              初回だけ文字認識モデル（約35MB）をダウンロードします（Wi-Fi推奨）。読み取り後は必ず候補を確認してください
               （1行に「英単語<span aria-hidden="true"> </span>意味」、例: <em>apple りんご</em>）。
             </p>
             <!-- 日本語は改行がそのまま半角空白として描画されるため、文中で折り返さない。 -->
             <p class="ocr-notice ocr-recommend">
               <strong>読み取りの精度を優先するなら「外部AIで抽出」をおすすめします。</strong>
-              <span>端末内OCRは無料で安全ですが、手書き・小さい文字・2段組・影や反射のある写真では読み違いが増えます。外部AIは行の対応や訳の切り出しも含めて安定しやすく、取り込み後の手直しがぐっと減ります。利用には各サービスのAPIキー（設定タブの「🔑 外部AI設定」で登録・無料枠あり。下のボタンから開けます）が必要で、</span><strong>画像は選んだサービスへ送信されます</strong><span>。個人情報が写った写真には使わないでください。</span>
+              <span>端末内OCRは無料で安全ですが、手書きの文字は読めず、ごく小さい文字や影・反射の強い写真では読み違いが増えます。外部AIは行の対応や訳の切り出しも含めて安定しやすく、取り込み後の手直しがぐっと減ります。利用には各サービスのAPIキー（設定タブの「🔑 外部AI設定」で登録・無料枠あり。下のボタンから開けます）が必要で、</span><strong>画像は選んだサービスへ送信されます</strong><span>。個人情報が写った写真には使わないでください。</span>
             </p>
             <div class="import-grid">
               <label class="drop-zone" for="imageInput">
@@ -6316,14 +6316,14 @@ accurate 正確な"
               </label>
               <label class="hi-acc">
                 <input type="checkbox" id="hiAccToggle" />
-                高精度（前処理を比較・低速）
+                高精度（細かく検出・補正を比較・低速）
               </label>
               <div id="ocrProgress" class="ocr-progress" role="status" aria-live="polite" aria-atomic="true" hidden>
                 <span id="ocrProgressLabel" class="ocr-progress-label"></span>
                 <progress id="ocrProgressBar" max="100" aria-label="OCRの進捗"></progress>
                 <button id="ocrCancelButton" class="ghost danger" type="button">読み取りを中止</button>
               </div>
-              <p class="ocr-local-note">端末内OCRは画像をアップロードしません。高精度では通常画像と照明むら補正画像を比較するため、時間とメモリを多く使います。</p>
+              <p class="ocr-local-note">端末内OCRは画像をアップロードしません。高精度では文字をより細かく検出し、通常画像と照明むら補正画像を比較するため、時間とメモリを多く使います。</p>
             </div>
 
             <p class="ocr-local-note">
@@ -7210,7 +7210,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.136</span>
+        <span class="app-footer-version">バージョン 1.0.137</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7348,7 +7348,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.136";
+  const APP_REV = "1.0.137";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -25113,44 +25113,16 @@ function validPair(term, meaning) {
   return { term: cleanTerm, meaning: cleanMeaning };
 }
 
-// OCRの実行コード一式の置き場所。worker から importScripts される core もここから読む。
-// 相対のままだと worker 内での解決基準が変わり得るので絶対URLにする。
+// 端末内OCR（PP-OCRv6）の実行環境とモデルの置き場所。どちらも自前配信（由来は各 VENDOR.md）。
+// Worker の中で importScripts / fetch するので絶対URLにする。
 //
 // パスに版を含めるのは Service Worker 対策。静的アセットは cache-first で保持され、
-// URLが変わらないと版を上げても古いものが配られ続ける（CDNから読んでいた頃は版付きURLだった
-// ので更新が自然に届いていた）。版をディレクトリ名に入れておけば、更新＝別URL＝再取得になる。
-const TESSERACT_VERSION = "7.0.0";
-const TESSERACT_ASSET_BASE = new URL(`assets/tesseract/${TESSERACT_VERSION}/`, document.baseURI).href;
-// 言語データ（traineddata）の自前配信。版をパスに含める理由は実行コードと同じ
-// （Service Workerのcache-firstで古いものが残らないようにする）。
-// 末尾にスラッシュを付けない: worker が `${langPath}/${lang}.traineddata.gz` の形で
-// "/" を挟んで連結するため（高精度モードの projectnaptha 指定と同じ形式）。
-const TESSDATA_VERSION = "4.0.0_best_int";
-const TESSDATA_ASSET_BASE = new URL(`assets/tessdata/${TESSDATA_VERSION}`, document.baseURI).href;
-
-let tesseractLoadPromise = null;
-
-function loadTesseract() {
-  if (window.Tesseract) return Promise.resolve(window.Tesseract);
-  if (tesseractLoadPromise) return tesseractLoadPromise;
-
-  tesseractLoadPromise = new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    // 自前配信（publish/assets/tesseract/）。以前はCDNからSRI付きで読んでいたが、
-    // SRIは<script>の読み込みにしか効かず、Tesseractが動作中に自分で取りに行く
-    // worker と core には掛けられない。実行されるコードを全部自オリジンへ移して、
-    // CDN汚染でOCR中の画像を持ち出される経路そのものを無くした。
-    // 由来と検証手順は publish/assets/tesseract/VENDOR.md を参照。
-    script.src = TESSERACT_ASSET_BASE + "tesseract.min.js";
-    script.onload = () => resolve(window.Tesseract);
-    script.onerror = () => {
-      tesseractLoadPromise = null;
-      reject(new Error("OCRライブラリを読み込めませんでした。通信状態を確認してください。"));
-    };
-    document.head.appendChild(script);
-  });
-  return tesseractLoadPromise;
-}
+// URLが変わらないと版を上げても古いものが配られ続ける。版をディレクトリ名に入れておけば、
+// 更新＝別URL＝再取得になる。ディレクトリ名との一致はリリースゲートが照合する。
+const ORT_VERSION = "1.30.0";
+const ORT_ASSET_BASE = new URL(`assets/onnxruntime/${ORT_VERSION}/`, document.baseURI).href;
+const PPOCR_MODEL_VERSION = "v6-small-rapidocr-3.10.0";
+const PPOCR_ASSET_BASE = new URL(`assets/ppocr/${PPOCR_MODEL_VERSION}/`, document.baseURI).href;
 
 function loadImageElement(file) {
   return new Promise((resolve, reject) => {
@@ -26864,45 +26836,625 @@ function ocrTextMetrics(text) {
   return { lines: lines.length, pairCount, meaningful };
 }
 
-// 「単語＋日本語訳」の組を最優先し、同点に近いときだけTesseract confidenceを使う。
+// 端末内OCR（PP-OCR）の Worker 本体。index.html では関数の文字列から blob: Worker を作って動かす。
+// ここでは外側のスコープの変数を一切使わないこと（Worker 内には持ち込まれない）。
+function ppocrWorkerMain() {
+  "use strict";
+  let detSession = null;
+  let recSession = null;
+  let dictionary = null;
+  let initPromise = null;
+
+  // PP-OCRv6 の検出は (x/255-0.5)/0.5 で学習されている（RapidOCR 3.10 の既定値と同じ）。
+  const DET_MEAN = 0.5;
+  const DET_STD = 0.5;
+  const DET_THRESH = 0.3;
+  const DET_BOX_THRESH = 0.5;
+  const DET_UNCLIP_RATIO = 1.6;
+  const DET_MIN_SIZE = 3;
+  const REC_HEIGHT = 48;
+  const REC_MIN_RATIO = 320 / 48;
+  // 1行が極端に長いと出力（幅/8 × 1.9万クラス）が数十MBになるので、比率を頭打ちにする。
+  const REC_MAX_RATIO = 40;
+  const REC_BATCH = 6;
+
+  function post(message) {
+    self.postMessage(message);
+  }
+
+  async function fetchWithProgress(url, label) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`OCRモデルを取得できませんでした（${label}: HTTP ${response.status}）`);
+    const total = Number(response.headers.get("content-length")) || 0;
+    if (!response.body || !total) return new Uint8Array(await response.arrayBuffer());
+    const reader = response.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.byteLength;
+      post({ type: "progress", stage: "download", label, loaded, total });
+    }
+    const out = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return out;
+  }
+
+  async function init(config) {
+    importScripts(config.ortBase + "ort.wasm.min.js");
+    const ort = self.ort;
+    ort.env.wasm.wasmPaths = config.ortBase;
+    // 複数スレッドは SharedArrayBuffer が要る（ページが cross-origin isolated のときだけ使える）。
+    // スレッドの起動に失敗する環境では、呼び出し側が threads: 1 で作り直す。
+    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, config.threads || 1) : 1;
+    ort.env.wasm.proxy = false;
+    const options = { executionProviders: ["wasm"], graphOptimizationLevel: "all" };
+    const [detBytes, recBytes, dictText] = await Promise.all([
+      fetchWithProgress(config.detUrl, "det"),
+      fetchWithProgress(config.recUrl, "rec"),
+      fetch(config.dictUrl).then((response) => {
+        if (!response.ok) throw new Error(`OCRの文字表を取得できませんでした（HTTP ${response.status}）`);
+        return response.text();
+      }),
+    ]);
+    post({ type: "progress", stage: "compile" });
+    detSession = await ort.InferenceSession.create(detBytes, options);
+    recSession = await ort.InferenceSession.create(recBytes, options);
+    // 0番は CTC の blank、末尾はモデルが空白として学習したクラス（use_space_char）。
+    dictionary = ["", ...dictText.replace(/\r/g, "").split("\n").filter((line, index, all) => index < all.length - 1 || line !== ""), " "];
+  }
+
+  // ---- 検出（DB）----
+
+  function detTensor(image) {
+    const { width, height, data } = image;
+    const plane = width * height;
+    const input = new Float32Array(3 * plane);
+    // PaddleOCR は OpenCV の BGR 画像で学習しているので、チャンネルを B,G,R の順に並べる。
+    for (let p = 0, i = 0; p < plane; p += 1, i += 4) {
+      input[p] = (data[i + 2] / 255 - DET_MEAN) / DET_STD;
+      input[plane + p] = (data[i + 1] / 255 - DET_MEAN) / DET_STD;
+      input[2 * plane + p] = (data[i] / 255 - DET_MEAN) / DET_STD;
+    }
+    return new self.ort.Tensor("float32", input, [1, 3, height, width]);
+  }
+
+  function convexHull(points) {
+    if (points.length <= 3) return points.slice();
+    const sorted = points.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower = [];
+    for (const point of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) lower.pop();
+      lower.push(point);
+    }
+    const upper = [];
+    for (let i = sorted.length - 1; i >= 0; i -= 1) {
+      const point = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) upper.pop();
+      upper.push(point);
+    }
+    upper.pop();
+    lower.pop();
+    return lower.concat(upper);
+  }
+
+  // 凸包の各辺の向きを試す（回転キャリパー）。面積最小の向きの矩形を返す。
+  // 返す矩形は「横に近い軸」を幅方向 u にそろえる（文字列の向きとして扱うため）。
+  function minAreaRect(hull) {
+    let best = null;
+    const n = hull.length;
+    for (let i = 0; i < n; i += 1) {
+      const a = hull[i];
+      const b = hull[(i + 1) % n];
+      const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (length === 0) continue;
+      const ux = (b[0] - a[0]) / length;
+      const uy = (b[1] - a[1]) / length;
+      let minU = Infinity;
+      let maxU = -Infinity;
+      let minV = Infinity;
+      let maxV = -Infinity;
+      for (const point of hull) {
+        const u = point[0] * ux + point[1] * uy;
+        const v = -point[0] * uy + point[1] * ux;
+        if (u < minU) minU = u;
+        if (u > maxU) maxU = u;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+      const area = (maxU - minU) * (maxV - minV);
+      if (!best || area < best.area) best = { area, ux, uy, minU, maxU, minV, maxV };
+    }
+    if (!best) {
+      const [x, y] = hull[0];
+      return { cx: x, cy: y, w: 1, h: 1, ux: 1, uy: 0 };
+    }
+    const cu = (best.minU + best.maxU) / 2;
+    const cv = (best.minV + best.maxV) / 2;
+    let rect = {
+      cx: cu * best.ux - cv * best.uy,
+      cy: cu * best.uy + cv * best.ux,
+      w: best.maxU - best.minU,
+      h: best.maxV - best.minV,
+      ux: best.ux,
+      uy: best.uy,
+    };
+    if (Math.abs(rect.uy) > Math.abs(rect.ux)) {
+      rect = { cx: rect.cx, cy: rect.cy, w: rect.h, h: rect.w, ux: -rect.uy, uy: rect.ux };
+    }
+    if (rect.ux < 0) rect = { ...rect, ux: -rect.ux, uy: -rect.uy };
+    return rect;
+  }
+
+  function rectScore(prob, width, height, rect) {
+    const hw = rect.w / 2;
+    const hh = rect.h / 2;
+    const ex = Math.abs(rect.ux) * hw + Math.abs(rect.uy) * hh;
+    const ey = Math.abs(rect.uy) * hw + Math.abs(rect.ux) * hh;
+    const x0 = Math.max(0, Math.floor(rect.cx - ex));
+    const x1 = Math.min(width - 1, Math.ceil(rect.cx + ex));
+    const y0 = Math.max(0, Math.floor(rect.cy - ey));
+    const y1 = Math.min(height - 1, Math.ceil(rect.cy + ey));
+    let sum = 0;
+    let count = 0;
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        const dx = x + 0.5 - rect.cx;
+        const dy = y + 0.5 - rect.cy;
+        const u = dx * rect.ux + dy * rect.uy;
+        const v = -dx * rect.uy + dy * rect.ux;
+        if (Math.abs(u) <= hw && Math.abs(v) <= hh) {
+          sum += prob[y * width + x];
+          count += 1;
+        }
+      }
+    }
+    return count ? sum / count : 0;
+  }
+
+  // 2×2 の膨張（PaddleOCR の use_dilation）。細い文字の切れ目で1行が分断されるのを防ぐ。
+  function dilatedBitmap(prob, width, height) {
+    const bitmap = new Uint8Array(width * height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = y * width + x;
+        if (
+          prob[index] > DET_THRESH ||
+          (x > 0 && prob[index - 1] > DET_THRESH) ||
+          (y > 0 && prob[index - width] > DET_THRESH) ||
+          (x > 0 && y > 0 && prob[index - width - 1] > DET_THRESH)
+        ) {
+          bitmap[index] = 1;
+        }
+      }
+    }
+    return bitmap;
+  }
+
+  function detectBoxes(prob, width, height) {
+    const bitmap = dilatedBitmap(prob, width, height);
+    const labels = new Int32Array(width * height);
+    const stack = new Int32Array(width * height);
+    const boxes = [];
+    let label = 0;
+    for (let start = 0; start < width * height; start += 1) {
+      if (labels[start] || !bitmap[start]) continue;
+      label += 1;
+      let top = 0;
+      stack[top++] = start;
+      labels[start] = label;
+      const edge = [];
+      let pixels = 0;
+      while (top > 0) {
+        const index = stack[--top];
+        pixels += 1;
+        const x = index % width;
+        const y = (index - x) / width;
+        let boundary = x === 0 || y === 0 || x === width - 1 || y === height - 1;
+        for (let dy = -1; dy <= 1; dy += 1) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= height) continue;
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (!dx && !dy) continue;
+            const nx = x + dx;
+            if (nx < 0 || nx >= width) continue;
+            const neighbor = ny * width + nx;
+            if (!bitmap[neighbor]) {
+              boundary = true;
+              continue;
+            }
+            if (!labels[neighbor]) {
+              labels[neighbor] = label;
+              stack[top++] = neighbor;
+            }
+          }
+        }
+        // 画素の四隅を輪郭点にすると、OpenCV の findContours + minAreaRect と同じ大きさになる。
+        if (boundary) edge.push([x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]);
+      }
+      if (pixels < 4) continue;
+      const rect = minAreaRect(convexHull(edge));
+      if (Math.min(rect.w, rect.h) < DET_MIN_SIZE) continue;
+      const score = rectScore(prob, width, height, rect);
+      if (score < DET_BOX_THRESH) continue;
+      // pyclipper の unclip と同じく、面積×比率÷周長だけ外へ広げる。
+      const distance = (rect.w * rect.h * DET_UNCLIP_RATIO) / (2 * (rect.w + rect.h));
+      const expanded = { ...rect, w: rect.w + 2 * distance, h: rect.h + 2 * distance, score };
+      if (Math.min(expanded.w, expanded.h) < DET_MIN_SIZE + 2) continue;
+      boxes.push(expanded);
+    }
+    return boxes;
+  }
+
+  async function detect(detImage, fullWidth, fullHeight) {
+    const output = await detSession.run({ [detSession.inputNames[0]]: detTensor(detImage) });
+    const map = output[detSession.outputNames[0]];
+    const [, , mapHeight, mapWidth] = map.dims;
+    const boxes = detectBoxes(map.data, mapWidth, mapHeight);
+    const sx = fullWidth / mapWidth;
+    const sy = fullHeight / mapHeight;
+    // 縦横で倍率が少し違う（検出は32の倍数へ丸める）ので、軸ベクトルも変換して長さを測り直す。
+    return boxes.map((box) => {
+      const ux = box.ux * sx;
+      const uy = box.uy * sy;
+      const uLength = Math.hypot(ux, uy) || 1;
+      const vx = -box.uy * sx;
+      const vy = box.ux * sy;
+      const vLength = Math.hypot(vx, vy) || 1;
+      return {
+        cx: box.cx * sx,
+        cy: box.cy * sy,
+        w: box.w * uLength,
+        h: box.h * vLength,
+        ux: ux / uLength,
+        uy: uy / uLength,
+        score: box.score,
+      };
+    });
+  }
+
+  // ---- 認識（CTC）----
+
+  function sampleBilinear(image, x, y, out, offset) {
+    const { width, height, data } = image;
+    const fx = Math.min(width - 1, Math.max(0, x));
+    const fy = Math.min(height - 1, Math.max(0, y));
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const x1 = Math.min(width - 1, x0 + 1);
+    const y1 = Math.min(height - 1, y0 + 1);
+    const ax = fx - x0;
+    const ay = fy - y0;
+    const i00 = (y0 * width + x0) * 4;
+    const i10 = (y0 * width + x1) * 4;
+    const i01 = (y1 * width + x0) * 4;
+    const i11 = (y1 * width + x1) * 4;
+    for (let c = 0; c < 3; c += 1) {
+      const top = data[i00 + c] + (data[i10 + c] - data[i00 + c]) * ax;
+      const bottom = data[i01 + c] + (data[i11 + c] - data[i01 + c]) * ax;
+      out[offset + c] = top + (bottom - top) * ay;
+    }
+  }
+
+  // 回転矩形を高さ48の横長画像へ切り出し、正規化して batch テンソルの1枚分へ書き込む。
+  // 縮小しすぎてギザギザにならないよう、元画像の画素が大きく間引かれるときは複数点を平均する。
+  function writeRecInput(image, box, target, offset, targetWidth, contentWidth) {
+    const plane = REC_HEIGHT * targetWidth;
+    const scaleU = box.w / contentWidth;
+    const scaleV = box.h / REC_HEIGHT;
+    const taps = Math.max(1, Math.min(4, Math.round(Math.max(scaleU, scaleV))));
+    const rgb = [0, 0, 0];
+    const vx = -box.uy;
+    const vy = box.ux;
+    for (let y = 0; y < REC_HEIGHT; y += 1) {
+      for (let x = 0; x < contentWidth; x += 1) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        for (let ty = 0; ty < taps; ty += 1) {
+          for (let tx = 0; tx < taps; tx += 1) {
+            const u = ((x + (tx + 0.5) / taps) * scaleU) - box.w / 2;
+            const v = ((y + (ty + 0.5) / taps) * scaleV) - box.h / 2;
+            sampleBilinear(image, box.cx + u * box.ux + v * vx - 0.5, box.cy + u * box.uy + v * vy - 0.5, rgb, 0);
+            r += rgb[0];
+            g += rgb[1];
+            b += rgb[2];
+          }
+        }
+        const n = taps * taps;
+        const p = offset + y * targetWidth + x;
+        // BGR 順・(x/255-0.5)/0.5。余白（右側）は 0 のまま＝PaddleOCR のパディングと同じ。
+        target[p] = (b / n / 255 - 0.5) / 0.5;
+        target[plane + p] = (g / n / 255 - 0.5) / 0.5;
+        target[2 * plane + p] = (r / n / 255 - 0.5) / 0.5;
+      }
+    }
+  }
+
+  function decodeCtc(data, steps, classes, itemOffset) {
+    let text = "";
+    let scoreSum = 0;
+    let count = 0;
+    let previous = 0;
+    for (let t = 0; t < steps; t += 1) {
+      const base = itemOffset + t * classes;
+      let bestIndex = 0;
+      let bestValue = data[base];
+      for (let c = 1; c < classes; c += 1) {
+        const value = data[base + c];
+        if (value > bestValue) {
+          bestValue = value;
+          bestIndex = c;
+        }
+      }
+      if (bestIndex !== 0 && bestIndex !== previous) {
+        text += dictionary[bestIndex] || "";
+        scoreSum += bestValue;
+        count += 1;
+      }
+      previous = bestIndex;
+    }
+    return { text: text.trim(), score: count ? scoreSum / count : 0 };
+  }
+
+  async function recognizeBoxes(image, boxes, onProgress) {
+    const order = boxes.map((box, index) => ({ index, ratio: Math.min(REC_MAX_RATIO, box.w / Math.max(1, box.h)) }));
+    order.sort((a, b) => a.ratio - b.ratio);
+    const results = new Array(boxes.length);
+    for (let start = 0; start < order.length; start += REC_BATCH) {
+      const batch = order.slice(start, start + REC_BATCH);
+      const maxRatio = Math.max(REC_MIN_RATIO, ...batch.map((item) => item.ratio));
+      const targetWidth = Math.ceil(REC_HEIGHT * maxRatio);
+      const plane = REC_HEIGHT * targetWidth;
+      const input = new Float32Array(batch.length * 3 * plane);
+      batch.forEach((item, slot) => {
+        const contentWidth = Math.max(1, Math.min(targetWidth, Math.ceil(REC_HEIGHT * item.ratio)));
+        writeRecInput(image, boxes[item.index], input, slot * 3 * plane, targetWidth, contentWidth);
+      });
+      const tensor = new self.ort.Tensor("float32", input, [batch.length, 3, REC_HEIGHT, targetWidth]);
+      const output = await recSession.run({ [recSession.inputNames[0]]: tensor });
+      const probs = output[recSession.outputNames[0]];
+      const [, steps, classes] = probs.dims;
+      batch.forEach((item, slot) => {
+        results[item.index] = decodeCtc(probs.data, steps, classes, slot * steps * classes);
+      });
+      onProgress(Math.min(order.length, start + batch.length), order.length);
+    }
+    return results;
+  }
+
+  async function recognize(message) {
+    const full = { width: message.full.width, height: message.full.height, data: new Uint8ClampedArray(message.full.buffer) };
+    const det = { width: message.det.width, height: message.det.height, data: new Uint8ClampedArray(message.det.buffer) };
+    post({ type: "progress", id: message.id, stage: "detect" });
+    let boxes = await detect(det, full.width, full.height);
+    // 向きの判定では大きい箱だけを読めば足りる（読む箱の数がほぼそのまま時間になる）。
+    if (message.maxBoxes > 0 && boxes.length > message.maxBoxes) {
+      boxes = boxes.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, message.maxBoxes);
+    }
+    const recognized = await recognizeBoxes(full, boxes, (done, total) => {
+      post({ type: "progress", id: message.id, stage: "recognize", done, total });
+    });
+    return boxes
+      .map((box, index) => ({
+        cx: box.cx,
+        cy: box.cy,
+        w: box.w,
+        h: box.h,
+        ux: box.ux,
+        uy: box.uy,
+        detScore: box.score,
+        text: recognized[index].text,
+        score: recognized[index].score,
+      }))
+      .filter((box) => box.text);
+  }
+
+  self.onmessage = async (event) => {
+    const message = event.data || {};
+    try {
+      if (message.type === "init") {
+        initPromise = initPromise || init(message.config);
+        await initPromise;
+        post({ type: "ready" });
+      } else if (message.type === "recognize") {
+        if (!initPromise) throw new Error("OCRエンジンが初期化されていません。");
+        await initPromise;
+        const boxes = await recognize(message);
+        post({ type: "result", id: message.id, boxes });
+      }
+    } catch (error) {
+      if (message.type === "init") initPromise = null;
+      post({ type: "error", id: message.id, message: String(error?.message || error) });
+    }
+  };
+}
+
+// 検出した文字の箱を、ページの傾きを打ち消した座標で行にまとめる。
+// 箱ごとの向き（ux, uy）の中央値をページの傾きとみなす。
+function ppocrPageSkew(boxes) {
+  const angles = boxes
+    .filter((box) => box.w > box.h * 1.5)
+    .map((box) => Math.atan2(box.uy, box.ux))
+    .sort((a, b) => a - b);
+  if (!angles.length) return 0;
+  return angles[Math.floor(angles.length / 2)];
+}
+
+function ppocrRows(boxes, skew) {
+  const cos = Math.cos(-skew);
+  const sin = Math.sin(-skew);
+  const items = boxes
+    .map((box) => ({
+      box,
+      x: box.cx * cos - box.cy * sin,
+      y: box.cx * sin + box.cy * cos,
+      half: box.w / 2,
+    }))
+    .sort((a, b) => a.y - b.y);
+  const rows = [];
+  for (const item of items) {
+    // 行の高さの半分以内に中心が入れば同じ行。文字の大きさが違う箱（番号と見出し語など）は小さい方を基準にする。
+    let target = null;
+    for (let index = rows.length - 1; index >= 0 && index >= rows.length - 3; index -= 1) {
+      const row = rows[index];
+      const limit = Math.min(row.height, item.box.h) * 0.5;
+      if (Math.abs(item.y - row.y) <= limit) {
+        target = row;
+        break;
+      }
+    }
+    if (target) {
+      target.items.push(item);
+      const count = target.items.length;
+      target.y += (item.y - target.y) / count;
+      target.height += (item.box.h - target.height) / count;
+    } else {
+      rows.push({ y: item.y, height: item.box.h, items: [item] });
+    }
+  }
+  return rows.map((row) => row.items.sort((a, b) => a.x - b.x));
+}
+
+function ppocrRowsText(boxes, skew) {
+  return ppocrRows(boxes, skew)
+    .map((items) => items.map((item) => item.box.text).join(" ").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+// 2段組の境目を探す。どの箱にもかからない縦の帯のうち、ページ中央に最も近いもの。
+function ppocrColumnGutter(boxes, skew) {
+  const cos = Math.cos(-skew);
+  const sin = Math.sin(-skew);
+  const spans = boxes
+    .map((box) => {
+      const x = box.cx * cos - box.cy * sin;
+      return [x - box.w / 2, x + box.w / 2];
+    })
+    .sort((a, b) => a[0] - b[0]);
+  if (spans.length < 4) return null;
+  const left = spans[0][0];
+  const right = Math.max(...spans.map((span) => span[1]));
+  const extent = right - left;
+  let reach = spans[0][1];
+  let best = null;
+  for (let index = 1; index < spans.length; index += 1) {
+    const [start, end] = spans[index];
+    if (start > reach) {
+      const middle = (reach + start) / 2;
+      const position = (middle - left) / extent;
+      if (position > 0.25 && position < 0.75) {
+        const centered = Math.abs(position - 0.5);
+        if (!best || centered < best.centered) best = { x: middle, centered };
+      }
+    }
+    reach = Math.max(reach, end);
+  }
+  return best ? best.x : null;
+}
+
+function ppocrColumnsText(boxes, skew, splitX) {
+  const cos = Math.cos(-skew);
+  const sin = Math.sin(-skew);
+  const leftBoxes = [];
+  const rightBoxes = [];
+  for (const box of boxes) {
+    const x = box.cx * cos - box.cy * sin;
+    (x < splitX ? leftBoxes : rightBoxes).push(box);
+  }
+  return [ppocrRowsText(leftBoxes, skew), ppocrRowsText(rightBoxes, skew)].filter(Boolean).join("\n");
+}
+
+// layout: "one" | "two" | "auto"。auto は1列と2列の両方を組み立て、
+// 「単語＋訳」の組が多く取れた方を採る（単語と訳の間の空白を段組と取り違えないため）。
+function assemblePpocrText(boxes, layout, width, height, metrics) {
+  const usable = boxes.filter((box) => box.text && box.score >= 0.5);
+  const skew = ppocrPageSkew(usable);
+  const single = ppocrRowsText(usable, skew);
+  if (layout === "one") return single;
+  const gutter = ppocrColumnGutter(usable, skew);
+  if (layout === "two") {
+    // 境目が見つからなければページ中央で分ける（傾きを打ち消した座標での中央）。
+    const center = (width / 2) * Math.cos(-skew) - (height / 2) * Math.sin(-skew);
+    return ppocrColumnsText(usable, skew, gutter ?? center);
+  }
+  if (gutter === null) return single;
+  const columns = ppocrColumnsText(usable, skew, gutter);
+  return metrics(columns).pairCount > metrics(single).pairCount ? columns : single;
+}
+
+function ppocrConfidence(boxes) {
+  let total = 0;
+  let weight = 0;
+  for (const box of boxes) {
+    const length = box.text.length;
+    total += box.score * length;
+    weight += length;
+  }
+  return weight ? (total / weight) * 100 : 0;
+}
+
+// 「単語＋日本語訳」の組を最優先し、同点に近いときだけOCRの確信度を使う。
 function scoreOcrResult(data) {
   const metrics = ocrTextMetrics(data?.text || "");
   const confidence = Number.isFinite(data?.confidence) ? data.confidence : 0;
   return metrics.pairCount * 500 + confidence * 2 + Math.min(metrics.meaningful, 800) * 0.2;
 }
 
-function scoreOrientation(data) {
-  return scoreOcrResult(data);
+// 読み取った箱を、入力欄に入れる文字列と確信度（0〜100）にまとめる。
+function ocrResultText(result, layout) {
+  return {
+    text: assemblePpocrText(result.boxes, layout, result.width, result.height, ocrTextMetrics),
+    confidence: ppocrConfidence(result.boxes),
+  };
 }
 
-// Tries the four right-angle orientations on a small probe image and returns
-// the rotation (deg) that reads best, so sideways/upside-down photos work.
-async function detectOrientation(worker, baseCanvas, run) {
-  const probe = downscaleCanvas(baseCanvas, 1100);
-  const angles = [0, 90, 270, 180];
-  let best = { angle: 0, score: -1 };
-  try {
-    for (let i = 0; i < angles.length; i += 1) {
+// 向きを判定する。まず縮小画像を正立のまま読み、箱の大半が縦長なら90°/270°、
+// 横長でも読みの確信度が低ければ180°を試して、読みの点数が最も高い向きを採る。
+// 判定では大きい箱だけを読む（maxBoxes）ので、本番の読み取りより十分速い。
+async function detectOrientation(engine, baseCanvas, run) {
+  const probe = downscaleCanvas(baseCanvas, OCR_PROBE_SIDE);
+  const read = async (angle) => {
+    ensureOcrRunActive(run);
+    const rotated = rotateCanvas(probe, angle);
+    try {
+      const result = await engine.recognize(rotated, { detMaxSide: OCR_PROBE_SIDE, maxBoxes: 16 });
       ensureOcrRunActive(run);
-      setOcrRunStage(run, `写真の向きを判定しています… (${i + 1}/${angles.length})`);
-      const rotatedProbe = rotateCanvas(probe, angles[i]);
-      try {
-        const { data } = await worker.recognize(rotatedProbe);
-        ensureOcrRunActive(run);
-        const score = scoreOrientation(data);
-        if (score > best.score) best = { angle: angles[i], score };
-      } finally {
-        releaseTemporaryCanvas(rotatedProbe, probe);
-      }
+      const reading = ocrResultText(result, "auto");
+      return { angle, result, confidence: reading.confidence, score: scoreOcrResult(reading) };
+    } finally {
+      releaseTemporaryCanvas(rotated, probe);
     }
+  };
+  try {
+    ocrPhaseLabel = "写真の向きを判定しています";
+    setOcrRunStage(run, "写真の向きを判定しています…");
+    let best = await read(0);
+    const boxes = best.result.boxes;
+    const area = boxes.reduce((sum, box) => sum + box.w * box.h, 0);
+    const tallArea = boxes.filter((box) => box.h > box.w).reduce((sum, box) => sum + box.w * box.h, 0);
+    let others = [];
+    if (area > 0 && tallArea > area / 2) others = [90, 270];
+    else if (boxes.length && best.confidence < 85) others = [180];
+    for (const angle of others) {
+      const candidate = await read(angle);
+      if (candidate.score > best.score) best = candidate;
+    }
+    return best.angle;
   } finally {
     releaseTemporaryCanvas(probe, baseCanvas);
   }
-  return best.angle;
 }
 
 let ocrWorker = null;
-let ocrWorkerMode = null;
 let ocrWorkerPromise = null;
 let ocrWorkerToken = 0;
 let ocrWorkerTokenSerial = 0;
@@ -26911,6 +27463,10 @@ let activeOcrRun = null;
 let ocrPhaseLabel = "文字を読んでいます";
 const terminatingOcrWorkers = new WeakMap();
 const OCR_CANCELLED_CODE = "OCR_CANCELLED";
+// 検出に使う画像の長辺。高精度では小さい文字の取りこぼしを減らすため大きくする。
+const OCR_DET_SIDE = 1280;
+const OCR_DET_SIDE_HIGH = 1920;
+const OCR_PROBE_SIDE = 1024;
 
 function ocrCancelledError() {
   const error = new Error("OCRを中止しました。");
@@ -26957,12 +27513,122 @@ function clearOcrProgress() {
 function reportOcrProgress(progress, workerToken) {
   const run = activeOcrRun;
   if (!run || run.cancelled || run.workerToken !== workerToken) return;
-  if (progress.status === "recognizing text") {
-    const percent = Math.round(progress.progress * 100);
+  if (progress.stage === "download") {
+    const percent = progress.total ? (progress.loaded / progress.total) * 100 : null;
+    setOcrRunStage(run, "OCRモデルをダウンロードしています…（初回だけ。約35MB）", percent);
+  } else if (progress.stage === "compile") {
+    setOcrRunStage(run, "OCRモデルを準備しています…");
+  } else if (progress.stage === "detect") {
+    setOcrRunStage(run, `${ocrPhaseLabel}…（文字の位置を検出中）`);
+  } else if (progress.stage === "recognize" && progress.total) {
+    const percent = Math.round((progress.done / progress.total) * 100);
     setOcrRunStage(run, `${ocrPhaseLabel}… ${percent}%`, percent);
-  } else if (/load|download|initializ/i.test(progress.status || "")) {
-    setOcrRunStage(run, "OCRモデルを準備中…（初回だけダウンロードします）");
   }
+}
+
+// PP-OCR を動かす Worker を作る。Worker の中身は ppocrWorkerMain の関数本体を blob: にしたもの
+// （アプリ本体と一緒に配信されるので、Service Worker の cache-first に古い版が残らない）。
+// 実行環境（onnxruntime-web）とモデルは自オリジンの版付きパスから読む。
+function createPpocrEngine(onProgress, threads) {
+  const source = `(${ppocrWorkerMain.toString()})();`;
+  const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+  const worker = new Worker(url);
+  const pending = new Map();
+  let serial = 0;
+  let failure = null;
+  let resolveReady;
+  let rejectReady;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  // 起動に失敗したまま誰も待っていないときに、未処理の拒否として報告されないようにする。
+  ready.catch(() => {});
+
+  const fail = (error) => {
+    if (failure) return;
+    failure = error;
+    rejectReady(error);
+    for (const { reject } of pending.values()) reject(error);
+    pending.clear();
+  };
+
+  worker.onmessage = (event) => {
+    const message = event.data || {};
+    if (message.type === "progress") {
+      onProgress(message);
+    } else if (message.type === "ready") {
+      URL.revokeObjectURL(url);
+      resolveReady();
+    } else if (message.type === "result" || message.type === "error") {
+      const entry = pending.get(message.id);
+      if (message.type === "error" && !entry) {
+        fail(new Error(message.message || "OCRエンジンを起動できませんでした。"));
+        return;
+      }
+      if (!entry) return;
+      pending.delete(message.id);
+      if (message.type === "result") entry.resolve(message.boxes);
+      else entry.reject(new Error(message.message || "OCRに失敗しました。"));
+    }
+  };
+  worker.onerror = (event) => {
+    event.preventDefault?.();
+    fail(new Error("OCRエンジンが停止しました。メモリ不足の可能性があります。範囲を狭くして再実行してください。"));
+  };
+
+  worker.postMessage({
+    type: "init",
+    config: {
+      ortBase: ORT_ASSET_BASE,
+      detUrl: PPOCR_ASSET_BASE + "PP-OCRv6_det_small.onnx",
+      recUrl: PPOCR_ASSET_BASE + "PP-OCRv6_rec_small.onnx",
+      dictUrl: PPOCR_ASSET_BASE + "ppocrv6_dict.txt",
+      threads,
+    },
+  });
+
+  return {
+    ready,
+    threads,
+    async recognize(canvas, options = {}) {
+      if (failure) throw failure;
+      const width = canvas.width;
+      const height = canvas.height;
+      const full = canvas.getContext("2d").getImageData(0, 0, width, height);
+      // 検出用の画像は辺を32の倍数にそろえる（モデルの縮小段数の都合）。
+      const scale = Math.min(2, options.detMaxSide / Math.max(width, height));
+      const detCanvas = document.createElement("canvas");
+      detCanvas.width = Math.max(32, Math.round((width * scale) / 32) * 32);
+      detCanvas.height = Math.max(32, Math.round((height * scale) / 32) * 32);
+      const ctx = detCanvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(canvas, 0, 0, detCanvas.width, detCanvas.height);
+      const det = ctx.getImageData(0, 0, detCanvas.width, detCanvas.height);
+      releaseTemporaryCanvas(detCanvas);
+      const id = ++serial;
+      const boxes = await new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        worker.postMessage(
+          {
+            type: "recognize",
+            id,
+            maxBoxes: options.maxBoxes || 0,
+            full: { width, height, buffer: full.data.buffer },
+            det: { width: det.width, height: det.height, buffer: det.data.buffer },
+          },
+          [full.data.buffer, det.data.buffer],
+        );
+      });
+      return { width, height, boxes };
+    },
+    terminate() {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      fail(ocrCancelledError());
+    },
+  };
 }
 
 function terminateOcrWorkerInstance(worker) {
@@ -26982,59 +27648,67 @@ async function resetOcrWorker(expectedToken = null) {
   if (expectedToken !== null && ocrWorkerToken !== expectedToken) return;
   const worker = ocrWorker;
   ocrWorker = null;
-  ocrWorkerMode = null;
   ocrWorkerToken = 0;
   await terminateOcrWorkerInstance(worker);
 }
 
-async function getOcrWorker(Tesseract, highAccuracy, run) {
+function ocrThreadCount() {
+  // SharedArrayBuffer が使える（_headers の COOP/COEP で cross-origin isolated）ときだけ複数スレッド。
+  if (!self.crossOriginIsolated) return 1;
+  return Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1));
+}
+
+async function getOcrWorker(run) {
   ensureOcrRunActive(run);
-  const mode = highAccuracy ? "best" : "fast";
-  if (ocrWorker && ocrWorkerMode === mode) {
+  if (ocrWorker) {
     run.workerToken = ocrWorkerToken;
     return ocrWorker;
   }
   if (ocrWorkerPromise) {
-    await ocrWorkerPromise.promise;
+    try {
+      await ocrWorkerPromise.promise;
+    } catch {
+      // 別の実行の起動失敗は、こちらで作り直して扱う。
+    }
     ensureOcrRunActive(run);
-    if (ocrWorker && ocrWorkerMode === mode) {
+    if (ocrWorker) {
       run.workerToken = ocrWorkerToken;
       return ocrWorker;
     }
   }
 
-  ocrWorkerPromise = (async () => {
+  const pending = { runId: run.id, promise: null };
+  pending.promise = (async () => {
     await resetOcrWorker();
     ensureOcrRunActive(run);
-    const workerToken = ++ocrWorkerTokenSerial;
-    run.workerToken = workerToken;
-    const options = {
-      logger: (progress) => reportOcrProgress(progress, workerToken),
-      // worker と core（OCR本体）を自オリジンから読む。既定のままだとCDNから
-      // 整合性検査なしで取得され、汚染時にOCR中の画像を持ち出せる。
-      workerPath: TESSERACT_ASSET_BASE + "worker.min.js",
-      corePath: TESSERACT_ASSET_BASE,
-    };
-    // 言語データも既定モードは自オリジンから読む（eng+jpn 計4.7MB を同梱。
-    // 由来と検証は assets/tessdata/VENDOR.md）。これで通常のOCRは外部へ一切
-    // 出ず、connect-src から CDN を消せる。高精度モードだけは 12MB×2 と大きく
-    // 利用実績も無いため、従来どおり projectnaptha から取得する（要オンライン）。
-    options.langPath = highAccuracy ? "https://tessdata.projectnaptha.com/4.0.0_best" : TESSDATA_ASSET_BASE;
-    // LSTM_ONLY 固定。worker はこの指定に応じて core の -lstm 版を選ぶため、
-    // 置いてある自前ファイルもその3種（素/simd/relaxedsimd）だけでよい。
-    // 変えるなら VENDOR.md の手順で -lstm 無しの3種も追加すること。
-    const engineMode = Tesseract.OEM?.LSTM_ONLY ?? 1;
-    const worker = await Tesseract.createWorker(["eng", "jpn"], engineMode, options);
-    if (run.cancelled || activeOcrRun !== run) {
-      await terminateOcrWorkerInstance(worker);
-      throw ocrCancelledError();
+    let threads = ocrThreadCount();
+    for (;;) {
+      const workerToken = ++ocrWorkerTokenSerial;
+      run.workerToken = workerToken;
+      const engine = createPpocrEngine((progress) => reportOcrProgress(progress, workerToken), threads);
+      // 中止ボタンが生成途中の Worker も止められるように、待つ前に控えておく。
+      run.worker = engine;
+      try {
+        await engine.ready;
+      } catch (error) {
+        await terminateOcrWorkerInstance(engine);
+        if (run.cancelled || activeOcrRun !== run) throw ocrCancelledError();
+        // スレッドを起動できない環境（入れ子Workerの制限など）では1スレッドでやり直す。
+        if (threads > 1) {
+          threads = 1;
+          continue;
+        }
+        throw error;
+      }
+      if (run.cancelled || activeOcrRun !== run) {
+        await terminateOcrWorkerInstance(engine);
+        throw ocrCancelledError();
+      }
+      ocrWorker = engine;
+      ocrWorkerToken = workerToken;
+      return engine;
     }
-    ocrWorker = worker;
-    ocrWorkerMode = mode;
-    ocrWorkerToken = workerToken;
-    return worker;
   })();
-  const pending = { promise: ocrWorkerPromise, runId: run.id };
   ocrWorkerPromise = pending;
   try {
     return await pending.promise;
@@ -27043,64 +27717,19 @@ async function getOcrWorker(Tesseract, highAccuracy, run) {
   }
 }
 
-function ocrRegions(canvas, layout) {
-  if (layout !== "two") return [canvas];
-  // 中央の文字を切らないよう、左右それぞれに幅の1.5%だけ重なりを持たせる。
-  const overlap = Math.max(2, Math.round(canvas.width * 0.015));
-  const middle = Math.floor(canvas.width / 2);
-  return [
-    cropCanvasArea(canvas, 0, 0, middle + overlap, canvas.height),
-    cropCanvasArea(canvas, middle - overlap, 0, canvas.width - middle + overlap, canvas.height),
-  ];
-}
-
 function releaseTemporaryCanvas(canvas, keep = null) {
   if (!canvas || canvas === keep || !(canvas instanceof HTMLCanvasElement)) return;
   canvas.width = 0;
   canvas.height = 0;
 }
 
-async function recognizeOcrCanvas(worker, canvas, layout, variantLabel, run) {
+async function recognizeOcrCanvas(engine, canvas, layout, variantLabel, detMaxSide, run) {
   ensureOcrRunActive(run);
-  const pageSegmentationMode = layout === "auto" ? "3" : "6";
-  await worker.setParameters({
-    tessedit_pageseg_mode: pageSegmentationMode,
-    preserve_interword_spaces: "1",
-    user_defined_dpi: "300",
-  });
+  ocrPhaseLabel = `文字を読んでいます（${variantLabel}）`;
+  setOcrRunStage(run, `${ocrPhaseLabel}…`);
+  const result = await engine.recognize(canvas, { detMaxSide });
   ensureOcrRunActive(run);
-
-  const results = [];
-  const regions = ocrRegions(canvas, layout);
-  try {
-    for (let index = 0; index < regions.length; index += 1) {
-      ensureOcrRunActive(run);
-      const regionLabel = regions.length > 1 ? `・${index === 0 ? "左列" : "右列"}` : "";
-      ocrPhaseLabel = `文字を読んでいます（${variantLabel}${regionLabel}）`;
-      try {
-        const { data } = await worker.recognize(regions[index]);
-        ensureOcrRunActive(run);
-        results.push(data || {});
-      } finally {
-        // 2列モードの切り出しCanvasは片列を読み終えた時点で解放する。
-        releaseTemporaryCanvas(regions[index], canvas);
-      }
-    }
-  } finally {
-    // 片列を読む前に中断されたときは、まだ読んでいない列の切り出しCanvasも即時解放する
-    // （releaseTemporaryCanvas は二重に呼んでも安全）。
-    for (const region of regions) releaseTemporaryCanvas(region, canvas);
-  }
-
-  const text = results.map((data) => String(data.text || "").trim()).filter(Boolean).join("\n");
-  let confidenceTotal = 0;
-  let confidenceWeight = 0;
-  for (const data of results) {
-    const weight = Math.max(1, ocrTextMetrics(data.text || "").meaningful);
-    confidenceTotal += (Number.isFinite(data.confidence) ? data.confidence : 0) * weight;
-    confidenceWeight += weight;
-  }
-  return { text, confidence: confidenceWeight ? confidenceTotal / confidenceWeight : 0 };
+  return ocrResultText(result, layout);
 }
 
 function isOcrResultReliable(result) {
@@ -27121,6 +27750,7 @@ async function runOcr(source, run) {
   const layout = ["one", "two"].includes(elements.ocrLayoutSelect?.value)
     ? elements.ocrLayoutSelect.value
     : "auto";
+  const detMaxSide = hiAcc ? OCR_DET_SIDE_HIGH : OCR_DET_SIDE;
 
   setOcrRunStage(run, "画像を補正しています…");
   let normalCanvas = null;
@@ -27137,36 +27767,23 @@ async function runOcr(source, run) {
   ensureOcrRunActive(run);
   if (!normalCanvas) throw new Error("OCR用に画像を準備できませんでした。");
 
-  setOcrRunStage(
-    run,
-    hiAcc
-      ? "高精度モデルを準備中…（初回は十数MBのダウンロードがあり時間がかかります）"
-      : "OCRを準備しています。初回は少し時間がかかります。",
-  );
-  let worker;
+  setOcrRunStage(run, "OCRを準備しています。初回は約35MBのダウンロードがあり時間がかかります。");
+  let engine;
   try {
-    const Tesseract = await loadTesseract();
-    ensureOcrRunActive(run);
-    worker = await getOcrWorker(Tesseract, hiAcc, run);
+    engine = await getOcrWorker(run);
   } catch (error) {
     releaseTemporaryCanvas(normalCanvas, source);
-    releaseTemporaryCanvas(adaptiveCanvas, source);
     if (run.cancelled || isOcrCancelledError(error)) throw ocrCancelledError();
     throw error;
   }
-  run.worker = worker;
+  run.worker = engine;
   ensureOcrRunActive(run);
 
   try {
-    // 向き判定は全文レイアウトの軽量画像で一度だけ行い、各補正候補・各列で再利用する。
-    await worker.setParameters({
-      tessedit_pageseg_mode: "3",
-      preserve_interword_spaces: "1",
-    });
-    ocrPhaseLabel = "写真の向きを判定しています";
+    // 向き判定は軽量画像で一度だけ行い、各補正候補で再利用する。
     let angle = 0;
     try {
-      angle = await detectOrientation(worker, normalCanvas, run);
+      angle = await detectOrientation(engine, normalCanvas, run);
     } catch (error) {
       if (run.cancelled || isOcrCancelledError(error)) throw ocrCancelledError();
       angle = 0;
@@ -27175,7 +27792,7 @@ async function runOcr(source, run) {
     const candidates = [];
     let rotated = rotateCanvas(normalCanvas, angle);
     try {
-      candidates.push(await recognizeOcrCanvas(worker, rotated, layout, "通常補正", run));
+      candidates.push(await recognizeOcrCanvas(engine, rotated, layout, "通常補正", detMaxSide, run));
     } finally {
       releaseTemporaryCanvas(rotated, normalCanvas);
       releaseTemporaryCanvas(normalCanvas, source);
@@ -27194,7 +27811,7 @@ async function runOcr(source, run) {
         ensureOcrRunActive(run);
         rotated = rotateCanvas(adaptiveCanvas, angle);
         try {
-          candidates.push(await recognizeOcrCanvas(worker, rotated, layout, "照明むら補正", run));
+          candidates.push(await recognizeOcrCanvas(engine, rotated, layout, "照明むら補正", detMaxSide, run));
         } finally {
           releaseTemporaryCanvas(rotated, adaptiveCanvas);
           releaseTemporaryCanvas(adaptiveCanvas, source);
@@ -35609,14 +36226,12 @@ elements.ocrButton.addEventListener("click", async () => {
         setStatus("端末内OCRを中止しました。入力欄の内容は変更していません。");
       }
     } else {
-      // 高精度モードの言語データ（12MB×2）は外部から取るので、オフラインや配信元の不調では読み込めない。
-      // 生のエラー文だけでは原因も対処も分からないので、その場合だけ一言添える。
-      const hiAcc = Boolean(elements.hiAccToggle?.checked);
-      const looksLikeLoadFailure = /traineddata|lang|fetch|network|load|http/i.test(String(error?.message || ""));
-      const hint =
-        hiAcc && looksLikeLoadFailure
-          ? " 高精度モードは言語データを外部から取得します。通信を確認するか、高精度をオフにすると端末内のデータで読み取れます。"
-          : "";
+      // モデル（約35MB）は自オリジンから取るが、初回はオンラインでないと読み込めない。
+      // 生のエラー文だけでは原因も対処も分からないので、取得の失敗らしいときだけ一言添える。
+      const looksLikeLoadFailure = /取得できません|fetch|network|load|http/i.test(String(error?.message || ""));
+      const hint = looksLikeLoadFailure
+        ? " 初回はOCRモデルのダウンロードが必要です。通信を確認してから再実行してください。"
+        : "";
       setStatus(`${error.message}${hint} 下の欄に単語と意味を貼り付ければ続けられます。`);
     }
   } finally {
@@ -38266,6 +38881,8 @@ async function purgeStaleAppCaches() {
     const current = `wordsnap-v7-${rev}`;
     const keys = await caches.keys();
     for (const key of keys) {
+      // OCRの版付きアセット（約45MB）のキャッシュはアプリの版とは別に持つ。入れ替えは Service Worker の activate が行う。
+      if (key.startsWith("wordsnap-ocr-")) continue;
       if (key.startsWith("wordsnap-") && key !== current) await caches.delete(key);
     }
   } catch {

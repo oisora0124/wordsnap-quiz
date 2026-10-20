@@ -461,9 +461,14 @@ test("補完の保存をまとめても、最後の変更はキューが空に�
   assert.equal(sandbox.__q.persisted(), 1, "12語（3バッチ）なら、キューが空になった時点の1回だけ保存する");
 });
 
-test("端末内OCR: 2列モードで中断しても未処理の切り出しCanvasを解放する。高精度の言語データが取れないときは対処を添える（1.0.125）", () => {
+test("端末内OCR: 段組は読み取った箱から組み立てる（Canvasを切り分けない）。モデルが取れないときは対処を添える（1.0.137）", () => {
+  // 1.0.125 では2列モードの切り出しCanvasの解放を固定していた。PP-OCR では画像を切り分けず、
+  // 検出した箱の位置で段組を判定するので、切り出しCanvas自体が無い。
   const rec = extractFunction("recognizeOcrCanvas");
-  assert.match(rec, /const regions = ocrRegions\(canvas, layout\);\s*try \{[\s\S]*?\} finally \{[\s\S]*?for \(const region of regions\) releaseTemporaryCanvas\(region, canvas\);/);
+  assert.doesNotMatch(rec, /ocrRegions|cropCanvasArea/);
+  assert.match(rec, /engine\.recognize\(canvas, \{ detMaxSide \}\)[\s\S]*?return ocrResultText\(result, layout\);/);
   const ocr = extractHandlerBody('elements.ocrButton.addEventListener("click", async () => {');
-  assert.match(ocr, /const hiAcc = Boolean\(elements\.hiAccToggle\?\.checked\);[\s\S]*?高精度モードは言語データを外部から取得します/);
+  assert.match(ocr, /const looksLikeLoadFailure = [^\n]*取得できません[\s\S]*?初回はOCRモデルのダウンロードが必要です/);
+  // 高精度でも外部から取らなくなったので、「外部から取得します」という案内は残さない。
+  assert.doesNotMatch(ocr, /言語データを外部から取得/);
 });

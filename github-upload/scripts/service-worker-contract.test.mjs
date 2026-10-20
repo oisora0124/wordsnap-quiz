@@ -515,9 +515,54 @@ test("Service Worker の版は package.json と一致する", () => {
 test("activate は今の版以外のキャッシュを消す（古い本体を残さない）", () => {
   assert.match(
     source,
-    /keys\.filter\(\(key\) => key !== CACHE_NAME\)\.map\(\(key\) => caches\.delete\(key\)\)/,
+    /keys\s*\.filter\(\(key\) => key !== CACHE_NAME && key !== OCR_CACHE_NAME\)\s*\.map\(\(key\) => caches\.delete\(key\)\)/,
     "版が変わったときに前の版のキャッシュを消していない",
   );
+});
+
+// ---- OCRアセットの別キャッシュ（1.0.137） -----------------------------------
+// OCRの実行環境とモデルは約45MB。アプリ本体と同じキャッシュに入れると、リリースの
+// たびに activate で捨てられ、OCRを使う人はリリースごとに約45MBを取り直すことになる。
+// 版付きディレクトリ単位の別キャッシュに入れ、OCRの版が変わったときだけ入れ替える。
+
+const OCR_ASSET_DIRS = [...source.match(/const OCR_ASSET_DIRS = \[([\s\S]*?)\];/)[1].matchAll(/"([^"]+)"/g)].map(
+  (match) => match[1],
+);
+const OCR_CACHE_NAME = `wordsnap-ocr-${OCR_ASSET_DIRS.join("|")}`;
+
+test("OCRの版付きアセットは専用キャッシュへ入り、アプリ本体のキャッシュには入らない", async () => {
+  const sw = loadServiceWorker();
+  const modelUrl = `${SCOPE}${OCR_ASSET_DIRS[1]}PP-OCRv6_rec_small.onnx`;
+  const { response } = await dispatchFetch(sw, new FakeRequest(modelUrl));
+  assertUsableResponse(response, "OCRモデル");
+  const ocrCache = sw.caches.caches.get(OCR_CACHE_NAME);
+  assert.ok(ocrCache?.entries.has(modelUrl), "OCRモデルが専用キャッシュに入っていない");
+  assert.ok(!sw.caches.caches.get(CACHE_NAME)?.entries.has(modelUrl), "OCRモデルをアプリ本体のキャッシュに入れている");
+  // 版の付いていない（あるいは別の版の）パスは専用キャッシュの対象外。
+  const icon = `${SCOPE}assets/icon-192.png`;
+  await dispatchFetch(sw, new FakeRequest(icon));
+  assert.ok(sw.caches.caches.get(CACHE_NAME)?.entries.has(icon), "通常の静的アセットはアプリ本体のキャッシュへ");
+  assert.ok(!ocrCache.entries.has(icon));
+});
+
+test("activate: OCR専用キャッシュはアプリの版上げでは消さず、古いOCRの版だけ消す", async () => {
+  const sw = loadServiceWorker();
+  await sw.caches.open(CACHE_NAME);
+  await sw.caches.open(OCR_CACHE_NAME);
+  await sw.caches.open("wordsnap-v7-1.0.136");
+  await sw.caches.open("wordsnap-ocr-assets/onnxruntime/1.29.0/|assets/ppocr/old/");
+  await dispatchLifecycle(sw, "activate");
+  assert.deepEqual(
+    [...sw.caches.deleted].sort(),
+    ["wordsnap-ocr-assets/onnxruntime/1.29.0/|assets/ppocr/old/", "wordsnap-v7-1.0.136"],
+  );
+});
+
+test("OCR_ASSET_DIRS は index.html の OCR の版と一致する", () => {
+  const html = readFileSync(new URL("../publish/index.html", import.meta.url), "utf8");
+  const ort = html.match(/const ORT_VERSION = "([^"]+)";/)?.[1];
+  const model = html.match(/const PPOCR_MODEL_VERSION = "([^"]+)";/)?.[1];
+  assert.deepEqual(OCR_ASSET_DIRS, [`assets/onnxruntime/${ort}/`, `assets/ppocr/${model}/`]);
 });
 
 // ---- 古いアプリキャッシュの自己修復（1.0.94） -------------------------------
@@ -567,7 +612,8 @@ function buildPurgeSandbox({ shownVersion, existing }) {
 test("自己修復: いまの版と違うアプリキャッシュだけを消す", async () => {
   const { run, deleted } = buildPurgeSandbox({
     shownVersion: "バージョン 1.0.94",
-    existing: ["wordsnap-v7", "wordsnap-v7-1.0.77", "wordsnap-v7-1.0.94", "other-cache"],
+    // OCR専用キャッシュ（wordsnap-ocr-…）はアプリの版と無関係なので残す（入れ替えは SW の activate）。
+    existing: ["wordsnap-v7", "wordsnap-v7-1.0.77", "wordsnap-v7-1.0.94", "other-cache", "wordsnap-ocr-x"],
   });
   await run();
   assert.deepEqual(

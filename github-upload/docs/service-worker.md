@@ -13,6 +13,16 @@
 
 なかでも v5 は、リポジトリが公開である以上いちばん重い性質のもの。
 
+### OCRアセットの専用キャッシュ（1.0.137）
+
+端末内OCRの実行環境とモデル（合計約45MB）は、アプリ本体とは別の
+`wordsnap-ocr-<OCR_ASSET_DIRS>` キャッシュに入れる。アプリ本体のキャッシュはリリースのたびに
+activate で捨てるので、同じ所に入れるとOCRを使う人がリリースごとに約45MBを取り直すことになる。
+中身は版付きパスで不変なので、OCRの版（`OCR_ASSET_DIRS`）が変わったときだけキャッシュ名が変わり、
+古いものは activate で消える。ページ側の自己修復（`purgeStaleAppCaches`）もこのキャッシュは消さない。
+`OCR_ASSET_DIRS` と index.html の `ORT_VERSION` / `PPOCR_MODEL_VERSION` の一致は
+`check-release.mjs` と契約テストの両方が照合する。
+
 ## 既存の検査との関係（重要）
 
 `check-release.mjs` にも SW の検査はあった。ただし内訳は次のとおりで、

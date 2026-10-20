@@ -11,6 +11,7 @@
 // v7: OCRの実行コードを自前配信へ移した際、一時的に版なしパス
 // (assets/tesseract/*.js) をキャッシュした端末がいる。名前を上げると
 // activate 時に旧キャッシュ全体が捨てられるので、その残骸も消える。
+// 1.0.137: OCRを Tesseract から PP-OCRv6 へ替え、OCRのアセットだけ別キャッシュ（OCR_CACHE_NAME）にした。
 //
 // 【重要】APP_REV はアプリの版と必ず同じ値にする（check-release.mjs が一致を強制）。
 // ブラウザは「このファイルの中身が変わったとき」だけ Service Worker を入れ直す。
@@ -19,8 +20,25 @@
 // network-first のフォールバックでその古い本体が表示される（1.0.77 が出る事故）。
 // 版を埋め込めばリリースのたびに中身が変わり、入れ直し→本体の取り直し→
 // activate で旧キャッシュ削除、まで自動で起きる。
-const APP_REV = "1.0.136";
+const APP_REV = "1.0.137";
 const CACHE_NAME = `wordsnap-v7-${APP_REV}`;
+
+// 端末内OCRの実行環境とモデル（合計約45MB）は、版をディレクトリ名に入れた別キャッシュに置く。
+// アプリ本体のキャッシュはリリースのたびに捨てるので、同じ所に入れると、OCRを使う人は
+// リリースのたびに約45MBを取り直すことになる。中身は版付きパスで不変なので、
+// アプリの版上げでは消さず、OCRの版（＝下のディレクトリ）が変わったときだけ入れ替える。
+// 【重要】OCR_ASSET_DIRS は index.html の ORT_VERSION / PPOCR_MODEL_VERSION と一致させる
+// （check-release.mjs が照合する）。
+const OCR_ASSET_DIRS = [
+  "assets/onnxruntime/1.30.0/",
+  "assets/ppocr/v6-small-rapidocr-3.10.0/",
+];
+const OCR_CACHE_NAME = `wordsnap-ocr-${OCR_ASSET_DIRS.join("|")}`;
+
+function isOcrAsset(url) {
+  const scope = new URL("./", self.registration.scope).href;
+  return OCR_ASSET_DIRS.some((dir) => url.href.startsWith(scope + dir));
+}
 
 // 最初に確保しておくファイル（アプリ本体は必須、アイコン等は1つ失敗しても他を続ける）
 // かつて wordsnap-quiz.html も入れていたが、このファイルは存在せず、配信側の
@@ -53,7 +71,11 @@ self.addEventListener("activate", (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))),
+        Promise.all(
+          keys
+            .filter((key) => key !== CACHE_NAME && key !== OCR_CACHE_NAME)
+            .map((key) => caches.delete(key)),
+        ),
       )
       .then(() => self.clients.claim()),
   );
@@ -93,7 +115,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 静的アセット: cache-first（無ければ取得してキャッシュに足す）
+  // 静的アセット: cache-first（無ければ取得してキャッシュに足す）。OCRの版付きアセットは専用キャッシュへ
+  const assetCacheName = isOcrAsset(url) ? OCR_CACHE_NAME : CACHE_NAME;
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
@@ -101,7 +124,7 @@ self.addEventListener("fetch", (event) => {
         if (response.ok) {
           const copy = response.clone();
           return caches
-            .open(CACHE_NAME)
+            .open(assetCacheName)
             .then((cache) => cache.put(request, copy))
             .catch(() => {})
             .then(() => response);

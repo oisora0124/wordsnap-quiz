@@ -35,8 +35,10 @@ const TYPES = {
   ".webmanifest": "application/manifest+json; charset=utf-8",
   ".png": "image/png",
   ".wasm": "application/wasm",
-  ".traineddata": "application/octet-stream",
-  ".gz": "application/octet-stream",
+  // OCR（onnxruntime-web）の読み込み役は .mjs を動的 import する。nosniff 下では JS の型でないと読めない。
+  ".mjs": "text/javascript; charset=utf-8",
+  ".onnx": "application/octet-stream",
+  ".txt": "text/plain; charset=utf-8",
 };
 
 /** `_headers` の `/*` ブロックを読み、本番と同じヘッダを再現する。 */

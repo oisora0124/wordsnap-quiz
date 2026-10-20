@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Script } from "node:vm";
@@ -213,8 +213,8 @@ for (const origin of htmlExternalOrigins) {
     `external resource origin is missing from Content-Security-Policy: ${origin}`);
 }
 const scriptSources = new Set(cspDirectives.get("script-src") || []);
-// OCRの実行コードは自前配信へ移した（publish/assets/tesseract/）。
-// script-src に外部originが戻ると、SRIの掛からないworker/coreを再びCDNから
+// OCRの実行コードは自前配信（publish/assets/onnxruntime/。Tesseract.js の頃から同じ方針）。
+// script-src に外部originが戻ると、SRIの掛からない .mjs/.wasm を再びCDNから
 // 実行できる状態に逆戻りする。self とハッシュと wasm-unsafe-eval 以外を許さない。
 for (const source of scriptSources) {
   assert.ok(
@@ -223,7 +223,7 @@ for (const source of scriptSources) {
   );
 }
 assert.ok(scriptSources.has("'wasm-unsafe-eval'"),
-  "Tesseract WebAssembly compilation must be allowed by script-src");
+  "OCR (onnxruntime-web) WebAssembly compilation must be allowed by script-src");
 // ハッシュ型CSP: 'unsafe-inline' は禁止。全インラインscriptのSHA-256が
 // script-src に列挙されていること（sync-html.mjs が自動生成、ここで照合）。
 assert.ok(!scriptSources.has("'unsafe-inline'"),
@@ -237,6 +237,8 @@ for (const hash of inlineHashes) {
 for (const header of [
   /^\s*Permissions-Policy:\s*camera=\(\)/mi,
   /^\s*Cross-Origin-Opener-Policy:\s*same-origin\s*$/mi,
+  // COOP same-origin と合わせて cross-origin isolated にし、OCRの推論を複数スレッドで動かす（1.0.137）。
+  /^\s*Cross-Origin-Embedder-Policy:\s*require-corp\s*$/mi,
   /^\s*Cross-Origin-Resource-Policy:\s*same-origin\s*$/mi,
   /^\s*X-Frame-Options:\s*DENY\s*$/mi,
 ]) {
@@ -244,7 +246,7 @@ for (const header of [
 }
 const workerSources = new Set(cspDirectives.get("worker-src") || []);
 assert.ok(workerSources.has("'self'") && workerSources.has("blob:"),
-  "Service Worker and Tesseract blob workers must be allowed by worker-src");
+  "Service Worker and the OCR blob worker must be allowed by worker-src");
 const connectSources = new Set(cspDirectives.get("connect-src") || []);
 for (const origin of [
   "https://api.datamuse.com",
@@ -255,15 +257,17 @@ for (const origin of [
   "https://api.mymemory.translated.net",
   "https://generativelanguage.googleapis.com",
   "https://api.groq.com",
-  "https://tessdata.projectnaptha.com",
 ]) {
   assert.ok(connectSources.has(origin),
     `runtime connection origin is missing from connect-src: ${origin}`);
 }
-// 言語データを自前配信へ移した（1.0.80）ため、jsdelivr は connect-src に不要になった。
+// OCRのモデルは自前配信なので、CDN は connect-src に不要。
 // 残すと、万一別の穴（XSS等）が開いたときの持ち出し先として機能する。復活を禁止する。
-assert.ok(!connectSources.has("https://cdn.jsdelivr.net"),
-  "cdn.jsdelivr.net must stay out of connect-src (language data is vendored; see assets/tessdata/VENDOR.md)");
+// Tesseract の高精度データ用に開けていた projectnaptha も、PP-OCR へ替えて不要になった（1.0.137）。
+for (const origin of ["https://cdn.jsdelivr.net", "https://tessdata.projectnaptha.com"]) {
+  assert.ok(!connectSources.has(origin),
+    `${origin} must stay out of connect-src (OCR assets are vendored; see assets/ppocr/VENDOR.md)`);
+}
 assert.match(publicHtml, /<title>\s*WordBank\s*<\/title>/i, "WordBank title is missing");
 assert.doesNotMatch(publicHtml, /WordSnap\s+単語帳/,
   "the OS share title still exposes the retired WordSnap product name");
@@ -1113,82 +1117,78 @@ assert.doesNotMatch(publicHtml, /壊れた409応答（stateなし）でも[^\n]*
   "the client still documents unsafe retry behavior for a state-less conflict");
 assert.match(api, /latest\.corrupt[\s\S]*?code:\s*["']corrupt_state["']/,
   "API must fail closed when a stored state cannot be decoded");
-// OCRの実行コードは自前配信（publish/assets/tesseract/）。SRIは<script>の読み込みにしか
-// 効かず、Tesseractが動作中に自分で取る worker と core を守れなかったため移行した。
-// ここでは「CDNから実行していないこと」と「置いてあるファイルが正規物のままであること」を
-// 両方固定する。ハッシュは VENDOR.md の表と同じ値。
+// 端末内OCR（1.0.137〜 PP-OCRv6 + onnxruntime-web）。実行コードもモデルも自前配信。
+// SRIは<script>の読み込みにしか効かず、Worker の中で取りに行く .mjs/.wasm/.onnx を守れないため。
+// ここでは「CDNから取っていないこと」と「置いてあるファイルが正規物のままであること」を
+// 両方固定する。ハッシュは各 VENDOR.md の表と同じ値。
 // 版はパスに含める（Service Workerのcache-firstで古いものが残らないようにするため）。
-// アプリ側の宣言と実際のディレクトリ名が食い違うと404でOCRが死ぬので、両方を照合する。
-const tesseractVersionMatch = publicHtml.match(/const TESSERACT_VERSION = "([\d.]+)";/);
-assert.ok(tesseractVersionMatch, "OCR asset version declaration is missing");
-const TESSERACT_VERSION = tesseractVersionMatch[1];
+// アプリ側の宣言・Service Worker の OCR_ASSET_DIRS・実際のディレクトリ名が食い違うと
+// 404でOCRが死ぬ（またはOCR用キャッシュが入れ替わらない）ので、三者を照合する。
+const ortVersionMatch = publicHtml.match(/const ORT_VERSION = "([\d.]+)";/);
+assert.ok(ortVersionMatch, "OCR runtime version declaration is missing");
+const ORT_VERSION = ortVersionMatch[1];
 assert.match(
   publicHtml,
-  /const TESSERACT_ASSET_BASE = new URL\(`assets\/tesseract\/\$\{TESSERACT_VERSION\}\/`, document\.baseURI\)\.href;/,
-  "OCR assets must be served from a version-scoped path",
+  /const ORT_ASSET_BASE = new URL\(`assets\/onnxruntime\/\$\{ORT_VERSION\}\/`, document\.baseURI\)\.href;/,
+  "OCR runtime must be served from a version-scoped path",
 );
-const TESSERACT_VENDOR_DIR = join(publishDir, "assets", "tesseract", TESSERACT_VERSION);
-const TESSERACT_VENDOR_HASHES = {
-  "tesseract-core-lstm.wasm.js": "ljppwjVnA7rpAU/v9enQiR6pXDStaEAYw9I+7ddiEynJcmDNnjHCmcvizBeO3cSA",
-  "tesseract-core-relaxedsimd-lstm.wasm.js": "/8lT8Rpy0sk4iWEyUA0rKewXOiWu/nV0JjVCd2vMw2nlpqBsk1/6GttRwex7g/S8",
-  "tesseract-core-simd-lstm.wasm.js": "1PHRxr8cs/w6IDh6HZYHEHS+Li9cfjahWYKnioD1xvjs7wZD20qpwhD2+ZvhDmHU",
-  "tesseract.min.js": "2BQ3U3OdKOb0Uczxqr41I9UvZkzr4V9Hv8uSzMMZAlmhsFClvdZX5wi5fDCzG+tM",
-  "worker.min.js": "iUyp1FxLBc4DYaSwxT1/G6elMdSh3vvQffNSmMiySoXDpk2XfS9ZcM4RjPSiqiw3",
+const ppocrVersionMatch = publicHtml.match(/const PPOCR_MODEL_VERSION = "([\w.-]+)";/);
+assert.ok(ppocrVersionMatch, "OCR model version declaration is missing");
+const PPOCR_MODEL_VERSION = ppocrVersionMatch[1];
+assert.match(
+  publicHtml,
+  /const PPOCR_ASSET_BASE = new URL\(`assets\/ppocr\/\$\{PPOCR_MODEL_VERSION\}\/`, document\.baseURI\)\.href;/,
+  "OCR models must be served from a version-scoped path",
+);
+const OCR_VENDOR_HASHES = {
+  [join("onnxruntime", ORT_VERSION)]: {
+    "LICENSE": "rrhzEgV70STq4ce7Ln6JaTR6E99dAwlIkc3tM/ZZU/M7syLSA4KUnIsIpGXgl3mc",
+    "ort-wasm-simd-threaded.mjs": "XcXA/MtAf0WpB8e023xQH9CM7RIjiugakT7x99DIwpFf7k56BIFFcAPerIF7FDad",
+    "ort-wasm-simd-threaded.wasm": "vjBJ1z7qrhkTyYsNqKeF6c7N+nOJSU94czEo+tvZcu8G75JparGq9kB+kTnEUNVM",
+    "ort.wasm.min.js": "Bw6URI+Gvoadw0do7/QrSHUC9D1vCYYK5OSqChFyhyV5mzPL4oe2rOAFljAnS8Sq",
+  },
+  [join("ppocr", PPOCR_MODEL_VERSION)]: {
+    "LICENSE": "XlS1SIfL4yEEdEbhgLNGWTGgW/RFNPSzT3ikqxHOpOXnjZCJz0fgcGdpqBdYrkA8",
+    "MODEL_LICENSES.md": "rN9mV/1gMmnPg0pYG2AXif3avOVQFB7pTfxYphXq6sqcY2reEe0oHKJ8NsMQd50z",
+    "PP-OCRv6_det_small.onnx": "u0gahSmZRIi8+Juzo96q0vjpD6JFXJSsRpynx2iJSFmM9nZZ8kYMnwvBEol6acnY",
+    "PP-OCRv6_rec_small.onnx": "0M9izWSg47cRpZteiyFaOQTP5ZcZ8fJbEGeGmLVkjNZTNCpEe3Vnt1d5jbxh/cIu",
+    "ppocrv6_dict.txt": "U7irdqg42HIfh+GWCZJ+DyiiohzWeR2aVni3VySUEWHeOzkWflRkaB1gBUy8TMhG",
+  },
 };
-for (const [name, expected] of Object.entries(TESSERACT_VENDOR_HASHES)) {
-  const path = join(TESSERACT_VENDOR_DIR, name);
-  assert.ok(existsSync(path), `vendored OCR asset is missing: ${name}`);
-  const actual = createHash("sha384").update(readFileSync(path)).digest("base64");
-  assert.equal(actual, expected, `vendored OCR asset was modified: ${name}`);
+const OCR_VENDOR_PATHS = [];
+for (const [directory, files] of Object.entries(OCR_VENDOR_HASHES)) {
+  for (const [name, expected] of Object.entries(files)) {
+    const path = join(publishDir, "assets", directory, name);
+    assert.ok(existsSync(path), `vendored OCR asset is missing: ${directory}/${name}`);
+    const actual = createHash("sha384").update(readFileSync(path)).digest("base64");
+    assert.equal(actual, expected, `vendored OCR asset was modified: ${directory}/${name}`);
+    OCR_VENDOR_PATHS.push(path);
+  }
 }
-// 実行コードの取得先が自オリジンであること。CDNのURLへ戻ると、整合性検査の掛からない
-// worker/core を再び外部から実行することになる。
-assert.match(publicHtml, /script\.src = TESSERACT_ASSET_BASE \+ "tesseract\.min\.js";/,
-  "the OCR library must be loaded from the vendored copy");
-assert.match(publicHtml, /workerPath: TESSERACT_ASSET_BASE \+ "worker\.min\.js",/,
-  "the OCR worker must be loaded from the vendored copy");
-assert.match(publicHtml, /corePath: TESSERACT_ASSET_BASE,/,
-  "the OCR core must be loaded from the vendored copy");
-assert.doesNotMatch(publicHtml, /cdn\.jsdelivr\.net\/npm\/tesseract/,
-  "the OCR library must not fall back to the CDN");
-// core は worker が実行時の機能検査で選ぶ。LSTM_ONLY のままなら -lstm 版の3種で足りるが、
-// エンジンモードを変えるなら -lstm 無しの3種も置く必要がある（VENDOR.md 参照）。
-assert.match(publicHtml, /const engineMode = Tesseract\.OEM\?\.LSTM_ONLY \?\? 1;/,
-  "OCR engine mode must stay LSTM_ONLY, or the non-lstm cores must also be vendored");
-// 定数宣言だけを見ても、createWorker へ別の値を渡されたら気づけない。実引数も固定する。
-assert.match(
-  publicHtml,
-  /Tesseract\.createWorker\(\["eng", "jpn"\], engineMode, options\)/,
-  "createWorker must receive the checked engineMode and the vendored paths",
-);
-// 言語データ（traineddata）も既定モードは自前配信（1.0.80、assets/tessdata/VENDOR.md）。
-// 実行コードと同じく、版付きパス・アプリ側宣言との一致・ファイルの無改変を固定する。
-// 高精度モードだけは projectnaptha のCDN（12MB×2をリポジトリで抱えないため）。
-const tessdataVersionMatch = publicHtml.match(/const TESSDATA_VERSION = "([\w.]+)";/);
-assert.ok(tessdataVersionMatch, "OCR language data version declaration is missing");
-const TESSDATA_VERSION = tessdataVersionMatch[1];
-assert.match(
-  publicHtml,
-  /const TESSDATA_ASSET_BASE = new URL\(`assets\/tessdata\/\$\{TESSDATA_VERSION\}`, document\.baseURI\)\.href;/,
-  "OCR language data must be served from a version-scoped path (no trailing slash: the worker joins with '/')",
-);
-const TESSDATA_VENDOR_DIR = join(publishDir, "assets", "tessdata", TESSDATA_VERSION);
-const TESSDATA_VENDOR_HASHES = {
-  "eng.traineddata.gz": "JI+fraGAoc5GBGIliuqzHRnP1nJyrukg5ggNSBv/TO+YOVj+6Te6XXQOx7ia10xq",
-  "jpn.traineddata.gz": "OlgrInD77KoJd+WsE8cHWtmI3mKzvi69lIv6JSH3t3bFDa4/vH8MaxvO1mdX3UQ3",
-};
-for (const [name, expected] of Object.entries(TESSDATA_VENDOR_HASHES)) {
-  const path = join(TESSDATA_VENDOR_DIR, name);
-  assert.ok(existsSync(path), `vendored OCR language data is missing: ${name}`);
-  const actual = createHash("sha384").update(readFileSync(path)).digest("base64");
-  assert.equal(actual, expected, `vendored OCR language data was modified: ${name}`);
+// Cloudflare Pages は1ファイル25MiBまで。超えるとデプロイ自体が失敗する。
+for (const path of OCR_VENDOR_PATHS) {
+  assert.ok(statSync(path).size < 25 * 1024 * 1024, `vendored OCR asset exceeds the 25MiB Pages limit: ${path}`);
 }
-// 既定は自前・高精度だけCDN、という分岐そのものを固定する。既定側がCDNへ戻ると
-// connect-src の except と食い違って言語データが取得できず、OCRが黙って死ぬ。
-assert.match(
-  publicHtml,
-  /options\.langPath = highAccuracy \? "https:\/\/tessdata\.projectnaptha\.com\/4\.0\.0_best" : TESSDATA_ASSET_BASE;/,
-  "default-mode language data must come from the vendored copy (high-accuracy stays on projectnaptha)",
+// Worker が読む先が、上で固定したファイルであること（別名や別の場所を読むと固定が効かない）。
+assert.match(publicHtml, /importScripts\(config\.ortBase \+ "ort\.wasm\.min\.js"\);/,
+  "the OCR runtime must be loaded from the vendored copy");
+assert.match(publicHtml, /ort\.env\.wasm\.wasmPaths = config\.ortBase;/,
+  "the OCR runtime must load its .mjs/.wasm from the vendored copy");
+for (const name of ["PP-OCRv6_det_small.onnx", "PP-OCRv6_rec_small.onnx", "ppocrv6_dict.txt"]) {
+  assert.ok(publicHtml.includes(`PPOCR_ASSET_BASE + "${name}"`), `the OCR worker must load ${name} from the vendored copy`);
+}
+assert.match(publicHtml, /ortBase: ORT_ASSET_BASE,/, "the OCR worker must receive the vendored runtime path");
+assert.doesNotMatch(publicHtml, /cdn\.jsdelivr\.net\/npm\/(onnxruntime|tesseract)/,
+  "the OCR runtime must not fall back to the CDN");
+// Tesseract の残骸（旧アセットや CDN の言語データ）を参照していないこと。
+assert.doesNotMatch(publicHtml, /assets\/tess(eract|data)\/|projectnaptha/,
+  "the retired Tesseract assets must not be referenced");
+const ocrAssetDirs = worker.match(/const OCR_ASSET_DIRS = \[([\s\S]*?)\];/)?.[1];
+assert.ok(ocrAssetDirs, "service worker must declare OCR_ASSET_DIRS");
+assert.deepEqual(
+  [...ocrAssetDirs.matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+  [`assets/onnxruntime/${ORT_VERSION}/`, `assets/ppocr/${PPOCR_MODEL_VERSION}/`],
+  "service worker OCR_ASSET_DIRS must match the OCR versions in index.html",
 );
 assert.match(publicHtml, /id=["']runtimeStorageWarning["']/, "runtime storage warning is missing");
 assert.match(publicHtml, /外部辞書への通信：/, "external dictionary data disclosure is missing");
@@ -1483,9 +1483,7 @@ function repositoryTextFiles(directory) {
 // ただしこれらは上でSHA-384を1バイト単位で固定しているので、秘密を紛れ込ませることは
 // できない（より強い検査が掛かっている）。**ハッシュ固定済みのファイルだけ**を除く。
 // 同じディレクトリに固定されていないファイルを置いた場合は、従来どおり走査される。
-const pinnedVendorPaths = new Set(
-  Object.keys(TESSERACT_VENDOR_HASHES).map((name) => join(TESSERACT_VENDOR_DIR, name)),
-);
+const pinnedVendorPaths = new Set(OCR_VENDOR_PATHS);
 const scanTargets = repositoryScanFiles(repoDir).filter((path) => !pinnedVendorPaths.has(path));
 for (const blindSpot of ["_headers", ".example", ".webmanifest"]) {
   const existing = walkRepository(repoDir).filter((path) => path.endsWith(blindSpot));
