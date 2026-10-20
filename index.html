@@ -6248,16 +6248,6 @@ accurate 正確な"
         <details class="ocr-details">
           <summary><span class="summary-icon camera-icon" aria-hidden="true"></span>写真から読み取る（無料・端末内OCR）</summary>
           <div class="ocr-body">
-            <p class="ocr-notice">
-              <strong>端末内OCRは無料で、写真を外部サービスへ送信しません。</strong>
-              初回だけ文字認識データをダウンロードします。読み取り後は必ず候補を確認してください
-              （1行に「英単語<span aria-hidden="true"> </span>意味」、例: <em>apple りんご</em>）。
-            </p>
-            <!-- 日本語は改行がそのまま半角空白として描画されるため、文中で折り返さない。 -->
-            <p class="ocr-notice ocr-recommend">
-              <strong>読み取りの精度を優先するなら「外部AIで抽出」をおすすめします。</strong>
-              <span>端末内OCRは無料で安全ですが、手書き・小さい文字・2段組・影や反射のある写真では読み違いが増えます。外部AIは行の対応や訳の切り出しも含めて安定しやすく、取り込み後の手直しがぐっと減ります。利用には各サービスのAPIキー（設定タブの「🔑 外部AI設定」で登録・無料枠あり。下のボタンから開けます）が必要で、</span><strong>画像は選んだサービスへ送信されます</strong><span>。個人情報が写った写真には使わないでください。</span>
-            </p>
             <div class="import-grid">
               <label class="drop-zone" for="imageInput">
                 <input id="imageInput" type="file" accept="image/*" />
@@ -6323,14 +6313,10 @@ accurate 正確な"
                 <progress id="ocrProgressBar" max="100" aria-label="OCRの進捗"></progress>
                 <button id="ocrCancelButton" class="ghost danger" type="button">読み取りを中止</button>
               </div>
-              <p class="ocr-local-note">端末内OCRは画像をアップロードしません。高精度では通常画像と照明むら補正画像を比較するため、時間とメモリを多く使います。</p>
             </div>
 
-            <p class="ocr-local-note">
-              外部AIで読み取るにはAPIキーが必要です。キーは写真の読み取りと例文モードの
-              両方で使うため、設定タブにまとめてあります。
-              <button id="openAiSettingsFromOcr" class="ghost mini" type="button">外部AI設定を開く</button>
-            </p>
+            <!-- 詳しい説明は設定タブの「📖 ツールの使い方」に置く。外部への送信の注意だけはボタンの近くに残す -->
+            <p class="ocr-local-note">端末内OCRは写真を送信しません。「外部AIで抽出」は画像を選んだサービスへ送信します（APIキーが必要）。<button id="openAiSettingsFromOcr" class="ghost mini" type="button">外部AI設定を開く</button></p>
           </div>
         </details>
       </section>
@@ -7149,7 +7135,7 @@ accurate 正確な"
             <summary>📖 ツールの使い方</summary>
             <div class="settings-section-body">
               <ol class="usage-steps">
-                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。写真からの読み取り（OCR）は写真の鮮明さやレイアウトで結果が変わるため、取り込み後に「確認」で直してください。精度を優先するなら「外部AIで抽出」をおすすめします（APIキーが必要で、画像は選んだサービスへ送信されます）。</li>
+                <li><strong>取り込む</strong>：単語と訳をまとめて貼り付けて取り込みます。1行に「英単語＋意味」（例: <em>apple りんご</em>）。写真から読み取ることもできます（下の「写真から読み取る」）。</li>
                 <li><strong>確認</strong>：取り込んだ候補をチェックして「保存」。保存先の単語帳も選べます。</li>
                 <li><strong>クイズ</strong>：保存した単語で意味の4択クイズ。出題する<strong>単語帳</strong>と<strong>範囲（番号）</strong>を選べます（「範囲」ボタンで指定。未指定は全部）。</li>
                 <li><strong>保存した単語</strong>：一覧・検索（単語/意味の両方向）・番号で範囲選択し、選んだ単語をまとめて出題・削除できます。</li>
@@ -7157,6 +7143,18 @@ accurate 正確な"
                 <li data-sync-identity-ui="legacy"><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末で使うには「<strong>個人リンクをコピー</strong>」して、その端末でリンクを開きます。端末で内容がずれたら「端末ごとに単語が違うとき」で手動修復。</li>
                 <li data-sync-identity-ui="v2-native" hidden><strong>同期・引き継ぎ</strong>：データは自動でサーバー保存。別端末では、設定の「🔑 引き継ぎコード（おすすめの引き継ぎ方法）」にある引き継ぎコードで合流します。</li>
               </ol>
+              <div class="usage-ocr">
+                <p class="ocr-notice">
+                  <strong>📷 写真から読み取る（取り込み → 写真から読み取る）</strong><br />
+                  端末内OCRは無料で、写真を外部サービスへ送信しません。初回だけ文字認識データをダウンロードします。読み取り後は必ず候補を確認してください（1行に「英単語<span aria-hidden="true"> </span>意味」、例: <em>apple りんご</em>）。
+                </p>
+                <!-- 日本語は改行がそのまま半角空白として描画されるため、文中で折り返さない。 -->
+                <p class="ocr-notice ocr-recommend">
+                  <strong>読み取りの精度を優先するなら「外部AIで抽出」をおすすめします。</strong>
+                  <span>端末内OCRは無料で安全ですが、手書き・小さい文字・2段組・影や反射のある写真では読み違いが増えます。外部AIは行の対応や訳の切り出しも含めて安定しやすく、取り込み後の手直しがぐっと減ります。利用には各サービスのAPIキー（設定タブの「🔑 外部AI設定」で登録・無料枠あり）が必要で、</span><strong>画像は選んだサービスへ送信されます</strong><span>。個人情報が写った写真には使わないでください。</span>
+                </p>
+                <p class="ocr-notice">「高精度」は通常画像と照明むら補正画像を比べるため、時間とメモリを多く使います。高精度の文字認識データ（約24MB）は外部から取得するので、オンラインのときだけ使えます。</p>
+              </div>
               <p class="usage-tip">💡 Safariで開いて「ホーム画面に追加」しておくと、データが消えにくく、ワンタップで起動できます。</p>
               <div class="settings-row">
                 <button id="showTutorialButton" class="secondary" type="button">チュートリアルをもう一度見る</button>
@@ -7210,7 +7208,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.137</span>
+        <span class="app-footer-version">バージョン 1.0.138</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7348,7 +7346,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.137";
+  const APP_REV = "1.0.138";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
