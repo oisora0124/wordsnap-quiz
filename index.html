@@ -6250,7 +6250,7 @@ accurate 正確な"
           <div class="ocr-body">
             <p class="ocr-notice">
               <strong>端末内OCRは無料で、写真を外部サービスへ送信しません。</strong>
-              初回だけ文字認識モデル（約35MB）をダウンロードします（Wi-Fi推奨）。読み取り後は必ず候補を確認してください
+              初回だけ文字認識モデル（約45MB）をダウンロードします（Wi-Fi推奨）。読み取り後は必ず候補を確認してください
               （1行に「英単語<span aria-hidden="true"> </span>意味」、例: <em>apple りんご</em>）。
             </p>
             <!-- 日本語は改行がそのまま半角空白として描画されるため、文中で折り返さない。 -->
@@ -25123,6 +25123,8 @@ const ORT_VERSION = "1.30.0";
 const ORT_ASSET_BASE = new URL(`assets/onnxruntime/${ORT_VERSION}/`, document.baseURI).href;
 const PPOCR_MODEL_VERSION = "v6-small-rapidocr-3.10.0";
 const PPOCR_ASSET_BASE = new URL(`assets/ppocr/${PPOCR_MODEL_VERSION}/`, document.baseURI).href;
+// Service Worker の OCR_CACHE_NAME と同じ式（一致は scripts/service-worker-contract.test.mjs が照合する）。
+const OCR_CACHE_NAME = `wordsnap-ocr-assets/onnxruntime/${ORT_VERSION}/|assets/ppocr/${PPOCR_MODEL_VERSION}/`;
 
 function loadImageElement(file) {
   return new Promise((resolve, reject) => {
@@ -26857,9 +26859,25 @@ function ppocrWorkerMain() {
   // 1行が極端に長いと出力（幅/8 × 1.9万クラス）が数十MBになるので、比率を頭打ちにする。
   const REC_MAX_RATIO = 40;
   const REC_BATCH = 6;
+  // 1回の推論で並べる画像の幅の合計の上限。出力は 幅/8 × 1.9万クラス × 4バイト なので、
+  // 長い行を6本まとめると100MBを超え、スマートフォンではメモリ不足で落ちる。
+  const REC_BATCH_WIDTH = 2400;
 
   function post(message) {
     self.postMessage(message);
+  }
+
+  // det と rec を並行して取るので、進捗は両方の合計で知らせる（片方ずつだと棒が行き来する）。
+  const downloads = new Map();
+
+  function postDownloadProgress() {
+    let loaded = 0;
+    let total = 0;
+    for (const entry of downloads.values()) {
+      loaded += entry.loaded;
+      total += entry.total;
+    }
+    post({ type: "progress", stage: "download", loaded, total });
   }
 
   async function fetchWithProgress(url, label) {
@@ -26870,12 +26888,14 @@ function ppocrWorkerMain() {
     const reader = response.body.getReader();
     const chunks = [];
     let loaded = 0;
+    downloads.set(label, { loaded, total });
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
       loaded += value.byteLength;
-      post({ type: "progress", stage: "download", label, loaded, total });
+      downloads.set(label, { loaded, total });
+      postDownloadProgress();
     }
     const out = new Uint8Array(loaded);
     let offset = 0;
@@ -27208,8 +27228,18 @@ function ppocrWorkerMain() {
     const order = boxes.map((box, index) => ({ index, ratio: Math.min(REC_MAX_RATIO, box.w / Math.max(1, box.h)) }));
     order.sort((a, b) => a.ratio - b.ratio);
     const results = new Array(boxes.length);
-    for (let start = 0; start < order.length; start += REC_BATCH) {
-      const batch = order.slice(start, start + REC_BATCH);
+    let start = 0;
+    while (start < order.length) {
+      // 比率の昇順に並べてあるので、最後に足した箱の幅がそのバッチの幅になる。
+      let end = start + 1;
+      while (
+        end < order.length &&
+        end - start < REC_BATCH &&
+        (end - start + 1) * Math.ceil(REC_HEIGHT * Math.max(REC_MIN_RATIO, order[end].ratio)) <= REC_BATCH_WIDTH
+      ) {
+        end += 1;
+      }
+      const batch = order.slice(start, end);
       const maxRatio = Math.max(REC_MIN_RATIO, ...batch.map((item) => item.ratio));
       const targetWidth = Math.ceil(REC_HEIGHT * maxRatio);
       const plane = REC_HEIGHT * targetWidth;
@@ -27225,7 +27255,8 @@ function ppocrWorkerMain() {
       batch.forEach((item, slot) => {
         results[item.index] = decodeCtc(probs.data, steps, classes, slot * steps * classes);
       });
-      onProgress(Math.min(order.length, start + batch.length), order.length);
+      start = end;
+      onProgress(start, order.length);
     }
     return results;
   }
@@ -27375,8 +27406,13 @@ function ppocrColumnsText(boxes, skew, splitX) {
 
 // layout: "one" | "two" | "auto"。auto は1列と2列の両方を組み立て、
 // 「単語＋訳」の組が多く取れた方を採る（単語と訳の間の空白を段組と取り違えないため）。
+// 確信度の低い箱は入力欄に出さない。確信度（ppocrConfidence）も同じ箱だけで計算する。
+function ppocrUsableBoxes(boxes) {
+  return boxes.filter((box) => box.text && box.score >= 0.5);
+}
+
 function assemblePpocrText(boxes, layout, width, height, metrics) {
-  const usable = boxes.filter((box) => box.text && box.score >= 0.5);
+  const usable = ppocrUsableBoxes(boxes);
   const skew = ppocrPageSkew(usable);
   const single = ppocrRowsText(usable, skew);
   if (layout === "one") return single;
@@ -27413,7 +27449,7 @@ function scoreOcrResult(data) {
 function ocrResultText(result, layout) {
   return {
     text: assemblePpocrText(result.boxes, layout, result.width, result.height, ocrTextMetrics),
-    confidence: ppocrConfidence(result.boxes),
+    confidence: ppocrConfidence(ppocrUsableBoxes(result.boxes)),
   };
 }
 
@@ -27515,7 +27551,7 @@ function reportOcrProgress(progress, workerToken) {
   if (!run || run.cancelled || run.workerToken !== workerToken) return;
   if (progress.stage === "download") {
     const percent = progress.total ? (progress.loaded / progress.total) * 100 : null;
-    setOcrRunStage(run, "OCRモデルをダウンロードしています…（初回だけ。約35MB）", percent);
+    setOcrRunStage(run, "OCRモデルをダウンロードしています…（初回だけ。約45MB）", percent);
   } else if (progress.stage === "compile") {
     setOcrRunStage(run, "OCRモデルを準備しています…");
   } else if (progress.stage === "detect") {
@@ -27591,6 +27627,10 @@ function createPpocrEngine(onProgress, threads) {
   return {
     ready,
     threads,
+    // Worker が落ちた（メモリ不足など）エンジンは使い回さない（getOcrWorker が作り直す）。
+    get failed() {
+      return Boolean(failure);
+    },
     async recognize(canvas, options = {}) {
       if (failure) throw failure;
       const width = canvas.width;
@@ -27652,14 +27692,22 @@ async function resetOcrWorker(expectedToken = null) {
   await terminateOcrWorkerInstance(worker);
 }
 
+// 複数スレッドで起動できなかったら、このページを開いている間は1スレッドに固定する。
+let ocrSingleThreadOnly = false;
+
 function ocrThreadCount() {
   // SharedArrayBuffer が使える（_headers の COOP/COEP で cross-origin isolated）ときだけ複数スレッド。
-  if (!self.crossOriginIsolated) return 1;
+  if (ocrSingleThreadOnly || !self.crossOriginIsolated) return 1;
   return Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1));
+}
+
+function isOcrLoadFailure(error) {
+  return /取得できません|Failed to fetch|NetworkError|Load failed|network/i.test(String(error?.message || ""));
 }
 
 async function getOcrWorker(run) {
   ensureOcrRunActive(run);
+  if (ocrWorker?.failed) await resetOcrWorker();
   if (ocrWorker) {
     run.workerToken = ocrWorkerToken;
     return ocrWorker;
@@ -27671,7 +27719,7 @@ async function getOcrWorker(run) {
       // 別の実行の起動失敗は、こちらで作り直して扱う。
     }
     ensureOcrRunActive(run);
-    if (ocrWorker) {
+    if (ocrWorker && !ocrWorker.failed) {
       run.workerToken = ocrWorkerToken;
       return ocrWorker;
     }
@@ -27694,7 +27742,9 @@ async function getOcrWorker(run) {
         await terminateOcrWorkerInstance(engine);
         if (run.cancelled || activeOcrRun !== run) throw ocrCancelledError();
         // スレッドを起動できない環境（入れ子Workerの制限など）では1スレッドでやり直す。
-        if (threads > 1) {
+        // モデルの取得失敗（オフライン・HTTPエラー）はスレッド数と関係ないので、やり直さない。
+        if (threads > 1 && !isOcrLoadFailure(error)) {
+          ocrSingleThreadOnly = true;
           threads = 1;
           continue;
         }
@@ -27767,7 +27817,7 @@ async function runOcr(source, run) {
   ensureOcrRunActive(run);
   if (!normalCanvas) throw new Error("OCR用に画像を準備できませんでした。");
 
-  setOcrRunStage(run, "OCRを準備しています。初回は約35MBのダウンロードがあり時間がかかります。");
+  setOcrRunStage(run, "OCRを準備しています。初回は約45MBのダウンロードがあり時間がかかります。");
   let engine;
   try {
     engine = await getOcrWorker(run);
@@ -36226,7 +36276,7 @@ elements.ocrButton.addEventListener("click", async () => {
         setStatus("端末内OCRを中止しました。入力欄の内容は変更していません。");
       }
     } else {
-      // モデル（約35MB）は自オリジンから取るが、初回はオンラインでないと読み込めない。
+      // モデル（約45MB）は自オリジンから取るが、初回はオンラインでないと読み込めない。
       // 生のエラー文だけでは原因も対処も分からないので、取得の失敗らしいときだけ一言添える。
       const looksLikeLoadFailure = /取得できません|fetch|network|load|http/i.test(String(error?.message || ""));
       const hint = looksLikeLoadFailure
@@ -38881,8 +38931,9 @@ async function purgeStaleAppCaches() {
     const current = `wordsnap-v7-${rev}`;
     const keys = await caches.keys();
     for (const key of keys) {
-      // OCRの版付きアセット（約45MB）のキャッシュはアプリの版とは別に持つ。入れ替えは Service Worker の activate が行う。
-      if (key.startsWith("wordsnap-ocr-")) continue;
+      // OCRの版付きアセット（約45MB）のキャッシュはアプリの版とは別に持つので、いまのOCRの版のものは残す。
+      // 古いOCRの版のものは消す（容量不足で新しい SW の install が失敗し activate が来ない端末でも空きを作る）。
+      if (key === OCR_CACHE_NAME) continue;
       if (key.startsWith("wordsnap-") && key !== current) await caches.delete(key);
     }
   } catch {

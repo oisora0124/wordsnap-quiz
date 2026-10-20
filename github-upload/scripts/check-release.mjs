@@ -1403,7 +1403,7 @@ assert.match(
 const BINARY_EXTENSIONS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".avif",
   ".woff", ".woff2", ".ttf", ".otf", ".eot",
-  ".pdf", ".zip", ".gz", ".br", ".wasm", ".traineddata",
+  ".pdf", ".zip", ".gz", ".br", ".wasm", ".onnx",
   ".mp3", ".mp4", ".webm", ".wav", ".ogg",
 ]);
 // NUL混入検査は従来どおり「ソースとして扱う拡張子」だけを対象にする。

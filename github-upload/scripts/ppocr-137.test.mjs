@@ -179,9 +179,45 @@ test("CTC: すべて blank なら空文字・確信度0（その箱は結果か�
   assert.match(workerSource, /\.filter\(\(box\) => box\.text\)/);
 });
 
+// ---- 2b. 認識のバッチ分け ----
+
+test("認識: 長い行はまとめすぎない（1回の推論の幅の合計を上限内に収める）", async () => {
+  const consts = ["REC_HEIGHT", "REC_MIN_RATIO", "REC_MAX_RATIO", "REC_BATCH", "REC_BATCH_WIDTH"].map(workerConst);
+  const sandbox = { Math, Float32Array, runs: [] };
+  const script = [
+    ...consts,
+    // 推論とテンソルは記録するだけの代役。バッチの形（枚数・幅）だけを見る。
+    "const self = { ort: { Tensor: function (type, data, dims) { this.dims = dims; } } };",
+    "function writeRecInput() {}",
+    'function decodeCtc() { return { text: "x", score: 1 }; }',
+    "const recSession = { inputNames: ['x'], outputNames: ['y'], async run(feeds) { runs.push(feeds.x.dims.slice()); return { y: { dims: [feeds.x.dims[0], 1, 1], data: [] } }; } };",
+    // 切り出しは "function" から始まるので、async を付け直す。
+    `async ${extractFunction("recognizeBoxes", workerStart)}`,
+    "globalThis.__rec = recognizeBoxes;",
+  ].join("\n\n");
+  new Script(script, { filename: "ppocr-rec-batch.js" }).runInNewContext(sandbox);
+  // 短い行10本と、比率40（幅1920）の長い行3本。
+  const boxes = [
+    ...Array.from({ length: 10 }, () => ({ w: 200, h: 40 })),
+    ...Array.from({ length: 3 }, () => ({ w: 4000, h: 40 })),
+  ];
+  const results = await sandbox.__rec({}, boxes, () => {});
+  assert.equal(results.length, 13);
+  assert.ok(results.every((result) => result && result.text === "x"), "読まれなかった箱がある");
+  const widthLimit = Number(workerConst("REC_BATCH_WIDTH").match(/\d+/)[0]);
+  for (const dims of sandbox.runs) {
+    assert.ok(dims[0] <= 6, `1回の枚数が多すぎる: ${dims}`);
+    assert.ok(dims[0] === 1 || dims[0] * dims[3] <= widthLimit, `幅の合計が上限を超えている: ${dims}`);
+  }
+  // 長い行（幅1920）は1本ずつ推論する。
+  const long = sandbox.runs.filter((dims) => dims[3] === 1920);
+  assert.equal(long.length, 3);
+  assert.ok(long.every((dims) => dims[0] === 1));
+});
+
 // ---- 3. 箱 → 入力欄の文字列 ----
 
-const layoutNames = ["ppocrPageSkew", "ppocrRows", "ppocrRowsText", "ppocrColumnGutter", "ppocrColumnsText", "assemblePpocrText", "ppocrConfidence"];
+const layoutNames = ["ppocrUsableBoxes", "ppocrPageSkew", "ppocrRows", "ppocrRowsText", "ppocrColumnGutter", "ppocrColumnsText", "assemblePpocrText", "ppocrConfidence"];
 const metricsNames = ["isOcrHeadwordLine", "isOcrMeaningLine", "isOcrPairLine", "ocrTextMetrics"];
 const layout = (() => {
   const pieces = [...layoutNames, ...metricsNames].map((name) => extractFunction(name));
@@ -264,6 +300,19 @@ test("組み立て: 確信度の低い箱は使わない。確信度は文字数
   assert.ok(Math.abs(confidence - 80) < 1e-9);
 });
 
+test("確信度: 入力欄に出さない（確信度の低い）箱は、確信度の計算にも入れない", () => {
+  const pieces = [...layoutNames, ...metricsNames, "ocrResultText"].map((name) => extractFunction(name));
+  pieces.push("globalThis.__r = ocrResultText;");
+  const sandbox = { Math };
+  new Script(pieces.join("\n\n"), { filename: "ppocr-result.js" }).runInNewContext(sandbox);
+  const result = sandbox.__r(
+    { width: 1000, height: 1400, boxes: [box("apple", 100, 100, 150, { score: 0.9 }), box("xxxxxxxxxx", 400, 100, 120, { score: 0.2 })] },
+    "auto",
+  );
+  assert.equal(result.text, "apple");
+  assert.ok(Math.abs(result.confidence - 90) < 1e-9, `confidence ${result.confidence}`);
+});
+
 // ---- 4. 写真の向き ----
 
 function loadOrientation(readings) {
@@ -335,11 +384,27 @@ test("配線: Worker は関数の文字列から blob: で作り、版付きの�
   assert.match(create, /\[full\.data\.buffer, det\.data\.buffer\]/);
 });
 
-test("配線: スレッドを起動できない環境では1スレッドで作り直す", () => {
+test("配線: スレッドを起動できない環境では1スレッドで作り直し、以後は1スレッドに固定する", () => {
   const get = extractFunction("getOcrWorker");
-  assert.match(get, /if \(threads > 1\) \{\s*threads = 1;\s*continue;\s*\}/);
+  assert.match(get, /if \(threads > 1 && !isOcrLoadFailure\(error\)\) \{\s*ocrSingleThreadOnly = true;\s*threads = 1;\s*continue;\s*\}/);
   const count = extractFunction("ocrThreadCount");
-  assert.match(count, /if \(!self\.crossOriginIsolated\) return 1;/);
+  assert.match(count, /if \(ocrSingleThreadOnly \|\| !self\.crossOriginIsolated\) return 1;/);
+});
+
+test("配線: モデルの取得失敗はスレッド数を変えてもやり直さない（オフラインで二重に取りに行かない）", () => {
+  const sandbox = {};
+  new Script(`${extractFunction("isOcrLoadFailure")}\nglobalThis.__f = isOcrLoadFailure;`).runInNewContext(sandbox);
+  assert.equal(sandbox.__f(new Error("OCRモデルを取得できませんでした（rec: HTTP 404）")), true);
+  assert.equal(sandbox.__f(new TypeError("Failed to fetch")), true);
+  assert.equal(sandbox.__f(new Error("no available backend found. ERR: [wasm] RuntimeError")), false);
+});
+
+test("配線: 待機中に Worker が落ちたエンジンは使い回さず作り直す", () => {
+  const create = extractFunction("createPpocrEngine");
+  assert.match(create, /get failed\(\) \{\s*return Boolean\(failure\);\s*\}/);
+  const get = extractFunction("getOcrWorker");
+  assert.match(get, /if \(ocrWorker\?\.failed\) await resetOcrWorker\(\);/);
+  assert.match(get, /if \(ocrWorker && !ocrWorker\.failed\) \{/);
 });
 
 test("配線: Worker 本体は外側の変数を使わない（blob: の Worker へは関数の文字列しか渡らない）", () => {

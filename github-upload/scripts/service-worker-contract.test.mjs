@@ -589,6 +589,17 @@ function extractPurgeFunction() {
   throw new Error("unbalanced braces");
 }
 
+// ページ側の OCR_CACHE_NAME（とその材料の版の宣言）を実物のまま取り出す。
+const PAGE_OCR_CACHE_DECLARATIONS = ["ORT_VERSION", "PPOCR_MODEL_VERSION", "OCR_CACHE_NAME"]
+  .map((name) => appHtml.match(new RegExp(`^const ${name} = [^\\n]+;$`, "m"))?.[0] ?? `/* ${name} missing */`)
+  .join("\n");
+const PAGE_OCR_CACHE_NAME = new Script(`${PAGE_OCR_CACHE_DECLARATIONS}\nOCR_CACHE_NAME;`).runInNewContext({});
+
+test("ページ側の OCR_CACHE_NAME は Service Worker の OCR_CACHE_NAME と同じ", () => {
+  // 食い違うと、ページの自己修復がいま使っているOCRキャッシュ（約45MB）を毎回消してしまう。
+  assert.equal(PAGE_OCR_CACHE_NAME, OCR_CACHE_NAME);
+});
+
 function buildPurgeSandbox({ shownVersion, existing }) {
   const deleted = [];
   const sandbox = {
@@ -603,7 +614,7 @@ function buildPurgeSandbox({ shownVersion, existing }) {
       querySelector: () => (shownVersion === null ? null : { textContent: shownVersion }),
     },
   };
-  new Script(`${extractPurgeFunction()}\nglobalThis.__p = purgeStaleAppCaches;`, {
+  new Script(`${PAGE_OCR_CACHE_DECLARATIONS}\n${extractPurgeFunction()}\nglobalThis.__p = purgeStaleAppCaches;`, {
     filename: "sw-purge-check.js",
   }).runInNewContext(sandbox);
   return { run: sandbox.__p, deleted };
@@ -612,13 +623,14 @@ function buildPurgeSandbox({ shownVersion, existing }) {
 test("自己修復: いまの版と違うアプリキャッシュだけを消す", async () => {
   const { run, deleted } = buildPurgeSandbox({
     shownVersion: "バージョン 1.0.94",
-    // OCR専用キャッシュ（wordsnap-ocr-…）はアプリの版と無関係なので残す（入れ替えは SW の activate）。
-    existing: ["wordsnap-v7", "wordsnap-v7-1.0.77", "wordsnap-v7-1.0.94", "other-cache", "wordsnap-ocr-x"],
+    // いまのOCRの版の専用キャッシュは残し、古いOCRの版のものは消す（容量不足で SW の install が
+    // 失敗し activate が来ない端末でも、いちばん大きいキャッシュを片付けられるように）。
+    existing: ["wordsnap-v7", "wordsnap-v7-1.0.77", "wordsnap-v7-1.0.94", "other-cache", "wordsnap-ocr-old", PAGE_OCR_CACHE_NAME],
   });
   await run();
   assert.deepEqual(
     deleted.sort(),
-    ["wordsnap-v7", "wordsnap-v7-1.0.77"],
+    ["wordsnap-ocr-old", "wordsnap-v7", "wordsnap-v7-1.0.77"],
     "古い版だけを消し、いまの版と無関係のキャッシュは触らない",
   );
 });
