@@ -1,11 +1,12 @@
-# アカウントによる復旧（パスキー主・メール副）設計案
+# パスキーによる復旧（「パスキーで控える」）設計書
 
-作成: 2026-10-21 / 状態: **草案 rev1・未実装・レビュー前**。下書きは設計サブエージェント、確認と加筆（§3 の方式選定理由、§4.5）は Fable。
-実装前に orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol max の別視点）を通す。
+作成: 2026-10-21 / 状態: **rev2・未実装**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol max、
+Haiku→上位モデルで反証）に掛け、生き残った 29 件（高 0・中 18・低 11）を反映した。設計の担当は Fable。
 リスク区分: **高**（同期・データ移行・セキュリティ。CLAUDE.md の高リスク領域）。
 
 凡例: 【事実】はリポジトリの該当箇所または公式情報に根拠がある。【推測】は根拠が無い判断。
 外部サービスの料金・仕様は **2026-10 時点の要確認** とし、本書では断定しない。
+行番号は 1.0.139（コミット 8950ad2）時点の `publish/index.html` / `functions/api/wordsnap-state.js`。関数名を主、行番号を従として読む。
 
 ## 背景
 
@@ -15,85 +16,78 @@
 
 | 識別子 | 形式 | 置き場所 |
 |---|---|---|
-| legacy 個人キー | `ws_` + 60hex（ID と秘密を兼ねる） | URL `?w=`・`wordsnap-sync-id:v1`（`publish/index.html:18343`） |
-| V2 部屋 / 秘密 | `wr_` + 32hex / `wk_` + 60hex（`functions/api/wordsnap-state.js:323-324`） | `wordsnap-sync-credential:v2`（`index.html:18346`）＋ IndexedDB ミラー（`recoverV2CredentialFromIdb`, `index.html:20994`） |
-| 金庫鍵 | `wv_` + 64hex（AIキー封筒の鍵。**サーバーへ送らない** = `docs/ai-secret-sync-design.md:132-168`） | 同上。引き継ぎコード3要素目（`parseV2TransferCode`, `index.html:20975-20978`） |
+| legacy 個人キー | `ws_` + 60hex（ID と秘密を兼ねる） | URL `?w=`・`wordsnap-sync-id:v1`（`SYNC_ID_KEY`, `index.html:18355`） |
+| V2 部屋 / 秘密 | `wr_` + 32hex / `wk_` + 60hex（`wordsnap-state.js:323-324`） | `wordsnap-sync-credential:v2`（`index.html:18358`）＋ IndexedDB ミラー（`recoverV2CredentialFromIdb`, `index.html:21009`） |
+| 金庫鍵 | `wv_` + 64hex（AIキー封筒の鍵。**サーバーへ送らない** = `docs/ai-secret-sync-design.md:132-168`） | 同上。引き継ぎコード3要素目（`parseV2TransferCode`, `index.html:20990-21001`） |
 
-1.0.139（PR #66）で、空で起動したときの復元案内（`showRecoveryPrompt`, `index.html:19594`）、
-引き継ぎコードを iPhone のパスワードへ控える form（`index.html:6949-6996`）、未控えの帯を入れた。
-これは**利用者が自分で控える**ことに依存する暫定策である。アカウントは「控えなくても戻れる」
-ための根本策で、同時に運営が「この人の部屋はどれか」を知る手段にもなる。
+1.0.139（PR #66）で、空で起動したときの復元案内（`showRecoveryPrompt`, `index.html:19609`）、
+引き継ぎコードを iPhone のパスワードへ控える form、未控えの帯を入れた。これは**利用者が自分で控える**
+ことに依存する暫定策である。本設計は「控えなくても戻れる」ための根本策で、同時に運営が
+「この利用者の部屋はどれか」を知る手段にもなる。
 
 ## 1. 目的と非目的
 
 **目的**
 
 1. 端末の保存が消えても、本人が**自分で**自分の部屋（`wr_…`）へ戻れること。
-2. 戻る操作が、サーバーの既存データを**一切消さず・空で上書きせず**行えること。
-3. 運営が、問い合わせを受けたとき「アカウントが存在し、どの部屋に結びついているか」を
-   確認できること（鍵を手渡しする裏口は作らない。後述 §5）。
-4. アカウント無しで使い続ける人の挙動を **1ビットも変えない**（V2 導入時と同じ原則 =
-   `docs/sync-auth-v2-design.md:15-21`）。
+2. 戻る操作が、サーバーの既存データを**一切消さず・空で上書きせず**行えること。端末側のデータも、
+   利用者が明示的に選ばない限り捨てないこと。
+3. 運営が、問い合わせを受けたとき「アカウントが存在し、どの部屋に結びついているか」を確認できること
+   （鍵を手渡しする裏口は作らない。§5）。
+4. アカウント無しで使い続ける人の**保存キー集合・送信 URL 集合**を変えないこと（§6.1 の 6）。
 
 **非目的**
 
-- ログイン必須化。アカウントは**任意の追加機能**であり、同期の認可は今までどおり `wk_`。
-- legacy `?sync=` 経路の変更（永久不変の原則 = `sync-auth-v2-design.md:17-18`）。
-- `wv_`（金庫鍵）の復旧。サーバーへ送らない設計（`ai-secret-sync-design.md:164-166`）を守るため、
-  アカウントで戻るのは単語データまで。AIキーは再入力になる（§8 Q6）。
-- 運営に対する秘匿性の向上。同一オリジン PWA では運営は既に信頼境界の内側にいる
-  （`docs/sync-auth-v3-design.md:19-27`）。本設計はそれを悪化させないが、改善もしない。
+- ログイン必須化。「パスキーで控える」は**任意の追加機能**であり、同期の認可は今までどおり `wk_`。
+- legacy `?sync=` 経路の変更（永久不変の原則 = `docs/sync-auth-v2-design.md:17-18`）。
+- `wv_`（金庫鍵）の復旧。サーバーへ送らない設計（`ai-secret-sync-design.md:164-166`）を守る（§8 決定 6）。
+- メールアドレスによる回復（§8 決定 1 で不採用。検討の記録は §2 に残す）。
+- 運営に対する秘匿性の向上（`docs/sync-auth-v3-design.md:19-27`）。本設計は保存時の露出を増やすので、§5.3 で正直に扱う。
 - 部屋の削除・失効機能（`../docs/FREE-OPERATIONS-HARDENING-SPEC.md` §6）。別設計。
 
 ## 2. 選択肢の比較
 
-| 観点 | A. メール＋ワンタイムコード | B. パスキー（WebAuthn） | C. Sign in with Apple / Google | D. 現状維持＋キーチェーン（1.0.139） |
-|---|---|---|---|---|
-| 無料運用 | △ **送信手段が要る**。Cloudflare 純正 `send_email` は送信元ドメインが Cloudflare zone であることが必要で pages.dev では使えない（【事実】`docs/feedback-mail.md:33-36`）。さらに宛先が Email Routing の検証済みアドレスに限られるとの理解（【要確認】）＝任意の利用者へは送れない。Resend は独自ドメイン未検証だと**自分宛にしか送れない**（【事実】`feedback-mail.md:37-39`）→ 独自ドメイン（年 US$10 前後【要確認】）が必須。Resend 無料枠 3,000通/月・100通/日、Brevo 無料枠 300通/日、MailChannels の Workers 向け無料経路は 2024 年に終了（いずれも【要確認】） | ◎ 外部サービス不要。D1 に公開鍵と数行。無料枠（D1 読み 500万行/日・書き 10万行/日、Functions 10万req/日【要確認】）に対し、アカウント操作は稀で影響無し | △ Sign in with Apple は Apple Developer Program（年 US$99【要確認】）が必要。Google は無料だが Cloud プロジェクトと同意画面の設定が要る | ◎ 追加費用なし |
-| iOS ホーム画面アプリ（standalone）での動作 | ○ 6桁コードなら Mail アプリと往復して入力するだけ。**マジックリンクは不可**（リンクは Safari で開き、standalone とは別の保存領域なので PWA 側にセッションが乗らない。【事実】iOS の standalone は Safari と storage を共有しない） | ○ 【推測・要検証】iOS 16.4 以降は standalone でも `navigator.credentials` が使える認識（それ以前は不可だった記憶があり、対応版の下限を実機で確かめる）。既に `window.confirm` が standalone で壊れる等の罠がある（`index.html:547, 22898`）ため、**Phase A の実機スパイクで確認**する。パスキーは iCloud キーチェーンに入るので「サイトデータ消去」で消えない（キーチェーン方式と同じ性質、ただし自動） | ✕〜△ リダイレクトが standalone から離脱し戻ってこない・ポップアップ不可・Google が WebView 系を拒否する等、**最も罠が多い**（【推測・要確認】）。`form-action 'self'`・`connect-src` の CSP（`publish/_headers:39`）にも穴を開ける必要 | ○ 動作済み（1.0.139）。ただし保存は利用者の任意操作 |
-| 複数端末 | ○ メールが読めればどの端末でも | ○ Apple 端末間は iCloud で同期。Android/PC へは QR のハイブリッド方式になり手間（【要確認】） | ○ プロバイダのアカウントがあれば | △ iCloud キーチェーン内の Apple 端末間のみ |
-| プライバシー | ✕ **メールアドレス＝個人情報**を初めて持つ。現状は完全匿名（テレメトリ匿名・要望フォームも連絡先欄を廃止 = `docs/VERSIONS.md` 1.0.89）。漏洩時の説明責任・保管規約が発生 | ◎ 乱数のユーザーハンドルのみ。公開鍵は個人を特定しない | ✕ プロバイダの ID・メールを受け取る。利用者の行動がプロバイダ側にも残る | ◎ 変化なし |
-| 復旧の確実さ | ○ メールを失わない限り戻れる。メール乗っ取り＝部屋乗っ取り | ○ パスキーを失わない限り戻れる。**iCloud キーチェーンを使わない人・Apple 以外の人は端末紛失で失う**（端末内のパスキーは「サイトデータ消去」には耐える）。パスキー紛失時の救済が無い（→ A を回復用に組み合わせる） | ○ プロバイダ依存。プロバイダのアカウント停止で道連れ | △ 控えた人だけ。控えなかった人には何もできない |
-| 運営の本人確認 | ○ 登録メールへ送ることで本人に到達できる | △ アカウント ID と結びついた部屋の存在は分かるが、本人へ連絡する手段は無い | ○ プロバイダの ID | ✕ 何も分からない |
-| 実装規模（【推測】） | 中。テーブル2〜3・送信・レート制限・UI。ドメイン取得と DNS が別作業 | 中〜大。サーバーで CBOR/COSE の解釈と ECDSA 検証（Workers の WebCrypto で可）、チャレンジ管理、UI、実機検証 | 中。OIDC コード交換・JWKS 検証・CSP 変更・各社の管理画面設定 | 済 |
+| 観点 | A. メール＋ワンタイムコード | B. パスキー（WebAuthn） | C. Sign in with Apple / Google | D. 現状維持＋キーチェーン（1.0.139） | E. 合言葉でクライアント側暗号化した退避 |
+|---|---|---|---|---|---|
+| 無料運用 | △ 送信手段が要る。Cloudflare 純正 `send_email` は pages.dev では使えない（【事実】`docs/feedback-mail.md:33-36`）。Resend は独自ドメイン未検証だと自分宛のみ（【事実】`feedback-mail.md:37-39`）→ 独自ドメインが必須。**Cloudflare 側の任意宛先送信の提供状況は 2026-10 時点で一次情報を再確認**（`feedback-mail.md` の前提は 2026-07） | ◎ 外部サービス不要。D1 に公開鍵と数行 | △ Apple は Developer Program（年 US$99【要確認】）。Google は無料だが管理画面設定が要る | ◎ 追加費用なし | ◎ 暗号文を D1 に置くだけ |
+| iOS ホーム画面アプリ（standalone） | ○ 6桁コード。マジックリンクは不可（standalone は Safari と保存領域を共有しない） | ○ 【要検証・Phase A】iOS 16.4 以降は standalone でも `navigator.credentials` が使える認識。`window.confirm` が壊れる等の罠がある（`index.html:547`） | ✕〜△ リダイレクトが standalone から離脱する等、最も罠が多い | ○ 動作済み | ○ 通常の fetch だけ |
+| 複数端末 | ○ | ○ Apple 端末間は iCloud で同期。Android/PC は QR のハイブリッド方式（手間） | ○ | △ Apple 端末間のみ | ○ 合言葉を覚えていればどこでも |
+| プライバシー | ✕ メールアドレス＝個人情報を初めて持つ | ◎ 乱数のハンドルと公開鍵のみ | ✕ プロバイダの ID を受け取る | ◎ | ◎ 運営も復号できない（同一オリジンの限界は残る） |
+| 復旧の確実さ | ○ メールを失わない限り | ○ パスキーを失わない限り。**端末固定のパスキー（iCloud キーチェーン無効・セキュリティキー）は端末紛失で失う** | ○ プロバイダ依存 | △ 控えた人だけ | △ **合言葉を忘れたら誰にも戻せない**。弱い合言葉は総当たりに弱い |
+| 運営の本人確認 | ○ | △ アカウントと部屋の存在まで | ○ | ✕ | △ |
+| 実装規模（【推測】） | 中＋ドメイン | 中〜大（CBOR/COSE・署名検証・UI・実機） | 中 | 済 | 中（鍵導出 PBKDF2/Argon2・UI） |
 
-**結論**: 「安い・匿名・端末消去に耐える」を同時に満たすのは B だけ。A は**送信手段が無料で揃わない**
-（独自ドメインが前提）が、B の弱点（パスキー紛失）を補う回復手段として価値がある。
-C は費用か罠のどちらかを必ず抱えるため採らない。D は残す（B の無い環境の人のため）。
+**結論**: 「安い・匿名・端末消去に耐える・控えの操作が要らない」を同時に満たすのは B。
+E は運営から秘匿でき `wv_` も退避できる長所があるが、「合言葉を忘れる」が今の「コードを控え忘れる」と同じ失敗様式で、
+本設計の動機（控え忘れを無くす）に合わない。**B の次の候補として記録し、本書では採らない**。
+A は決定 1 で不採用。C は費用か罠を必ず抱える。D は残す。
+補足: `navigator.storage.persist()` は既に起動時に呼んでいる（`recoverPersisted`, `index.html:38352`）。それでも消えた事例があるので、D の強化ではなく B が要る。
 
 ## 3. 推奨案
 
-**パスキーを主、引き継ぎコードは残す**の2層（メール回復は §8 の決定 1 で**やらない**。
-以下の Phase E・`account_emails` に関する記述は、検討した記録として残す）。
+**パスキーを主、引き継ぎコードを最後の手段として残す**2層。
 
 ```
-層1  引き継ぎコード（wr_.wk_.wv_）         ← 今まで通り。全環境で動く最後の手段
-層2  パスキー ＝ 「アカウント」の本体        ← iCloud キーチェーンに自動で入る。控え忘れを無くす
-（層3 メール回復は不採用。匿名を保つ。パスキーを失ったら層1 で戻る）
+層1  引き継ぎコード（wr_.wk_.wv_）   ← 今まで通り。全環境で動く最後の手段。wv_ はここにしか無い
+層2  パスキー ＝「パスキーで控える」   ← iCloud キーチェーンに自動で入る。控え忘れを無くす
 ```
 
-- 「アカウントを作る」＝パスキーを1つ登録し、**いま使っている部屋を結びつける**。それ以上は無い。
-- 復旧＝空の端末でパスキー認証 → 結びついた部屋の一覧 → 選ぶ → 既存の合流処理（`joinV2Room`,
-  `index.html:21886`）で**非破壊に**合流する。
-- サーバーは部屋の秘密 `wk_` を**封筒（AES-GCM、鍵は環境変数）**で持つ。平文保存しない原則
-  （`sync-auth-v2-design.md:20`）は守る。運営が復号できる点は §5 で正直に書く。
-  rekey（秘密の張り替え）は採らない：他端末の `wk_` が無効になり、端末どうしで締め出し合う。
-- `wv_` は持たない。復旧後の AI キー同期は「2要素コードで合流した」場合と同じ分岐
-  （`ai-secret-sync-design.md` §5.2）。
+- 「パスキーで控える」＝パスキーを登録し、**いま使っている部屋を結びつける**。1 アカウントに複数のパスキー・複数の部屋。
+- 復旧＝空の端末でパスキー認証 → 結びついた部屋の一覧（語数付き）→ 選ぶ → **復旧専用の合流処理**（§4.4。
+  既存の `joinV2Room` の中身を切り出して共用する）で合流する。端末に語があるときは、必ず先に選ばせる。
+- サーバーは部屋の秘密 `wk_` を**封筒（AES-GCM、鍵は環境変数の鍵リング）**で持つ。平文保存しない原則
+  （`sync-auth-v2-design.md:20`）は守る。rekey（秘密の張り替え）は採らない：他端末の `wk_` が無効になり締め出し合う。
+- `wv_` は持たない。復旧後の AI キー同期は「2要素コードで合流した」場合と同じ分岐（`ai-secret-sync-design.md` §5.2）。
 
 **なぜ「秘密を返す」方式か（アカウントを同期の認可主体にしない）**
 
-もう一つの作り方として「`account_rooms` を権限表とみなし、同期 API が `wk_` の代わりにアカウントのトークンでも
-認可する」がある。秘密を保存せずに済む利点はあるが、採らない。
+もう一つの作り方として「`account_rooms` を権限表とみなし、同期 API が `wk_` の代わりにアカウントのトークンでも認可する」がある。
+秘密を保存せずに済む利点はあるが、採らない。
 
 - 同期本体（`wordsnap-state.js` の認可、`verifyRoomSecret` → `auth_hash`）に新しい認可主体を混ぜることになり、
-  「legacy 経路は 1 行も変えない」「アカウント無しの端末は変更前と完全一致」（§6.1 の 5・6）を守る検査が難しくなる。
-- 復旧した端末は結局 `wk_` を持っていなければ、以後の同期のたびにアカウント認証（パスキー）が要る。
-  10 分トークンを長期セッションにするか、`wk_` を結局返すかのどちらかになる。
-- 秘密を返す方式なら、復旧後の端末は「引き継ぎコードを貼った端末」と区別が付かず、既存の合流・同期・
-  AI キー同期の分岐をそのまま使える（§4.4）。新しい状態を増やさない。
-
-運営が `wk_` を復号できる点は、現状でも全リクエストで `wk_` を受け取っていることと等価（§5.1「運営」）。
+  「legacy 経路は 1 行も変えない」「アカウント無しの端末は変更前と一致」（§6.1）を守る検査が難しくなる。
+- 復旧した端末は結局 `wk_` を持たなければ、以後の同期のたびにパスキー認証が要る。長期セッションを持つか、`wk_` を返すかのどちらかになる。
+- 秘密を返す方式なら、復旧後の端末は「引き継ぎコードを貼った端末」と区別が付かず、既存の同期・AI キー同期の分岐をそのまま使える。
 
 ## 4. データモデルと API
 
@@ -101,241 +95,309 @@ C は費用か罠のどちらかを必ず抱えるため採らない。D は残�
 
 ```sql
 CREATE TABLE IF NOT EXISTS accounts (
-  account_id  TEXT PRIMARY KEY NOT NULL,   -- 'wa_' + 32hex。サーバー生成の乱数。利用者に見せる ID
-  user_handle TEXT NOT NULL UNIQUE,        -- WebAuthn user.id（32byte 乱数の base64url）。メールや名前ではない
-  created_at  INTEGER NOT NULL,
+  account_id   TEXT PRIMARY KEY NOT NULL,  -- 'wa_' + 32hex。サーバー生成。利用者に見せる ID
+  user_handle  TEXT NOT NULL UNIQUE,       -- WebAuthn user.id（32byte 乱数の base64url）。メールや名前ではない
+  created_at   INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS passkeys (
-  credential_id TEXT PRIMARY KEY NOT NULL, -- base64url
-  account_id    TEXT NOT NULL,             -- accounts.account_id（FK は張らない。D1 の既存流儀に合わせる）
-  public_key    TEXT NOT NULL,             -- COSE 公開鍵（base64url）。登録時に alg -7 (ES256) / -257 (RS256) のみ受理
+  credential_id TEXT PRIMARY KEY NOT NULL,  -- base64url
+  account_id    TEXT NOT NULL,              -- accounts.account_id（FK は張らない。D1 の既存流儀に合わせる）
+  public_key    TEXT NOT NULL,              -- COSE 公開鍵（base64url）。登録時に alg -7 (ES256) / -257 (RS256) のみ受理
   alg           INTEGER NOT NULL,
   sign_count    INTEGER NOT NULL DEFAULT 0,
+  backed_up     INTEGER NOT NULL DEFAULT 0, -- 最後に見た authenticatorData の BS フラグ（同期済みパスキーか）
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_passkeys_account ON passkeys (account_id);
 CREATE TABLE IF NOT EXISTS account_rooms (
   account_id  TEXT NOT NULL,
-  room_id     TEXT NOT NULL,               -- rooms.room_id（wr_…）。legacy ws_ は結びつけない（§4.4）
-  secret_env  TEXT NOT NULL,               -- AES-GCM(wk_)。鍵は ACCOUNT_KEK 鍵リング、AAD = account_id||room_id
+  room_id     TEXT NOT NULL,                -- rooms.room_id（wr_…）。legacy ws_ は結びつけない（§4.4）
+  secret_env  TEXT NOT NULL,                -- AES-GCM(wk_)。鍵は ACCOUNT_KEK 鍵リング、AAD = account_id||room_id
   env_kid     TEXT NOT NULL,
   linked_at   INTEGER NOT NULL,
   PRIMARY KEY (account_id, room_id)
 );
 CREATE TABLE IF NOT EXISTS auth_challenges (
-  challenge  TEXT PRIMARY KEY NOT NULL,    -- 32byte 乱数 base64url。1回使ったら DELETE（＝消費）
-  purpose    TEXT NOT NULL,                -- 'register' | 'login'
-  account_id TEXT,                         -- register 時のみ（新規 account の予約）
-  created_at INTEGER NOT NULL
+  challenge   TEXT PRIMARY KEY NOT NULL,    -- 32byte 乱数 base64url
+  purpose     TEXT NOT NULL,                -- 'register' | 'login' | 'add-passkey'
+  account_id  TEXT,                         -- 'add-passkey' のとき対象アカウント。'register' のとき予約した ID
+  user_handle TEXT,                         -- 'register' / 'add-passkey' のときサーバーが発行した user.id（§4.2 register）
+  created_at  INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (created_at); -- 掃除を全表走査にしない（0007 の教訓）
 ```
 
-- セッションテーブルは**作らない**。アカウント操作は稀（登録・結びつけ・復旧）なので、
-  `HMAC(SYNC_AUTH_SECRETS 相当の鍵リング, account_id||exp||nonce)` の**無状態トークン（有効 10 分）**
-  をメモリにだけ持たせる。同期本体は従来どおり `wk_` で認可され、トークンを使わない。
-- Phase E（メール）で `account_emails(account_id, email_hash UNIQUE, email_env, verified_at)` と
-  `email_codes(code_hash PK, account_id, expires_at, attempts)` を 0009 で足す。本書では列を確定しない。
-- `rooms` / `states` / `state_revisions` は**無変更**。`account_rooms.room_id` は `rooms.room_id` を指すだけ。
-  部屋が消えることは無い（無期限保持）ので孤児は構造的に起きない。
-- 保持方針（`docs/data-retention.md` の表へ追記）: `accounts` / `passkeys` / `account_rooms` は
-  **無期限**（消すと復旧経路が消える）。`auth_challenges` は 10 分で掃除（`rate_limits` と同じ
-  「窓が明けたときだけ・上限付き DELETE」の流儀）。
+- セッションテーブルは**作らない**。アカウント操作は稀なので、無状態トークン（§4.5）をメモリにだけ持つ。
+- `rooms` / `states` / `state_revisions` は**無変更**。部屋は無期限保持なので孤児は構造的に起きない。
+- 保持方針（`docs/data-retention.md` の表へ追記）: `accounts` / `passkeys` / `account_rooms` は**無期限**。
+  `auth_challenges` は **10 分で期限切れ**。掃除は `*-options` の呼び出しごとに
+  `DELETE FROM auth_challenges WHERE created_at < ? LIMIT 100`（上限付き。`telemetry` の刈り込みと同じ）。
+  期限の判定は掃除に頼らず、**消費時に必ず行う**（§4.3）。
+- `migrations/README.md`・`wrangler.jsonc` のコメントに 0008 を追記。`scripts/d1-integration.test.mjs` は
+  `tableNames` の完全一致（:49-51）、`indexNames` の完全一致（:52-57）、**テーブル数 6 → 10**（:68）の 3 か所を更新する。
 
 ### 4.2 API（新規ファイル `functions/api/account.js`。`wordsnap-state.js` の legacy 経路は 1 行も変えない）
 
-すべて `POST`（`GET` は `?op=rooms` のみ）、JSON、同一オリジン確認（`Origin` / `Sec-Fetch-Site`。
-`feedback.js` の M1 対策と同じ）。`ACCOUNTS_ENABLED !== "1"` なら全 op が 503（V2 の
-`SYNC_V2_ENABLED` と同じ既定 OFF の作法 = `wordsnap-state.js:589`）。
+すべて `POST`、JSON、同一オリジン確認（`Origin` を **許可リスト `ACCOUNT_ORIGINS`**（§4.6）と照合。`feedback.js` の M1 対策と同形）。
+`ACCOUNTS_ENABLED !== "1"`、または `ACCOUNT_KEK` が未設定・解析不能なら全 op が 503（V2 の `SYNC_V2_ENABLED` と同じ既定 OFF = `wordsnap-state.js:589`）。
 
-| op | 入力 | 動作 | 出力 |
+| op | 認証 | 動作 | 出力 |
 |---|---|---|---|
-| `register-options` | — | account_id・user_handle を**予約**し challenge を保存 | `{rp, user, challenge, pubKeyCredParams:[-7,-257], authenticatorSelection:{residentKey:"required", userVerification:"preferred"}}` |
-| `register` | `{credential}`（attestation） | challenge を消費→`fmt` は `none` のみ受理→`rpIdHash`・`origin`・`UP` フラグ検証→`accounts`＋`passkeys` を **1 batch** で INSERT | `{accountId, token}` |
-| `login-options` | — | challenge 保存。`allowCredentials` は**空**（discoverable credential。ユーザー名入力無し＝列挙不能） | `{challenge, rpId, userVerification}` |
-| `login` | `{credential}`（assertion） | challenge 消費→`credential_id` で passkey 取得→署名検証→`sign_count` 更新 | `{accountId, token}` |
-| `link-room` | token, `{roomId, secret}` | `verifyRoomSecret`（`wordsnap-state.js:478-498` と同じ timing-safe 照合）に通った部屋だけ `account_rooms` へ INSERT OR IGNORE。**`rooms.auth_hash` は触らない** | `{ok}` |
-| `rooms` | token | 結びついた部屋の一覧（`stateRev` / `updatedAt` のみ。state 本体は返さない） | `[{roomId, linkedAt, stateRev, updatedAt}]` |
-| `recover-room` | token, `{roomId}` | 自分に結びついた部屋なら封筒を開けて秘密を返す | `{roomId, secret}` |
-| `unlink-room` | token, `{roomId}` | `account_rooms` の行だけ DELETE | `{ok}` |
-| `delete-account` | token | `accounts` / `passkeys` / `account_rooms` の行だけ DELETE。**`rooms` / `states` は触らない** | `{ok}` |
+| `register-options` | なし | `account_id`・`user_handle` を**サーバーで生成して challenge 行に保存** | `{rp:{id,name}, user:{id:user_handle, name:"WordBank", displayName:"WordBank"}, challenge, pubKeyCredParams:[-7,-257], authenticatorSelection:{residentKey:"required", userVerification:"required"}, attestation:"none", excludeCredentials:[]}` |
+| `register` | なし | challenge 消費（§4.3）→ 検証（§5.2）→ `accounts`（`user_handle` は challenge 行の値）＋`passkeys` を **1 batch** で INSERT | `{accountId, token}` |
+| `add-passkey-options` | token | 同上。`excludeCredentials` に既存の credential_id を入れる（同じ認証器での二重登録を防ぐ） | 同上 |
+| `add-passkey` | token | challenge 消費→検証→`passkeys` INSERT（`user_handle` は accounts の既存値） | `{ok}` |
+| `login-options` | なし | challenge 保存。`allowCredentials` は**空**（discoverable credential。ユーザー名入力無し＝列挙不能） | `{challenge, rpId, userVerification:"required"}` |
+| `login` | なし | challenge 消費→`credential_id` で passkey 取得→検証（§5.2。`userHandle` が `accounts.user_handle` と一致すること）→`sign_count`・`backed_up`・`last_used_at` 更新 | `{accountId, token, backedUp}` |
+| `link-room` | token | `matchRoomSecret`（§4.4。**副作用の無い照合**）に通った部屋だけ `INSERT OR IGNORE INTO account_rooms ... SELECT ... WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id=?)`（アカウント存在を同じ文で確認）。直後に封筒を開いて `wk_` と一致することを確かめてから `{ok}`（結びつけた瞬間に復旧できることの検証） | `{ok, backedUp}` |
+| `rooms` | token | 結びついた部屋の一覧。各部屋の `states.state` を読み、**語数・単語帳数・最終更新**を返す（state 本体は返さない。リンク数は数件なので許容） | `[{roomId, linkedAt, stateRev, updatedAt, wordCount, deckCount}]` |
+| `recover-room` | token（**発行から 2 分以内**） | 自分に結びついた部屋なら封筒を開けて秘密を返す。アカウント存在を再確認 | `{roomId, secret}` |
+| `passkeys` | token | 一覧 `[{credentialId, createdAt, lastUsedAt, backedUp}]` | |
+| `remove-passkey` | token（2 分以内） | 最後の 1 つは消せない（アカウント削除を使う） | `{ok}` |
+| `unlink-room` | token（2 分以内） | `account_rooms` の行だけ DELETE | `{ok}` |
+| `delete-account` | token（2 分以内） | `accounts` / `passkeys` / `account_rooms` の行だけ DELETE（1 batch）。**`rooms` / `states` は触らない** | `{ok}` |
 
-`verifyRoomSecret` 等は現在 `wordsnap-state.js` 内の非公開関数。`account.js` から使うには
-**export を足す**（追加のみ・挙動不変。`rateLimitClientKey` が既に export されているのと同じ）。
-Pages Functions でルートにならない共有モジュールの置き方は【要確認】。
+`wordsnap-state.js` からは何も import しない。`account.js` は自前の `matchRoomSecret`（§4.4）とレート制限（§4.6）を持つ。
+`rateLimitClientKey` だけは既に export されているので使ってよい（挙動不変）。
 
-### 4.3 レート制限（既存 `rate_limits` と `consumeV2RateLimit` の流儀を流用。`wordsnap-state.js:330-407`）
+### 4.3 challenge の発行と消費（原子的・期限付き・用途束縛）
 
-| 操作 | 上限（IP、/64 丸め） | 根拠 |
-|---|---|---|
-| `register-options` / `register` | 5 回/時 | 行を作る操作。V2 create の 10/時より厳しく |
-| `login` 失敗 | 10 回/10 分 | `v2-auth-fail` 30/10 分と同系。パスキーは総当たり不能なので主に異常検知 |
-| `link-room` 失敗 | 10 回/10 分 | `wk_` の照合失敗＝V2 認証失敗と同じ性質 |
-| `recover-room` | 20 回/時 ＋ **アカウント単位 20 回/日** | 秘密を返す唯一の経路。IP だけだと IPv6 で回避されうるのでアカウント軸も持つ |
-| 全体（Phase E のメール送信） | `fb-mail` と同じ IP 5/時＋全体 60/時 | `feedback.js:307` |
-
-テーブル未作成・D1 障害時は fail-open（既存と同じ）。ただし `recover-room` だけは **fail-closed**
-（秘密を返す操作で上限を確認できないなら返さない。`feedback-mail.md:42-45` の「送信上限は fail-CLOSED」と同じ理由）。
+- 発行: 32byte 乱数。`INSERT INTO auth_challenges (challenge, purpose, account_id, user_handle, created_at)`。
+- 消費: **1 文で** `DELETE FROM auth_challenges WHERE challenge = ? AND purpose = ? AND created_at > ?`（`?` = now − 10 分）を実行し、
+  `meta.changes === 1` のときだけ続行（`wordsnap-state.js:402` と同じ `meta.changes` の見方）。SELECT→DELETE に分けない
+  （並行 2 リクエストで二重使用できる）。`purpose` 不一致・期限切れ・既消費はすべて同じ 403。
+- `register` の `user_handle` は**消費した行から取る**。クライアントの申告は使わない（登録応答に userHandle は含まれないため、
+  サーバーが発行した値を自分で覚えておく必要がある）。
 
 ### 4.4 既存利用者への後方互換と移行
 
-| 利用者の状態（`syncRequestRoute`, `index.html:21033-21061` の kind） | アカウントを作るまで | アカウントを作るとき | 復旧のとき |
+| 利用者の状態（`syncRequestRoute`, `index.html:21048-21076` の kind） | 控えるまで | 控えるとき | 復旧のとき |
 |---|---|---|---|
-| legacy のみ（`ws_`） | 変化なし | **先に既存の「新方式へ移行」（`op=upgrade`、`states.key` 不変）で部屋を得てから**結びつける。legacy キーそのものは結びつけない（ID と秘密が同一で、封筒に入れると結局 `?w=` と同じ物が二つ目の置き場所に増えるだけ。upgrade は実績のある経路） | 空端末で復旧すると V2 として戻る。`?w=` は消えるが、upgrade 済み部屋は legacy とも dual-accept なので他端末の `?w=` も引き続き動く |
-| legacy＋V2 active | 変化なし | 現在の部屋を結びつける | 同上 |
-| V2 ネイティブ | 変化なし | 同上 | 同上 |
+| legacy のみ（`ws_`） | 変化なし | **先に既存の「新方式へ移行」（`op=upgrade`、`states.key` 不変）で部屋を得てから**結びつける。upgrade は **片道**（`rooms` に `upgraded_from_legacy=1` の行が増え、端末は V2 active になる）。UI にその旨を明記し、「パスキーを外しても upgrade は戻らない」と伝える | 空端末で復旧すると V2 として戻る。upgrade 済み部屋は legacy とも dual-accept なので他端末の `?w=` も引き続き動く |
+| legacy＋V2 active / V2 ネイティブ | 変化なし | 現在の部屋を結びつける | 同上 |
 | アカウント無しのまま | **永久に変化なし**（1.0.139 の案内・帯・キーチェーンもそのまま） | — | 引き継ぎコード |
 
-**両方向の整合**
+**`matchRoomSecret`（副作用の無い照合）**
 
-- 部屋 → アカウント: `account_rooms` は「鍵のコピーの置き場所」であり真実は `rooms`。部屋の認可は変わらないので、
-  アカウントを消しても・結びつけを外しても、部屋とすべての端末は何事も無く動く。
-- アカウント → 部屋: 復旧は `recover-room` が返した `{roomId, secret}` を **`parseV2TransferCode` 経由と同じ
-  形で `joinV2Room` に渡す**。つまり UI 的には「引き継ぎコードを貼り付けた」のと同じ経路で、
-  そこにある確認（`index.html:21908` 付近）・ローカル語数の確認（`:21960` 付近）・pending→active
-  の昇格（`activateV2Credential`, `:21685`）をそのまま使う。**新しい合流経路を作らない**。
-- 復旧は recovery barrier（`sync-v2-phase2-plan.md` 段階3）が `settled` または `inconclusive` に
-  なってから、identity claim（`IDENTITY_CLAIM_KEY`, `index.html:38116`）を取って行う。
-  起動時の自動実行はしない（利用者の明示操作のみ）。
-- 1 アカウントに複数の部屋を結びつけられる。同じ部屋を複数アカウントが結びつけてもよい
-  （結びつけには `wk_` が要るので、部屋に対する権限は増えない）。
+`verifyRoomSecret`（`wordsnap-state.js:478-498`）は、鍵リングの先頭以外で一致したときに `updateAuthHashLazily`
+（`:464-476`、`UPDATE rooms SET auth_hash, auth_kid`）を呼ぶ。鍵ローテーション後にこれを流用すると `rooms` へ書き込みが起き、
+不変条件 1 と矛盾する。`account.js` は**照合だけ**を行う `matchRoomSecret(room, secret, keyRing)`（timing-safe、書き込み無し）を
+自前で持つ。再ハッシュは次に同期本体が通ったときに従来どおり行われる。
 
-### 4.5 配信元（origin）とパスキーの結びつき
+**復旧の合流処理（既存 `joinV2Room` の現実）**
 
-- 本番の配信元は **`https://wordbank.pages.dev` の一つだけ**（【事実】`DISTRIBUTION.md:3`。旧 Netlify は
-  `netlify.toml` で pages.dev へ転送しているだけで、そこで画面は動かない）。`rpId` は **`wordbank.pages.dev`
-  （配信元のホストそのもの）**にする。`rpId` を配信元のホストと同じにする分には Public Suffix List は関係ない
-  （PSL が効くのは `rpId = "pages.dev"` のように親ドメインへ広げるときで、それは禁止される）。
-- パスキーは `rpId` ごとに別物。**デプロイ固有 URL（`<hash>.wordbank.pages.dev`）や Netlify のプレビューで登録した
-  パスキーは本番では使えず、逆も同じ**。よって、
-  - Phase A のスパイクは「API が動くか」をプレビューで確かめてよいが、「登録→消去→復元」の実機検証は
-    **本番ホストで**行う（`docs/browser-e2e.md` の「実データに触れる」注意が当てはまる。検証用の部屋を作って行う）。
-  - 将来、配信元を独自ドメインへ移すときは**既存のパスキーが全部使えなくなる**。移す前に、新旧両ホストで
-    しばらく登録を受け付ける移行期間が要る（本書の範囲外だが、§8 Q1 の独自ドメイン購入とは別に考える）。
-- `localhost` / `127.0.0.1` での開発では `rpId = "localhost"` になる。CSP や `syncServerAvailable()`
-  （`index.html:20848`、http でも同期可と判定）の条件は変えない。
+`joinV2Room`（`index.html:21901`）は引数を取らず入力欄から読み、事前確認は「**別の active V2 部屋を使っているとき**の二度押し」
+（`:21922-21932`）だけで、**ローカルの語数は見ない**。取得した remote を `appState` に**そのまま採用**し（`:21972-21989`）、
+ローカルは `offerUndo` の 1 件に退避するだけ。その後に学習・同期・編集があると取り消しは消える（`performUndoOnce`, `:24341`）。
+よって「既存の確認をそのまま使う」は成り立たない。次のように作る。
+
+1. `joinV2Room` の中身を `adoptV2Room(credential, { onBeforeReplace })` に切り出し、`joinV2Room` はそれを呼ぶだけにする
+   （高リスク関数のシグネチャは変えず、入力欄経由の挙動も不変。`scripts/ai-secret-sync.test.mjs:243-247` の既存テストで固定）。
+2. 復旧は `recover-room` の `{roomId, secret}` から資格情報を組み立て、`adoptV2Room` を呼ぶ。**DOM の入力欄に秘密を書かない**。
+3. `onBeforeReplace`: 端末に語が 1 つでもあれば、置き換える前に必ず選ばせる。
+   「この端末の N 語を捨てて復旧先（M 語）を採用」／「この端末の語を復旧先へ**合流**（`mergeAppStates` で和集合にしてから送信）」／「やめる」。
+   合流を選んだ場合の送信は、既存の初回 PUT と同じ経路（409 → 取り込み → 再送）。
+4. 既存の `offerUndo` も残す。
+5. 復旧は recovery barrier が `settled` / `inconclusive` になってから、identity claim（`IDENTITY_CLAIM_KEY`, `index.html:38153`）を
+   取って行う。起動時の自動実行はしない。
+
+**自動発行された空の部屋との混同**
+
+保存が消えた端末は起動時に空の V2 部屋を自動発行する（`SYNC_V2_NATIVE_DEFAULT`）。その状態で「パスキーで控える」を押すと
+空の部屋が結びつく。復旧画面は `rooms` の語数で**語数の多い順**に並べ、0 語の部屋は「空（この端末で自動発行）」と表示する。
+さらに「控える」操作は**端末に語が 1 つ以上あるときだけ**出す（0 語の部屋を結びつける動機が無い）。
+
+### 4.5 トークン
+
+- `token = base64url(payload) + "." + HMAC-SHA256(ACCOUNT_KEK[0], payload)`、`payload = {accountId, cid, iat, exp}`。
+  `exp = iat + 10 分`。`cid` は認証に使った credential_id。
+- **破壊的・秘密を返す op**（`recover-room` / `remove-passkey` / `unlink-room` / `delete-account`）は `iat` が **2 分以内**
+  のトークンだけ受け付ける（盗まれたトークンで復旧経路を消したり秘密を取り出したりする窓を狭める）。
+- nonce は記録しない（無状態）。再生は 10 分窓の中で同じ op を繰り返せるだけで、各 op は冪等か、アカウント単位の上限（§4.6）で頭打ち。
+- すべての op で `accounts` 行の存在を確認する（`delete-account` 後の 10 分窓で孤児の封筒を作らせない。`link-room` は §4.2 の 1 文で）。
+
+### 4.6 配信元（origin）・rpId・レート制限
+
+**配信元**
+
+- 本番の配信元は **`https://wordbank.pages.dev` の一つだけ**（【事実】`DISTRIBUTION.md:3`。旧 Netlify は転送のみ）。
+  `rpId` は **`wordbank.pages.dev`**（配信元のホストそのもの。PSL は「親ドメインへ広げる」ときだけ関係する）。
+- `ACCOUNT_ORIGINS`（環境変数、既定 `https://wordbank.pages.dev`）を `clientDataJSON.origin` と `Origin` ヘッダの許可リストにする。
+  プレビュー（`<branch>.wordbank.pages.dev`）は同じ Functions と同じ D1（`wrangler.jsonc:14-20`）を共有するので、
+  **許可リストに無いプレビューからの登録は 403 で弾く**。プレビューで検証するときは一時的に追加する。
+- パスキーは `rpId` ごとに別物。独自ドメインへ移すときは既存のパスキーが使えなくなる。WebAuthn Level 3 の
+  Related Origin Requests（`/.well-known/webauthn`。対応ブラウザは【要確認】）で両ホストを同じ `rpId` に束ねる選択肢を、
+  移行のときに比較する（本書の範囲外）。
+
+**レート制限（`account.js` 自前。`consumeV2RateLimit` は流用しない）**
+
+`consumeV2RateLimit`（`wordsnap-state.js:358-412`）は非公開で、規則表 `V2_RATE_LIMITS` に無い op は `rule` が undefined になり
+TypeError を握り潰して**無制限**になる。また失敗時は常に「制限しない」。流用せず、`account.js` に次を持つ。
+
+| 鍵 | 上限 | 窓 | 失敗時 |
+|---|---|---|---|
+| `acct-options:<ip/64>` | 20 | 10 分 | fail-open |
+| `acct-register:<ip/64>` | 5 | 1 時間 | fail-open |
+| `acct-login-fail:<ip/64>` | 10 | 10 分 | fail-open |
+| `acct-link-fail:<ip/64>` | 10 | 10 分 | fail-open |
+| `acct-recover-ip:<ip/64>` | 20 | 1 時間 | **fail-closed** |
+| `acct-recover-acct:<account_id>` | 20 | **24 時間** | **fail-closed** |
+
+- 鍵の接頭辞を op ごとに分け、窓明けの掃除 `DELETE ... WHERE rl_key LIKE '<接頭辞>:%' AND window_start <= ?` が
+  **自分の窓の長さ**で行われるようにする（同じ接頭辞に 1 時間窓と 24 時間窓を混ぜない）。
+- `link-room` の失敗を V2 同期の共有バケット `v2-auth-fail` に入れない（同一 IP の通常同期を 429 にしない）。
+- `*-options` は行を作るので上限を持つ（D1 無料枠の書き込み 10 万行/日を同期と共用しているため。`legacy-create` の教訓 = `wordsnap-state.js:334-338`）。
+- fail-closed の op は、`rate_limits` が読めない・書けないとき 503 を返す（`feedback-mail.md:42-45` と同じ理由）。
 
 ## 5. セキュリティ
 
 ### 5.1 脅威モデル
 
-| 脅威 | 対策 | 備考 |
-|---|---|---|
-| メール乗っ取り（Phase E） | メールは**回復用の副経路**。乗っ取られれば部屋も取られることを UI に明記。追加できる緩和: 回復時に登録済みパスキー全部へ…は無理（通知先が無い）。**メール導入を任意にする**のが最大の緩和 | A 案固有の本質的弱点。導入可否は §8 Q1 |
-| コードの総当たり（Phase E） | 6 桁・有効 10 分・5 回で失効（`attempts`）・`code_hash` のみ保存・IP と宛先の両軸で上限 | 10^6 / 5 回 で推測成功率 5e-6/回 |
-| パスキー認証の偽造 | WebAuthn 署名検証（`rpIdHash` = SHA-256(rpId)、`origin` 一致、`type` 一致、challenge は D1 の行を消費して一度限り）。`fmt:"none"` のみ受理（デバイス証明は見ない＝AAGUID で機種を集めない） | iCloud のパスキーは `sign_count` を常に 0 で返す（【要確認】）ため、**減少は記録のみで拒否しない** |
-| セッション窃取 | トークンは 10 分・メモリのみ（localStorage に書かない）・同期本体には使わない。盗まれても `recover-room` のアカウント単位上限が効く | 長期セッションを持たないことが最大の防御 |
-| CSRF | Cookie を使わない（トークンはヘッダ）。`Origin` / `Sec-Fetch-Site` 同一オリジン確認。CSP `form-action 'self'`（`_headers:39`） | 既存 API と同じ |
-| 列挙攻撃 | `login-options` はユーザー名を取らない（discoverable credential）。`login` 失敗・未知の credential・結びつけ失敗は**同一の 403**（V2 の 403 統一と同じ。`sync-auth-v2-design.md:50`）。Phase E のメール送信は存在有無で応答を変えない | `register` でメールの重複を教えない |
-| D1 ダンプ | `secret_env` は環境変数の鍵リング `ACCOUNT_KEK` で封じる。公開鍵・ハッシュのみ平文 | `SYNC_AUTH_SECRETS` と同じ `[{kid, secret}]` 形式でローテーション可（lazy re-wrap） |
-| 運営 | **運営は `wk_` を復号できる**。ただし運営は現在も全リクエストの `x-room-key` で `wk_` を受け取っている（`sync-auth-v3-design.md:19-27`）ので、信頼境界は変わらない。UI には「運営が読めません」とは書かない | 将来: パスキーの PRF 拡張（iOS 18 以降【要確認】）で封筒の鍵を端末側に移せば運営から秘匿できる。本書では採らない（対応環境が狭く、PRF が使えない端末で復旧不能になる） |
-| XSS | 既存のハッシュ型 CSP（`docs/csp-hashes.md`）。新しい `<script>` を足せば `npm run sync:html` でハッシュが追従する | 変化なし |
-| 秘密の漏れ出し | テレメトリの `redactSecrets`（`functions/api/telemetry.js:57, 91`）に `wa_`・トークン・challenge のパターンを追加。クライアント側の伏せ字処理（`index.html:20863` 付近の `wv_` 判定と同系）にも追加 | 1.0.42 の「`wv_` の redaction」と同じ漏れを繰り返さない |
-| 無料枠の消費攻撃 | `register` は行を作るので 5/時。`auth_challenges` は 10 分で掃除し、作れる行数を IP 上限で頭打ちにする | `legacy-create` の教訓（`wordsnap-state.js:333-338`） |
+| 脅威 | 対策 |
+|---|---|
+| パスキー認証の偽造 | §5.2 の検証手順。challenge は 1 文で消費（§4.3） |
+| セッション窃取 | 10 分・メモリのみ・破壊的 op は 2 分以内・同期本体には使わない・アカウント単位の上限 |
+| CSRF | Cookie を使わない（トークンはヘッダ）。`Origin` の許可リスト照合。CSP `form-action 'self'`（`_headers:39`） |
+| 列挙攻撃 | `login-options` はユーザー名を取らない。`login` 失敗・未知の credential・結びつけ失敗・challenge 不正はすべて同じ 403 |
+| D1 ダンプ・バックアップ | `secret_env` は `ACCOUNT_KEK` で封じる。**KEK も漏れると全封筒が一括で開く**（§5.3） |
+| XSS | 既存のハッシュ型 CSP（`docs/csp-hashes.md`）。`npm run sync:html` でハッシュが追従 |
+| 秘密の漏れ出し | テレメトリの `redactSecrets`（`functions/api/telemetry.js:57, 91`）と `feedback.js` の伏せ字、クライアント側の伏せ字処理（`index.html:20863` 付近）に `wa_`・トークン・challenge のパターンを追加（却下された指摘にあった「feedback.js は独立実装」も確認する） |
+| 無料枠の消費攻撃 | `*-options` と `register` の上限（§4.6）、`auth_challenges` の上限付き掃除 |
+| 端末固定のパスキー | `backed_up`（BS フラグ）を保存し、同期されていないパスキーしか無いアカウントには UI で警告（§7 Phase C） |
 
-### 5.2 既存設計との矛盾と更新箇所
+### 5.2 WebAuthn 検証手順（サーバー。登録・認証に共通する部分は 1 つの関数にする）
+
+1. `clientDataJSON` を受信バイト列のまま保持し、JSON として解釈。`type` が `webauthn.create` / `webauthn.get` のうち期待する方、
+   `challenge` が消費した行の値、`origin` が `ACCOUNT_ORIGINS` に含まれること。
+2. `authenticatorData`（登録時は `attestationObject` の CBOR から `authData`）: `rpIdHash == SHA-256(rpId)`、
+   **UP = 1 と UV = 1**（`userVerification:"required"` と対にする）、BE/BS を読んで `backed_up` に保存、`signCount` を読む。
+3. 登録: `fmt` が `none` のみ。`attStmt` は空であること。COSE 公開鍵の `kty`/`alg` が `pubKeyCredParams` で許した組
+   （EC2 P-256 ＋ ES256、または RSA ＋ RS256）に一致すること。`credential_id` の重複は 409 相当の同じ 403。
+4. 認証: 署名対象は **`authenticatorData || SHA-256(clientDataJSON の受信バイト列)`**。ES256 の署名は **ASN.1 DER**
+   なので **r||s（IEEE P1363、各 32 byte）へ変換してから** `crypto.subtle.verify`。RS256 はそのまま。
+   `response.userHandle` が `accounts.user_handle` と一致すること。
+5. `sign_count`: Apple のパスキーは常に 0 を返す（【要確認】Phase A で実測）。**減少しても拒否せず記録だけ**。
+6. 失敗はすべて同じ 403。成功時だけ `last_used_at` 等を更新。
+
+### 5.3 `ACCOUNT_KEK` の運用（信頼境界の変化を正直に書く）
+
+- 形式は `SYNC_AUTH_SECRETS` と同じ `[{kid, secret}]` の鍵リング。封筒は先頭鍵で作り、開くときは `env_kid` で選ぶ。
+  ローテーションは「新鍵を先頭に足す → 開けたときに先頭鍵で包み直す（lazy re-wrap）→ 全行が新 kid になったら旧鍵を外す」。
+- **保管**: Cloudflare のシークレットは設定後に読み戻せない。生成した値は運営者のパスワードマネージャに控える。
+  KEK を失うと全封筒が開けなくなり、復旧経路が一括で消える（部屋と単語は無傷。利用者は引き継ぎコードで戻れる）。
+- **未設定・解析失敗**: 全 op を 503（登録だけ通す中途半端な状態を作らない）。
+- **信頼境界**: 現状、D1 に残るのは `auth_hash`（HMAC）だけで、D1 のエクスポートやバックアップだけでは `wk_` は取れない。
+  封筒を持つと「D1 ＋ KEK」の両方が漏れた場合に、休眠中を含む全結びつけ部屋の `wk_` が一括で復号できる。
+  実行時の運営者は今も `x-room-key` で `wk_` を受け取っているので、**実行時**の境界は変わらないが、**保存時**の露出は増える。
+  これを受け入れるのが本設計の前提（§8 決定 7 の文言で UI に反映）。
+- `delete-account` で封筒を消しても、D1 の Time Travel／バックアップには残りうる（`data-retention.md` の削除の節と同じ注記を足す）。
+
+### 5.4 既存設計との矛盾と更新箇所
 
 | 既存の記述 | 本設計との関係 | 更新 |
 |---|---|---|
-| `sync-auth-v2-design.md:61`「サーバーが secret を発行・返却することはない」 | `recover-room` は**本人認証後に**保存済み secret を返す。発行はしない | 「create / upgrade では」と限定し、本書を参照させる |
-| `sync-auth-v2-design.md:81`「localStorage 消去時は引き継ぎコードが唯一の復旧手段」 | パスキーが2つ目の手段になる | 「唯一」を削り本書を参照 |
-| `../docs/FREE-OPERATIONS-HARDENING-SPEC.md` §6 SYNCSEC-011「運営者による裏口復旧は設けない」 | 復旧は**利用者自身の認証**を通る。運営が手で鍵を渡す経路は作らない。矛盾しないが、誤読されやすい | 「アカウント経由の本人認証による復旧は裏口に当たらない」と注記。§6 自体は V2 実装（`wr_`/`wk_`）で部分的に置き換わっており、その旨も追記 |
-| `ai-secret-sync-design.md` §5「vault key はサーバーへ送らない」 | 守る。`account_rooms` に `wv_` 列は無い | §5.2 の表に「アカウント復旧＝2要素コードで合流と同じ」を1行追加 |
-| `data-retention.md` の表 | 新テーブルの保持方針が無い | 4 行追加（§4.1） |
-| `migrations/README.md`・`wrangler.jsonc` のコメント | 0008 が無い | 行追加 |
+| `sync-auth-v2-design.md:61`「サーバーが secret を発行・返却することはない」 | `recover-room` は本人認証後に保存済み secret を返す。発行はしない | 「create / upgrade では」と限定し本書を参照 |
+| `sync-auth-v2-design.md:81`「localStorage 消去時は引き継ぎコードが唯一の復旧手段」 | パスキーが 2 つ目の手段 | 「唯一」を削り本書を参照 |
+| `../docs/FREE-OPERATIONS-HARDENING-SPEC.md` §6 SYNCSEC-011「運営者による裏口復旧は設けない」 | 復旧は利用者自身の認証を通る。運営が手で鍵を渡す経路は無い | 「本人認証による復旧は裏口に当たらない」と注記 |
+| `ai-secret-sync-design.md` §5「vault key はサーバーへ送らない」 | 守る。`account_rooms` に `wv_` 列は無い | §5.2 の表に 1 行追加 |
+| `data-retention.md` の表・削除の節 | 新テーブルの保持方針と Time Travel の注記が無い | 4 行追加 |
+| `migrations/README.md`・`wrangler.jsonc` | 0008 が無い | 行追加 |
 
 ## 6. データ保全
 
-### 6.1 不変条件（1つでも破れば実装は出荷しない）
+### 6.1 不変条件（1 つでも破れば出荷しない）
 
-1. **`account.js` は `states` / `state_revisions` / `rooms` に書かない。** 読むのは `rooms`（照合）と
-   `states`（`stateRev` / `updatedAt`）だけ。削除文は `accounts` / `passkeys` / `account_rooms` /
-   `auth_challenges` にしか無い。
-2. **結びつけ・復旧・外す・アカウント削除のどれも `rooms.auth_hash` を変えない**（rekey しない）。
-   よって既存端末が締め出されることは無い。
-3. **復旧した端末が自動で PUT しない。** 復旧は `joinV2Room` の既存経路を通り、ローカルに語がある
-   ときの確認、`readRow` の破損判定（`wordsnap-state.js:220-233`、空で上書きしない）をそのまま使う。
-4. **取り消せる。** 結びつけを外す／アカウントを削除すると、サーバーも端末も「アカウントを作る前」と
-   同じ状態になる。部屋・単語・履歴は一切変わらない。
+1. **`account.js` は `states` / `state_revisions` / `rooms` に一切書かない。** 読むのは `rooms`（照合）と `states`（一覧の語数）だけ。
+   照合は副作用の無い `matchRoomSecret`（§4.4）で行う。削除文は自分の 4 テーブルにしか無い。
+2. **結びつけ・復旧・外す・削除のどれも `rooms.auth_hash` を変えない**（rekey しない）。既存端末は締め出されない。
+3. **復旧した端末が黙って送信・置換しない。** 端末に語があれば §4.4 の 3 択を必ず経る。空上書きの防御（`readRow` の破損判定、
+   `wordsnap-state.js:220-233`）はそのまま効く。
+4. **アカウントの操作は取り消せる。** 結びつけを外す／削除すると、`accounts` / `passkeys` / `account_rooms` は作る前と同じになる。
+   部屋・単語・履歴は変わらない。**legacy 利用者の upgrade は片道**で、これは本不変条件の対象外（§4.4 で UI に明記）。
 5. **legacy `?sync=` の応答はバイト同一**（既存の恒久ゲート。`sync-auth-v2-design.md:103`）。
-6. **アカウント無しの端末の localStorage キー集合・送信 URL・UI 表示は変更前と完全一致**
-   （Phase 2 の受入条件 1 と同じ流儀。`sync-v2-phase2-design.md:74`）。
-7. **フラグ OFF（`ACCOUNTS_ENABLED` 未設定）では新経路は 503 だけを返し、他の API に影響しない。**
+6. **アカウント無しの端末の localStorage キー集合と送信 URL 集合は変更前と完全一致。** UI は「パスキーで控える」の節と
+   復元案内のボタンが**対応環境でだけ**増える（`PublicKeyCredential` と `isUserVerifyingPlatformAuthenticatorAvailable()` の両方が真）。
+   非対応環境（Safari 16 未満を含む。本リポジトリは Safari 13.1 系を下限に維持 = `check-release.mjs:1524-1528`）では要素数も不変。
+   クライアントはサーバーのフラグを**探りに行かない**（送信 URL 集合を変えないため）。節を開いて操作したときの 503 で「準備中」を出す。
+7. **フラグ OFF / KEK 未設定では新経路は 503 だけを返し、他の API に影響しない。**
 
 ### 6.2 テスト方針（`scripts/*.test.mjs` の流儀）
 
 | 検査 | 手段 | 既存の手本 |
 |---|---|---|
-| migrations が実 SQLite に当たる・何度当てても壊れない | `createTestDatabase()`（`scripts/sqlite-d1.mjs`） | `d1-integration.test.mjs:46-72`。**`tableNames` の完全一致リストを 10 テーブルへ更新**（`:49-51`） |
-| スキーマ参照のずれ | `schema-drift.test.mjs` が `account.js` の SQL を自動で拾う | 追加作業なし（`functions/api/*.js` を走査） |
-| API 契約 | **実 SQLite（`node:sqlite`）で `account.js` の `onRequest` を直接呼ぶ**。FakeD1 は新 SQL を解釈できず「スタブが防御を素通りさせる」（`data-retention.md:113-118`）ため、新規テーブルは実 SQLite を主にする | `d1-integration.test.mjs`、`feedback-mail.test.mjs:78-80` |
-| WebAuthn 検証 | テスト内に **FakeAuthenticator**（Node の WebCrypto で P-256 鍵を作り、`authenticatorData`・`clientDataJSON`・CBOR の `attestationObject` を組み立てて署名）。正常系、`rpIdHash` 不一致、`origin` 不一致、challenge 再利用、`type` 不一致、未知 `fmt`、`UP` 無し、`sign_count` 減少（拒否しないこと） | 新規 |
-| 不変条件 1・2 | FakeD1 流に全 SQL を記録し、`states` / `rooms` への INSERT/UPDATE/DELETE が **0 件**であることを断定。加えてソースの静的 grep（`telemetry-contract.test.mjs` の「対象が telemetry だけ」検査と同じ） | `data-retention.md:100-103` |
-| 不変条件 3・4 | クライアント: `extractFunction` で復旧ハンドラを切り出し、`joinV2Room` を呼ぶこと・`localStorage.setItem` / `syncState.* =` を直接行わないことを `assert.doesNotMatch` | `empty-start-recovery.test.mjs:88-91` |
-| 不変条件 6 | アカウント UI 要素の `data-identity-visible` 相当の計数が、legacy / legacy+V2 / native で変更前と同数 | `sync-v2-phase2-plan.md` 段階2「表示要素数の実測」 |
-| レート制限 | 実 SQLite 上で上限到達→429、`recover-room` の fail-closed | `feedback-mail.test.mjs` |
-| リリース検査 | `package.json` `scripts.test` への列挙（`check-release.mjs:62`）、`type="button"`（`:368`）、後読み正規表現禁止（`:1528`）、CSP ハッシュ照合 | 既存ゲート |
-| 実機 | iPhone ホーム画面アプリで 登録→サイトデータ消去→復元 を通す。パスキーは `rpId` ごとなので**本番ホストで検証用の部屋を使う**（§4.5）。SW が旧 HTML を配る罠（`sync-v2-phase2-plan.md:60-61`）は、フッターの版表示で配信版を確かめて避ける | `docs/browser-e2e.md` |
+| migrations が実 SQLite に当たる・再適用で壊れない | `createTestDatabase()` | `d1-integration.test.mjs:46-72`。`tableNames`・`indexNames`・件数 6→10 の 3 か所を更新 |
+| スキーマ参照のずれ | `schema-drift.test.mjs` が `account.js` の SQL を自動で拾う | 追加作業なし |
+| API 契約 | **実 SQLite で `account.js` の `onRequest` を直接呼ぶ**（FakeD1 は新 SQL を解釈できない = `data-retention.md:113-118`） | `d1-integration.test.mjs`、`feedback-mail.test.mjs` |
+| WebAuthn 検証 | **Phase A で実機から採った登録・認証データ**（DER 署名のまま）をフィクスチャとして保存し、それが通ること。加えて FakeAuthenticator（Node の WebCrypto で P-256 鍵を作り、CBOR の `attestationObject` を組み立て、**署名は r\|\|s から DER へ変換して**出す）で、`rpIdHash` 不一致・`origin` 不一致・challenge 再利用・`purpose` 不一致・期限切れ・`type` 不一致・未知 `fmt`・UP/UV 無し・`userHandle` 不一致・`alg` 不一致・`sign_count` 減少（拒否しない）を網羅 | 新規 |
+| challenge の原子性 | 同じ challenge で 2 リクエストを同時に流し、1 つだけ通る | 新規 |
+| トークン | `delete-account` 後の `link-room` が 403、`iat` 2 分超の `recover-room` が 403 | 新規 |
+| 不変条件 1・2 | 全 SQL を記録し、`states` / `rooms` への INSERT/UPDATE/DELETE が **0 件**。**鍵リングを 2 本にして旧鍵で作った部屋**でも 0 件。ソースの静的 grep も併用（対象は `account.js` 全文） | `data-retention.md:100-103` |
+| KEK | 鍵リングのローテーションで lazy re-wrap が起き、旧鍵を外した後も開けること。KEK 未設定で全 op が 503 | 新規 |
+| 不変条件 3・4 | `adoptV2Room` の `onBeforeReplace` が端末に語があるとき必ず呼ばれ、「やめる」で何も変わらないこと。`joinV2Room` 経由の既存挙動が不変（`ai-secret-sync.test.mjs:243-247`） | `empty-start-recovery.test.mjs` |
+| 不変条件 6 | 非対応環境（`PublicKeyCredential` 無し）での表示要素数・localStorage キー集合・fetch URL 集合が変更前と同一 | `sync-v2-phase2-plan.md` 段階 2 |
+| レート制限 | 実 SQLite 上で各鍵の上限到達→429、`recover-room` の fail-closed（`rate_limits` を読めない状況で 503） | `feedback-mail.test.mjs` |
+| テレメトリ | `account-register` / `account-link` / `account-recover-success` / `account-recover-fail` を `USAGE_NAMES`（`index.html:7444`）に追加。`telemetry-contract.test.mjs` の許可リスト検査 | 既存 |
+| リリース検査 | `package.json` `scripts.test` への列挙、`type="button"`、後読み正規表現禁止、CSP ハッシュ照合 | 既存ゲート |
+| ブラウザ E2E | Chrome DevTools の virtual authenticator（Playwright の `WebAuthn` CDP）で 登録→保存消去→復元 | `docs/browser-e2e.md` |
+| 実機 | iPhone ホーム画面アプリで 登録→サイトデータ消去→復元 を**本番ホスト**で検証用の部屋を使って通す（§4.6）。フッターの版表示で配信版を確かめる | `docs/browser-e2e.md` |
 
 ## 7. 段階的なリリース計画
 
-版番号は `docs/VERSIONS.md:7-8` の規則どおり、`publish/` か `functions/` を変える段階だけ `z` を進める。
-Phase A と設計書は進めない。各段階は単独でデプロイ・検証・ロールバックできる。
+版番号は `docs/VERSIONS.md:7-8` の規則どおり、`publish/` か `functions/` を変える段階だけ `z` を進める。各段階は単独でデプロイ・検証・ロールバックできる。
 
 | Phase | 内容 | 受入条件 | ロールバック |
 |---|---|---|---|
-| **A. スパイク（コード配信なし）** | デプロイ固有 URL に最小ページを置き、iPhone ホーム画面アプリで `navigator.credentials.create/get` が動くか（対応 iOS の下限も）、Apple のパスキーが返す `sign_count` の挙動、Workers で CBOR/COSE→`crypto.subtle.verify` が通るかを確認。`rpId` はプレビューではそのホスト名になる（§4.5） | 3 点が実機で確認でき、結果を本書 §2 の【要確認】に反映 | 捨てる。失敗なら本設計は B を落として再検討 |
-| **B. サーバー（フラグ OFF）** | 0008 適用、`account.js`、`wordsnap-state.js` への export 追加、テスト、redaction 追加。`ACCOUNTS_ENABLED` 未設定のまま配信 | `npm test` 緑。legacy スナップショット同一。本番で全 op が 503。`rooms`/`states` 無変更の静的検査が緑 | Function を戻す（テーブルは残してよい。追加型） |
-| **C. クライアント（任意機能・試験的）** | 設定「データの保存・引き継ぎ」に「パスキーで控える（試験的）」節。`PublicKeyCredential` 非対応なら節ごと非表示。復元案内（`showRecoveryPrompt`）に「パスキーで復元」を追加（対応環境のみ）。フラグ ON | 不変条件 1〜7 のテスト緑。アカウント無し端末の表示要素数が不変。実機で 登録→消去→復元 成功。復元後の `stateRev` が消去前と一致（空上書きが起きていない） | フラグ OFF（既存アカウントの復旧は 503 になるが部屋は無傷。利用者は引き継ぎコードで戻れる）。クライアントの節は非表示に戻す |
-| **D. 導線の既定化** | 初回同期成功後の「引き継ぎコードを控えてください」提示（段階4）に「パスキーで控える」を**第一候補**として並べる。結びつけ成功を `markV2CodeSavedFor` 相当の「控え済み」とみなすかは §8 Q3 | テレメトリで `account-register` / `account-recover-success` を観測。1 週間で復旧失敗の報告が無い | 提示順を戻すだけ |
-| **E. メール回復（任意・別途判断）** | 独自ドメイン取得・Resend/Brevo の設定後、0009・`account_emails`・送信・コード検証。**本書の rev1 として再レビュー** | §8 Q1 が Yes のときだけ着手 | フラグで送信停止 |
+| **A. スパイク（本番に出さない）** | ブランチ `spike/passkey` の検証ページを iPhone ホーム画面アプリで操作: `create/get` が動くか（対応 iOS の下限）、Apple のパスキーの `sign_count`、BE/BS の値、**通信を挟んだ `get`**（click → fetch → get で transient activation が切れないか）、**バックグラウンドから戻った直後の `get`**、iCloud キーチェーンを切った状態の登録。採った生データを Node（Workers と同じ WebCrypto）で検証し、DER→r\|\|s 変換込みで署名が通ること | 上記が実機で確認でき、結果と生データ（フィクスチャ）を §2・§5.2・§6.2 に反映 | 捨てる。失敗なら B を落として §2 E 案を再検討 |
+| **B. サーバー（フラグ OFF）** | 0008、`account.js`、レート制限、redaction 追加、テスト。`ACCOUNTS_ENABLED` 未設定のまま配信 | `npm test` 緑。legacy スナップショット同一。本番で全 op が 503。不変条件 1・2 の記録テスト（鍵ローテーション込み）が緑 | Function を戻す（テーブルは残してよい） |
+| **C. クライアント（任意機能・試験的）** | 設定「データの保存・引き継ぎ」に「パスキーで控える（試験的・iPhone で最も確実）」節（対応環境のみ）。`adoptV2Room` の切り出しと 3 択の確認。復元案内に「パスキーで復元」（対応環境のみ）。パスキーの追加・一覧・削除。端末固定のパスキーしか無いときの警告。フラグ ON | 不変条件 1〜7 のテスト緑。非対応端末の表示要素数が不変。実機で 登録→消去→復元 成功。復元後の `stateRev` が消去前と一致。語のある端末で 3 択が出る | フラグ OFF（既存アカウントの復旧は 503。部屋は無傷。引き継ぎコードで戻れる）。クライアントの節は 503 を受けて「準備中」表示。**未控えの帯は §7.1 の規則で自動的に戻る** |
+| **D. 導線** | 初回同期成功後の「引き継ぎコードを控えてください」の提示に「パスキーで控える」を第一候補として並べる。結びつけ成功と帯の関係は §7.1 | テレメトリで `account-register` / `account-recover-success` を観測。1 週間で復旧失敗の報告が無い | 提示順を戻すだけ |
 
-デプロイ順序は `migrations/README.md`「適用手順」と同じ: ローカル→`--remote` で 0008 を当ててから Function を配信
-（`account.js` はテーブル不在時に 503 を返すので逆順でも壊れないが、順序は固定する）。
+（Phase E メール回復は §8 決定 1 で不採用。）
+
+デプロイ順序は `migrations/README.md`「適用手順」と同じ: ローカル→`--remote` で 0008 → Function。
+
+### 7.1 未控えの帯と「控え済み」の扱い（§8 決定 3 の具体化）
+
+- 結びつけ成功は **`V2_CODE_SAVED_KEY`（`index.html:21454`）には書かない**。この印は `wv_` を含む引き継ぎコードの保管状態を表し、
+  アカウントは `wv_` を持たないので、立てると「AI キーの封筒が復号不能になる」警告まで消してしまう。
+- 代わりに `wordsnap-passkey-linked:v1`（`{roomId, backedUp, checkedAt}`）を持ち、帯は次のときだけ隠す:
+  **現在の部屋が結びつき済み、かつ `backedUp` が真（iCloud 等へ同期されたパスキー）、かつ最後のアカウント op が 503 でない**。
+  端末固定のパスキーしか無いとき・フラグ OFF のときは帯が戻る（守られていると誤認させない）。
+- `wv_` の注意（`shouldPromptVaultKeyBackup`）は従来どおり引き継ぎコードの保管でしか消えない。
+- 設定の引き継ぎコード節に「パスキーを失うと戻れません。引き継ぎコードも別に控えると安心です」を 1 行残す（決定 3）。
 
 ## 8. 論点と決定（決める人＝利用者。2026-10-21 に 1・2・3・6 を決定）
 
 | # | 決定 | 設計への反映 |
 |---|---|---|
-| 1 | **メール回復はやらない**。匿名を保つ。パスキーを失ったら引き継ぎコード頼みと割り切る | Phase E を落とす。§3 は「パスキー主・引き継ぎコードが最後の手段」の2層になる。`account_emails` 等は作らない |
-| 2 | 対応環境なら誰でも使えるが、**「iPhone（iCloud キーチェーン）で最も確実」と明記** | Phase C の説明文に入れる。`PublicKeyCredential` 非対応なら節を出さない |
-| 3 | 結びつけたら未控えの帯と注意を**消す**。「パスキーを失うと戻れない」旨は設定に残す | 結びつけ成功で `markV2CodeSavedFor` 相当の控え済みにする。設定の引き継ぎコード節に注意文を1行足す |
-| 6 | **`wv_` は復旧対象外**（サーバーへ送らない設計を守る） | §3 のとおり。復旧後の AI キーは再入力 |
-| 5・7・8 | 本書の提案どおり（削除は結びつけと封筒だけ／「運営も読めません」とは書かない／呼び名は「パスキーで控える」） | — |
+| 1 | **メール回復はやらない**。匿名を保つ。パスキーを失ったら引き継ぎコード頼みと割り切る | Phase E を落とす。`account_emails` 等は作らない。代わりに複数パスキーの追加（§4.2）を冗長化の手段にする |
+| 2 | 対応環境なら誰でも使えるが、**「iPhone（iCloud キーチェーン）で最も確実」と明記** | Phase C の説明文。非対応なら節を出さない |
+| 3 | 結びつけたら未控えの帯と注意を**消す**。「パスキーを失うと戻れない」旨は設定に残す | §7.1（同期済みパスキーのときだけ消す。`wv_` の注意は別） |
+| 6 | **`wv_` は復旧対象外** | §3 のとおり。復旧後の AI キーは再入力 |
+| 5・7・8 | 本書の提案どおり（削除は結びつけと封筒だけ／「運営も読めません」とは書かず「同期サーバーは今までも鍵を受け取っています。保存のしかたが 1 つ増えます」とする／呼び名は「パスキーで控える」） | — |
 
-以下は決定前の論点の記録。
+**まだ決めていないこと（Phase B までに確認）**
 
-1. **メールアドレスを持ってよいか。** 現状の完全匿名を捨てることになる。持つなら独自ドメイン（年 US$10 前後【要確認】）を
-   買う意思があるか。→ No なら Phase E を落とし、パスキー紛失＝引き継ぎコード頼みと割り切る。
-2. **Apple 以外の利用者をどう扱うか。** Android/PC ではパスキーの保存先が Google パスワードマネージャ等になり、
-   復旧の確実さは環境次第。「iPhone 向けの機能」と明記して出すか。
-3. **アカウントを結びつけたら、未控えの帯（`V2_CODE_SAVED_KEY`, `index.html:21439`）を消すか。**
-   提案: 消す。ただし「パスキーを失うと戻れない」旨を設定に残す。
-4. **運営の本人確認をどこまで求めるか。** パスキーのみだと運営は「アカウント `wa_…` に部屋が結びついている」までしか
-   分からず、本人へ連絡もできない。問い合わせ対応で何をしたいか（例: 「私の部屋はまだありますか」に答えるだけなら
-   roomId を聞けば今でも答えられる）。
-5. **アカウント削除の意味。** 提案: 結びつけと鍵の封筒だけ消し、部屋と単語は残す（部屋の削除は別機能）。
-   「アカウントを消したのにデータが残っている」と誤解されないよう文言を要確認。
-6. **`wv_`（AIキー封筒）を諦めてよいか。** 復旧後は AI キーを再入力し、金庫鍵を新規生成する（他端末は新しい
-   引き継ぎコードが要る）。これを受け入れるか、PRF 拡張の普及を待って別設計にするか。
-7. **運営が `wk_` を復号できることを UI にどう書くか。** 提案: 「同期サーバーは今までも鍵を受け取っています。
-   アカウントでそれが増えることはありません」。「運営も読めません」とは書かない（`sync-auth-v3-design.md` 2.1）。
-8. **呼び名。** 「アカウント」はログイン必須を連想させる。「パスキーで控える」「iPhone に鍵を預ける」など、
-   任意機能であることが伝わる言い方にするか。
+- `ACCOUNT_KEK` の保管者（運営者本人のパスワードマネージャでよいか）と、紛失時の方針（「全員が引き継ぎコードで戻る」でよいか）。
+- 1 つの部屋を複数アカウントが結びつけてよいか（結びつけには `wk_` が要るので権限は増えないが、`wk_` 漏洩時に攻撃者のアカウントが
+  恒久的に結びつく。提案: 許容するが、設定の「結びつき一覧」で部屋側から見えるようにはしない＝仕様外）。
+- 検証用の部屋を本番ホストで作る手順（`docs/browser-e2e.md` の注意に従う）。
 
-## 9. 概算の作業量（【推測】。人日は実装＋テスト＋レビュー対応を含む）
+## 9. 概算の作業量（【推測】。実装＋テスト＋レビュー対応を含む）
 
 | Phase | 作業量 | 主な不確実性 |
 |---|---|---|
-| A | 0.5〜1 日 | 実機でしか分からない。失敗すれば以降が変わる |
-| B | 3〜5 日 | CBOR/COSE 解釈と FakeAuthenticator の作り込み。既存 helper の export 判断 |
-| C | 3〜5 日 | 3.8 万行の `index.html` への UI 追加、standalone 固有の罠、a11y 検査、CSP ハッシュ追従、表示要素数の不変テスト |
-| D | 1〜2 日 | 文言と提示順の調整 |
-| E | 3〜4 日 ＋ ドメイン取得・DNS・送信プロバイダ設定（別作業） | 到達率（迷惑メール判定）、プライバシー表記 |
-| 合計（E 除く） | **8〜13 日** | |
+| A | 0.5〜1 日（利用者の実機操作を含む） | 実機でしか分からない。失敗すれば以降が変わる |
+| B | 4〜6 日 | CBOR/COSE・DER 変換・FakeAuthenticator・自前のレート制限・KEK ローテーション |
+| C | 4〜6 日 | `adoptV2Room` の切り出しと 3 択、3.8 万行の `index.html` への UI 追加、standalone 固有の罠、a11y、不変条件 6 のテスト |
+| D | 1〜2 日 | 文言と提示順 |
+| 合計 | **10〜15 日** | |
+
+実装の分担（記憶 `model-roles` のとおり）: B・C は高リスク実装として **Opus が実装**、Codex gpt-6.1-sol max ＋ Sonnet でレビュー、Fable が判断。
 
 ---
 
-本書で確認していないこと: iOS standalone での WebAuthn 可否（対応版の下限）、Apple パスキーの `sign_count` 挙動、
-Cloudflare `send_email` の宛先制約、各メール送信サービスの無料枠。いずれも Phase A または Phase E 着手前に一次情報で確かめる。
+本書で確認していないこと: iOS standalone での WebAuthn 可否（対応版の下限）、Apple パスキーの `sign_count` と BE/BS の実値、
+Related Origin Requests の対応状況、Cloudflare 側のメール送信機能の現状。いずれも Phase A または該当フェーズの着手前に一次情報で確かめる。
