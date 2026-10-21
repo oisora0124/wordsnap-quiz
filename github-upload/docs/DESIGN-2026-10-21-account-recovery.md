@@ -1,7 +1,8 @@
 # パスキーによる復旧（「パスキーで控える」）設計書
 
-作成: 2026-10-21 / 状態: **rev2・未実装**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol max、
-Haiku→上位モデルで反証）に掛け、生き残った 29 件（高 0・中 18・低 11）を反映した。設計の担当は Fable。
+作成: 2026-10-21 / 状態: **rev3・未実装**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol xhigh、
+Haiku→上位モデルで反証）に掛け、生き残った 29 件（高 0・中 18・低 11）を rev2 で反映。rev2 を Codex gpt-6.1-sol xhigh で
+再確認し、部分的 4 件と新規 6 件（高 3）を rev3 で反映した。設計の担当は Fable。
 リスク区分: **高**（同期・データ移行・セキュリティ。CLAUDE.md の高リスク領域）。
 
 凡例: 【事実】はリポジトリの該当箇所または公式情報に根拠がある。【推測】は根拠が無い判断。
@@ -106,6 +107,7 @@ CREATE TABLE IF NOT EXISTS passkeys (
   public_key    TEXT NOT NULL,              -- COSE 公開鍵（base64url）。登録時に alg -7 (ES256) / -257 (RS256) のみ受理
   alg           INTEGER NOT NULL,
   sign_count    INTEGER NOT NULL DEFAULT 0,
+  backup_eligible INTEGER NOT NULL DEFAULT 0, -- 登録時の BE フラグ（同期できるパスキーか。以後の認証で一致を検査）
   backed_up     INTEGER NOT NULL DEFAULT 0, -- 最後に見た authenticatorData の BS フラグ（同期済みパスキーか）
   created_at    INTEGER NOT NULL,
   last_used_at  INTEGER NOT NULL DEFAULT 0
@@ -147,12 +149,12 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
 |---|---|---|---|
 | `register-options` | なし | `account_id`・`user_handle` を**サーバーで生成して challenge 行に保存** | `{rp:{id,name}, user:{id:user_handle, name:"WordBank", displayName:"WordBank"}, challenge, pubKeyCredParams:[-7,-257], authenticatorSelection:{residentKey:"required", userVerification:"required"}, attestation:"none", excludeCredentials:[]}` |
 | `register` | なし | challenge 消費（§4.3）→ 検証（§5.2）→ `accounts`（`user_handle` は challenge 行の値）＋`passkeys` を **1 batch** で INSERT | `{accountId, token}` |
-| `add-passkey-options` | token | 同上。`excludeCredentials` に既存の credential_id を入れる（同じ認証器での二重登録を防ぐ） | 同上 |
-| `add-passkey` | token | challenge 消費→検証→`passkeys` INSERT（`user_handle` は accounts の既存値） | `{ok}` |
+| `add-passkey-options` | token（**2 分以内**） | challenge 行に `account_id = token.accountId` を保存。`excludeCredentials` に既存の credential_id | 同上 |
+| `add-passkey` | token（**2 分以内**） | challenge 消費の条件に `account_id = token.accountId` を含める（§4.3）→検証→`passkeys` INSERT（`user_handle` は accounts の既存値。**1 アカウント 10 本まで**、上限は INSERT 文の条件で原子的に） | `{ok}` |
 | `login-options` | なし | challenge 保存。`allowCredentials` は**空**（discoverable credential。ユーザー名入力無し＝列挙不能） | `{challenge, rpId, userVerification:"required"}` |
 | `login` | なし | challenge 消費→`credential_id` で passkey 取得→検証（§5.2。`userHandle` が `accounts.user_handle` と一致すること）→`sign_count`・`backed_up`・`last_used_at` 更新 | `{accountId, token, backedUp}` |
-| `link-room` | token | `matchRoomSecret`（§4.4。**副作用の無い照合**）に通った部屋だけ `INSERT OR IGNORE INTO account_rooms ... SELECT ... WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id=?)`（アカウント存在を同じ文で確認）。直後に封筒を開いて `wk_` と一致することを確かめてから `{ok}`（結びつけた瞬間に復旧できることの検証） | `{ok, backedUp}` |
-| `rooms` | token | 結びついた部屋の一覧。各部屋の `states.state` を読み、**語数・単語帳数・最終更新**を返す（state 本体は返さない。リンク数は数件なので許容） | `[{roomId, linkedAt, stateRev, updatedAt, wordCount, deckCount}]` |
+| `link-room` | token | `matchRoomSecret`（§4.4。**副作用の無い照合**）に通った部屋だけ `INSERT OR IGNORE INTO account_rooms ... SELECT ... WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id=?) AND (SELECT COUNT(*) FROM account_rooms WHERE account_id=?) < 10`（アカウント存在と **1 アカウント 10 部屋まで**を同じ文で確認）。直後に封筒を開いて `wk_` と一致することを確かめてから `{ok}` | `{ok, backedUp}` |
+| `rooms` | token | 結びついた部屋の一覧。各部屋の `states.state` を読み、**語数・単語帳数・最終更新**を返す（state 本体は返さない。最大 10 部屋） | `[{roomId, linkedAt, stateRev, updatedAt, wordCount, deckCount}]` |
 | `recover-room` | token（**発行から 2 分以内**） | 自分に結びついた部屋なら封筒を開けて秘密を返す。アカウント存在を再確認 | `{roomId, secret}` |
 | `passkeys` | token | 一覧 `[{credentialId, createdAt, lastUsedAt, backedUp}]` | |
 | `remove-passkey` | token（2 分以内） | 最後の 1 つは消せない（アカウント削除を使う） | `{ok}` |
@@ -165,11 +167,12 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
 ### 4.3 challenge の発行と消費（原子的・期限付き・用途束縛）
 
 - 発行: 32byte 乱数。`INSERT INTO auth_challenges (challenge, purpose, account_id, user_handle, created_at)`。
-- 消費: **1 文で** `DELETE FROM auth_challenges WHERE challenge = ? AND purpose = ? AND created_at > ?`（`?` = now − 10 分）を実行し、
-  `meta.changes === 1` のときだけ続行（`wordsnap-state.js:402` と同じ `meta.changes` の見方）。SELECT→DELETE に分けない
-  （並行 2 リクエストで二重使用できる）。`purpose` 不一致・期限切れ・既消費はすべて同じ 403。
-- `register` の `user_handle` は**消費した行から取る**。クライアントの申告は使わない（登録応答に userHandle は含まれないため、
-  サーバーが発行した値を自分で覚えておく必要がある）。
+- 消費: **1 文で** `DELETE FROM auth_challenges WHERE challenge = ? AND purpose = ? AND created_at > ? [AND account_id = ?] RETURNING account_id, user_handle`
+  （`?` = now − 10 分。`add-passkey` では `account_id = token.accountId` を条件に含める）を実行し、**返った行が 1 件**のときだけ続行
+  （D1 は `RETURNING` に対応。`meta.changes` だけでは消費した行の値が取れない）。SELECT→DELETE に分けない（並行 2 リクエストで二重使用できる）。
+  `purpose` 不一致・期限切れ・既消費・アカウント不一致はすべて同じ 403。
+- `register` の `account_id`・`user_handle` は**返った行から取る**。クライアントの申告は使わない（登録応答に userHandle は含まれないため）。
+  `add-passkey` の `user_handle` は `accounts` の既存値を使い、返った行の値と一致することも確かめる。
 
 ### 4.4 既存利用者への後方互換と移行
 
@@ -197,26 +200,39 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
    （高リスク関数のシグネチャは変えず、入力欄経由の挙動も不変。`scripts/ai-secret-sync.test.mjs:243-247` の既存テストで固定）。
 2. 復旧は `recover-room` の `{roomId, secret}` から資格情報を組み立て、`adoptV2Room` を呼ぶ。**DOM の入力欄に秘密を書かない**。
 3. `onBeforeReplace`: 端末に語が 1 つでもあれば、置き換える前に必ず選ばせる。
-   「この端末の N 語を捨てて復旧先（M 語）を採用」／「この端末の語を復旧先へ**合流**（`mergeAppStates` で和集合にしてから送信）」／「やめる」。
-   合流を選んだ場合の送信は、既存の初回 PUT と同じ経路（409 → 取り込み → 再送）。
-4. 既存の `offerUndo` も残す。
+   「この端末の N 語を捨てて復旧先（M 語）を採用」／「この端末の語を復旧先へ**合流**」／「やめる」。
+   - **合流の規則（復旧専用）**: `mergeAppStates`（`index.html:22274`）は単純な和集合ではなく、両側の**削除の記録を統合し、
+     追加・最終学習より新しい削除記録があれば相手側の語も除外する**。空に近い端末の削除記録で復旧先の生存語が消えうるので、
+     復旧では**端末側の削除の記録とゴミ箱を捨ててから**（`stripDeletions(local)`）`mergeAppStates` に渡す。
+     結果に残る削除記録は復旧先のものだけになり、後続の同期で再削除は起きない。送信は既存の初回 PUT と同じ経路
+     （409 → 取り込み → 再送）。テストは「端末に削除記録 X がある状態で復旧先の生存語 X が残ること」と 409 再送までを含める。
+4. **復旧では `offerUndo` を呼ばない。** 既存の「元に戻す」（`performUndoOnce`, `index.html:24383`）は旧 `appState` だけを戻して
+   通常送信を予約し、資格情報と rev は復旧先のままなので、空端末から復旧→直後に戻す→復旧先の rev が未更新、という条件で
+   通常 PUT の CAS（`wordsnap-state.js:1038`）が通り**復旧先を空で上書きできる**。代わりに、置換前の端末の状態を
+   `wordsnap-recovery-backup:v1`（1 件、上書き）に退避し、設定の「データの保存・引き継ぎ」から **JSON で書き出す**ことだけできる
+   （自動では戻さない。読み込みは既存の JSON 取り込みと同じ経路＝マージ）。3 択の確認が主な安全装置で、退避は保険。
 5. 復旧は recovery barrier が `settled` / `inconclusive` になってから、identity claim（`IDENTITY_CLAIM_KEY`, `index.html:38153`）を
    取って行う。起動時の自動実行はしない。
 
 **自動発行された空の部屋との混同**
 
 保存が消えた端末は起動時に空の V2 部屋を自動発行する（`SYNC_V2_NATIVE_DEFAULT`）。その状態で「パスキーで控える」を押すと
-空の部屋が結びつく。復旧画面は `rooms` の語数で**語数の多い順**に並べ、0 語の部屋は「空（この端末で自動発行）」と表示する。
+空の部屋が結びつく。復旧画面は `rooms` の語数で**語数の多い順**に並べ、0 語の部屋は「空（0 語）」と表示する。
+「この端末で自動発行」の注記は、その `roomId` が端末の現在の資格情報（起動時に自動発行したもの）と一致するときだけ付ける
+（別端末で作った空の部屋や、空にした既存の部屋と区別できないため、一律には付けない）。
 さらに「控える」操作は**端末に語が 1 つ以上あるときだけ**出す（0 語の部屋を結びつける動機が無い）。
 
 ### 4.5 トークン
 
 - `token = base64url(payload) + "." + HMAC-SHA256(ACCOUNT_KEK[0], payload)`、`payload = {accountId, cid, iat, exp}`。
   `exp = iat + 10 分`。`cid` は認証に使った credential_id。
-- **破壊的・秘密を返す op**（`recover-room` / `remove-passkey` / `unlink-room` / `delete-account`）は `iat` が **2 分以内**
-  のトークンだけ受け付ける（盗まれたトークンで復旧経路を消したり秘密を取り出したりする窓を狭める）。
-- nonce は記録しない（無状態）。再生は 10 分窓の中で同じ op を繰り返せるだけで、各 op は冪等か、アカウント単位の上限（§4.6）で頭打ち。
-- すべての op で `accounts` 行の存在を確認する（`delete-account` 後の 10 分窓で孤児の封筒を作らせない。`link-room` は §4.2 の 1 文で）。
+- **破壊的・秘密を返す・認証手段を増やす op**（`recover-room` / `remove-passkey` / `unlink-room` / `delete-account` /
+  `add-passkey-options` / `add-passkey`）は `iat` が **2 分以内**のトークンだけ受け付ける。パスキーの追加を除外すると、
+  盗まれた 3 分経過のトークンで攻撃者のパスキーを足し、その鍵で新しいトークンを得て復旧できる（短期トークンが恒久化する）。
+- **すべての op で、`cid` が当該アカウントに現存するパスキーであることを確認する**（`remove-passkey` で消したパスキーが発行した
+  トークンは、その時点で無効になる）。`accounts` 行の存在確認も兼ねる（`delete-account` 後の 10 分窓で孤児の封筒を作らせない。
+  `link-room` は §4.2 の 1 文でも確認）。
+- nonce は記録しない（無状態）。再生は 10 分窓の中で同じ op を繰り返せるだけで、各 op は §4.6 の上限で頭打ち。
 
 ### 4.6 配信元（origin）・rpId・レート制限
 
@@ -244,12 +260,17 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 | `acct-link-fail:<ip/64>` | 10 | 10 分 | fail-open |
 | `acct-recover-ip:<ip/64>` | 20 | 1 時間 | **fail-closed** |
 | `acct-recover-acct:<account_id>` | 20 | **24 時間** | **fail-closed** |
+| `acct-read:<account_id>`（`rooms` / `passkeys` の一覧） | 60 | 10 分 | fail-open |
+| `acct-write:<account_id>`（`link-room` / `add-passkey` / `unlink-room` / `remove-passkey` の成功・失敗とも） | 30 | 1 時間 | fail-open |
 
 - 鍵の接頭辞を op ごとに分け、窓明けの掃除 `DELETE ... WHERE rl_key LIKE '<接頭辞>:%' AND window_start <= ?` が
   **自分の窓の長さ**で行われるようにする（同じ接頭辞に 1 時間窓と 24 時間窓を混ぜない）。
 - `link-room` の失敗を V2 同期の共有バケット `v2-auth-fail` に入れない（同一 IP の通常同期を 429 にしない）。
 - `*-options` は行を作るので上限を持つ（D1 無料枠の書き込み 10 万行/日を同期と共用しているため。`legacy-create` の教訓 = `wordsnap-state.js:334-338`）。
 - fail-closed の op は、`rate_limits` が読めない・書けないとき 503 を返す（`feedback-mail.md:42-45` と同じ理由）。
+- 消費の時点は**処理の前**（成功・失敗にかかわらず数える。`v2-auth-fail` のように失敗時だけ数える鍵は `*-fail` だけ）。
+- 件数の上限（パスキー 10 本・部屋 10 件／アカウント）は INSERT 文の条件で原子的に守る（§4.2）。`rooms` の一覧が読む
+  `states` は最大 10 行。
 
 ## 5. セキュリティ
 
@@ -272,7 +293,9 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 1. `clientDataJSON` を受信バイト列のまま保持し、JSON として解釈。`type` が `webauthn.create` / `webauthn.get` のうち期待する方、
    `challenge` が消費した行の値、`origin` が `ACCOUNT_ORIGINS` に含まれること。
 2. `authenticatorData`（登録時は `attestationObject` の CBOR から `authData`）: `rpIdHash == SHA-256(rpId)`、
-   **UP = 1 と UV = 1**（`userVerification:"required"` と対にする）、BE/BS を読んで `backed_up` に保存、`signCount` を読む。
+   **UP = 1 と UV = 1**（`userVerification:"required"` と対にする）、BE/BS を読む。**BS = 1 なのに BE = 0 は拒否**
+   （仕様上あり得ない組）。登録時は BE を `backup_eligible` に保存。認証時は BE が保存値と**一致**すること（違えば 403）、
+   BS を `backed_up` に保存。`signCount` を読む。
 3. 登録: `fmt` が `none` のみ。`attStmt` は空であること。COSE 公開鍵の `kty`/`alg` が `pubKeyCredParams` で許した組
    （EC2 P-256 ＋ ES256、または RSA ＋ RS256）に一致すること。`credential_id` の重複は 409 相当の同じ 403。
 4. 認証: 署名対象は **`authenticatorData || SHA-256(clientDataJSON の受信バイト列)`**。ES256 の署名は **ASN.1 DER**
@@ -332,7 +355,8 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 | API 契約 | **実 SQLite で `account.js` の `onRequest` を直接呼ぶ**（FakeD1 は新 SQL を解釈できない = `data-retention.md:113-118`） | `d1-integration.test.mjs`、`feedback-mail.test.mjs` |
 | WebAuthn 検証 | **Phase A で実機から採った登録・認証データ**（DER 署名のまま）をフィクスチャとして保存し、それが通ること。加えて FakeAuthenticator（Node の WebCrypto で P-256 鍵を作り、CBOR の `attestationObject` を組み立て、**署名は r\|\|s から DER へ変換して**出す）で、`rpIdHash` 不一致・`origin` 不一致・challenge 再利用・`purpose` 不一致・期限切れ・`type` 不一致・未知 `fmt`・UP/UV 無し・`userHandle` 不一致・`alg` 不一致・`sign_count` 減少（拒否しない）を網羅 | 新規 |
 | challenge の原子性 | 同じ challenge で 2 リクエストを同時に流し、1 つだけ通る | 新規 |
-| トークン | `delete-account` 後の `link-room` が 403、`iat` 2 分超の `recover-room` が 403 | 新規 |
+| トークン | `delete-account` 後の `link-room` が 403、`iat` 2 分超の `recover-room` / `add-passkey` が 403、`remove-passkey` 後にその `cid` のトークンが 403、A の challenge ＋ B のトークンの `add-passkey` が 403 | 新規 |
+| 復旧の合流 | 端末に削除記録 X・ゴミ箱 Y がある状態で復旧先の生存語 X・Y が残る。復旧後に「元に戻す」が出ない。退避 JSON の書き出し→取り込みがマージになる | 新規 |
 | 不変条件 1・2 | 全 SQL を記録し、`states` / `rooms` への INSERT/UPDATE/DELETE が **0 件**。**鍵リングを 2 本にして旧鍵で作った部屋**でも 0 件。ソースの静的 grep も併用（対象は `account.js` 全文） | `data-retention.md:100-103` |
 | KEK | 鍵リングのローテーションで lazy re-wrap が起き、旧鍵を外した後も開けること。KEK 未設定で全 op が 503 | 新規 |
 | 不変条件 3・4 | `adoptV2Room` の `onBeforeReplace` が端末に語があるとき必ず呼ばれ、「やめる」で何も変わらないこと。`joinV2Room` 経由の既存挙動が不変（`ai-secret-sync.test.mjs:243-247`） | `empty-start-recovery.test.mjs` |
@@ -363,8 +387,10 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 - 結びつけ成功は **`V2_CODE_SAVED_KEY`（`index.html:21454`）には書かない**。この印は `wv_` を含む引き継ぎコードの保管状態を表し、
   アカウントは `wv_` を持たないので、立てると「AI キーの封筒が復号不能になる」警告まで消してしまう。
 - 代わりに `wordsnap-passkey-linked:v1`（`{roomId, backedUp, checkedAt}`）を持ち、帯は次のときだけ隠す:
-  **現在の部屋が結びつき済み、かつ `backedUp` が真（iCloud 等へ同期されたパスキー）、かつ最後のアカウント op が 503 でない**。
-  端末固定のパスキーしか無いとき・フラグ OFF のときは帯が戻る（守られていると誤認させない）。
+  **現在の部屋が結びつき済み、かつ `backedUp` が真（iCloud 等へ同期されたパスキー）、かつ `checkedAt` が 7 日以内**。
+  `checkedAt` は結びつけ成功・`rooms` 一覧の成功で更新する（設定の節を開いたときに静かに `rooms` を呼ぶ。これはアカウントを
+  持つ端末だけの通信で、不変条件 6 には触れない）。**503 を観測したら記録を即座に無効化**し、`unlink-room` / `delete-account`
+  でも消す。期限切れ・無効化のときは帯が戻る（フラグ OFF や端末固定のパスキーしか無い状態で「守られている」と誤認させない）。
 - `wv_` の注意（`shouldPromptVaultKeyBackup`）は従来どおり引き継ぎコードの保管でしか消えない。
 - 設定の引き継ぎコード節に「パスキーを失うと戻れません。引き継ぎコードも別に控えると安心です」を 1 行残す（決定 3）。
 
