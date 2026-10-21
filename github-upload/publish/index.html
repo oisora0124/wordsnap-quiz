@@ -6978,6 +6978,14 @@ accurate 正確な"
                       <button id="syncV2DownloadCodeButton" class="ghost" type="button">テキストで保存</button>
                     </div>
                     <p class="sync-v2-code-warning">「パスワードに保存」はiPhoneのパスワード（iCloudキーチェーン）に控えます。アプリの保存が消えても残るので、復元のときにコード入力欄を押すと自動入力から呼び出せます。</p>
+                    <!-- ブラウザが本当に保存したかはJSから分からない。本人に確かめてもらってから控え済みにする -->
+                    <div id="syncV2KeychainConfirm" class="sync-v2-recovery-notice" role="status" hidden>
+                      <p>ブラウザの「パスワードを保存しますか？」で<strong>保存</strong>を選びましたか？確認が出なかった場合や「保存しない」を選んだ場合は、まだ控えられていません。</p>
+                      <div class="sync-v2-actions">
+                        <button id="syncV2KeychainSavedButton" class="secondary" type="button">保存した（控え済みにする）</button>
+                        <button id="syncV2KeychainNotSavedButton" class="ghost" type="button">保存しなかった</button>
+                      </div>
+                    </div>
                   </div>
                   <div>
                     <p><strong>別の端末で引き継ぎコードを使う</strong></p>
@@ -18213,6 +18221,10 @@ const elements = {
   syncV2JoinInput: document.querySelector("#syncV2JoinInput"),
   syncV2KeychainForm: document.querySelector("#syncV2KeychainForm"),
   syncV2KeychainSaveButton: document.querySelector("#syncV2KeychainSaveButton"),
+  syncV2KeychainConfirm: document.querySelector("#syncV2KeychainConfirm"),
+  syncV2KeychainSavedButton: document.querySelector("#syncV2KeychainSavedButton"),
+  syncV2KeychainNotSavedButton: document.querySelector("#syncV2KeychainNotSavedButton"),
+  syncV2JoinForm: document.querySelector("#syncV2JoinForm"),
   syncV2ShowCodeButton: document.querySelector("#syncV2ShowCodeButton"),
   v2BackupStrip: document.querySelector("#v2BackupStrip"),
   v2BackupStripButton: document.querySelector("#v2BackupStripButton"),
@@ -19575,8 +19587,11 @@ function maybeShowInitialTutorial() {
     const incomingId = cleanSyncId(
       params.get("w") || params.get("wordsnap") || params.get("syncId"),
     );
+    // V2 の資格情報は IndexedDB からも戻る。これがあれば元の部屋から単語が戻るので復元案内は不要
     hasExistingSyncIdentity =
-      Boolean(incomingId) || Boolean(cleanSyncId(localStorage.getItem(SYNC_ID_KEY)));
+      Boolean(incomingId) ||
+      Boolean(cleanSyncId(localStorage.getItem(SYNC_ID_KEY))) ||
+      Boolean(getActiveV2Credential());
   } catch {
     completed = false;
   }
@@ -22030,17 +22045,39 @@ function initV2SyncUi() {
   });
   // iPhoneのパスワード（iCloudキーチェーン）へ控える。form の submit を起こすとブラウザが
   // 「パスワードを保存しますか？」を出す。送信先は無いので submit 自体は止める。
+  // ブラウザが保存したかはJSから分からないので、ここでは控え済みにしない。form を隠して
+  // （Chromium は form が消えることを送信成功の合図と見る）本人に確かめてもらい、
+  // 「保存した」を押したときだけ markV2CodeSavedFor する。
   elements.syncV2KeychainForm?.addEventListener("submit", (event) => {
     event.preventDefault();
-    const credential = getActiveV2Credential();
-    if (!v2TransferCode(credential)) {
+    if (!v2TransferCode(getActiveV2Credential())) {
       setV2Status("保存できる引き継ぎコードがありません。", "error");
       return;
     }
-    // 端末外（キーチェーン）へ出したので保存済みにする。ブラウザの確認で「保存しない」を選んだ
-    // 場合は控えられていないため、その旨を案内に含める。
+    elements.syncV2KeychainForm.hidden = true;
+    if (elements.syncV2KeychainConfirm) elements.syncV2KeychainConfirm.hidden = false;
+    elements.syncV2KeychainSavedButton?.focus();
+  });
+  const closeKeychainConfirm = () => {
+    if (elements.syncV2KeychainConfirm) elements.syncV2KeychainConfirm.hidden = true;
+    if (elements.syncV2KeychainForm) elements.syncV2KeychainForm.hidden = false;
+  };
+  elements.syncV2KeychainSavedButton?.addEventListener("click", () => {
+    // 「保存した」を押した時点の資格情報で控え済みにする（submit 時から切り替わっていれば未保存のまま）
+    const credential = getActiveV2Credential();
+    closeKeychainConfirm();
+    if (!v2TransferCode(credential)) return;
     markV2CodeSavedFor(credential);
-    setV2Status("「パスワードを保存」を選ぶと、端末の保存が消えてもコード入力欄の自動入力から呼び出せます。「保存しない」を選んだ場合は控えられていません。", "live");
+    setV2Status("✓ 引き継ぎコードをパスワードに控えました。復元のときはコード入力欄の自動入力から呼び出せます。", "live");
+  });
+  elements.syncV2KeychainNotSavedButton?.addEventListener("click", () => {
+    closeKeychainConfirm();
+    setV2Status("まだ控えられていません。「テキストで保存」か「JSONを書き出す」でも控えられます。", "error");
+  });
+  // 2. 合流の form は送信先が無い。自動入力後の自動送信などで submit が起きてもコードをURLに載せない
+  elements.syncV2JoinForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    joinV2Room();
   });
   elements.syncV2KeychainSaveButton?.addEventListener("click", () => {
     // requestSubmit は submit イベントを経由する（submit() はイベントを起こさず、保存の確認も出ない）

@@ -31,11 +31,13 @@ function extractFunction(name) {
 function handlerBody(anchor) {
   const start = html.indexOf(anchor);
   if (start < 0) throw new Error(`${anchor} not found`);
-  return html.slice(start, html.indexOf("\n});", start));
+  // ハンドラの閉じはインデントの深さが場所で違う（トップレベルは "});"、関数内は "  });"）
+  const close = /\n\s*\}\);/.exec(html.slice(start));
+  return html.slice(start, start + close.index);
 }
 
 // ---- 1. 空の端末で起動したときの案内 ----
-function startupSandbox({ tutorialDone = false, storedSyncId = "", search = "", words = 0, promptAvailable = true }) {
+function startupSandbox({ tutorialDone = false, storedSyncId = "", search = "", words = 0, promptAvailable = true, v2Credential = null }) {
   const calls = [];
   const context = {
     localStorage: {
@@ -46,6 +48,7 @@ function startupSandbox({ tutorialDone = false, storedSyncId = "", search = "", 
     URLSearchParams,
     window: { location: { search } },
     cleanSyncId: (value) => (value ? String(value) : ""),
+    getActiveV2Credential: () => v2Credential,
     appState: { words: Array.from({ length: words }, (_, i) => ({ id: `w${i}` })) },
     showRecoveryPrompt: () => {
       calls.push("recovery");
@@ -71,6 +74,7 @@ test("個人リンクで開いた・同期IDがある・単語がある・チュ
   for (const [name, opts] of [
     ["個人リンク", { search: "?w=ws_abc" }],
     ["保存済み同期ID", { storedSyncId: "ws_abc" }],
+    ["V2資格情報（IndexedDBから復元）", { v2Credential: { roomId: "wr_x", secret: "wk_y" } }],
     ["単語あり", { words: 3 }],
     ["チュートリアル済み", { tutorialDone: true }],
   ]) {
@@ -92,14 +96,19 @@ test("案内の「新しく始める」はチュートリアルへ、「コー�
 });
 
 // ---- 2. パスワード（キーチェーン）への控え ----
-test("引き継ぎコードはパスワード欄＋username欄の form にあり、submit は送信せず保存済みにする", () => {
+test("引き継ぎコードはパスワード欄＋username欄の form にあり、submit は送信せず、本人が「保存した」を押すまで控え済みにしない", () => {
   const form = html.slice(html.indexOf('<form id="syncV2KeychainForm"'), html.indexOf("</form>", html.indexOf('<form id="syncV2KeychainForm"')));
   assert.match(form, /autocomplete="username"/, "username 欄が無いとパスワード管理が何のコードか識別できない");
   assert.match(form, /id="syncV2TransferCode"[\s\S]*?type="password"[\s\S]*?autocomplete="new-password"/);
   assert.doesNotMatch(form, /type="submit"/, "submit ボタンは check-release の type=button 規則に反する");
   const submit = handlerBody('elements.syncV2KeychainForm?.addEventListener("submit"');
   assert.match(submit, /event\.preventDefault\(\);/, "送信先は無い。止めないとコードがURLに載る");
-  assert.match(submit, /markV2CodeSavedFor\(credential\)/);
+  assert.doesNotMatch(submit, /markV2CodeSavedFor/, "ブラウザが保存したかは分からない。submit だけで控え済みにしない");
+  assert.match(submit, /syncV2KeychainForm\.hidden = true/, "form を隠す（Chromium が送信成功と見なす合図）");
+  const saved = handlerBody('elements.syncV2KeychainSavedButton?.addEventListener("click"');
+  assert.match(saved, /markV2CodeSavedFor\(credential\)/);
+  const notSaved = handlerBody('elements.syncV2KeychainNotSavedButton?.addEventListener("click"');
+  assert.doesNotMatch(notSaved, /markV2CodeSavedFor/);
   const save = handlerBody('elements.syncV2KeychainSaveButton?.addEventListener("click"');
   assert.match(save, /requestSubmit/, "submit() はイベントを起こさず、ブラウザの保存確認も出ない");
 });
@@ -109,6 +118,9 @@ test("合流の入力欄は保存したパスワードを自動入力で呼び�
   assert.match(form, /autocomplete="username"/);
   assert.match(form, /id="syncV2JoinInput"[\s\S]*?type="password"[\s\S]*?autocomplete="current-password"/);
   assert.doesNotMatch(form, /type="submit"/);
+  // 自動入力後の自動送信などで submit が起きても、GET でコードをURLに載せない
+  const submit = handlerBody('elements.syncV2JoinForm?.addEventListener("submit"');
+  assert.match(submit, /event\.preventDefault\(\);\s*joinV2Room\(\);/);
 });
 
 // ---- 3. 上部の帯の配線（表示条件は sync-v2-recovery-ux.test.mjs） ----
