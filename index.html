@@ -3020,6 +3020,32 @@ textarea:focus-visible {
   flex: none;
 }
 
+.v2-backup-strip {
+  border-left-color: var(--warning);
+}
+.v2-backup-strip span {
+  flex: 1 1 220px;
+  font-size: 0.86rem;
+}
+
+.sync-v2-code-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.sync-v2-code-form .sync-v2-code {
+  flex: 1 1 200px;
+}
+
+.recovery-prompt-list {
+  margin: 10px 0;
+  padding-left: 1.2em;
+}
+.recovery-prompt-list li {
+  margin: 6px 0;
+}
+
 /* 常時表示の一行警告。詳細は末尾の「詳細」リンクで開閉する。 */
 .safe-share-warning-mini {
   display: flex;
@@ -6005,6 +6031,12 @@ body.tutorial-open {
            表示は「設定」タブのときだけ（setActiveStep が切り替える）。取り込みやクイズ中は
            使わない導線なので、常時出さずに設定を開いたときだけ画面上部に出す。
            初期値は hidden。JSが復元したタブを反映する前に一瞬だけ出るのを防ぐ。 -->
+      <!-- 引き継ぎコードを控えていない間だけ出す帯（設定タブ以外）。設定の中の注意だけでは、
+           設定を開かない人が気づけないまま端末の保存が消え、復旧できなくなる。 -->
+      <aside id="v2BackupStrip" class="safe-share-strip v2-backup-strip" role="status" hidden>
+        <span>⚠️ 引き継ぎコードがまだ控えられていません。端末の保存が消えると単語を復旧できません。</span>
+        <button id="v2BackupStripButton" class="secondary" type="button">今すぐ保存</button>
+      </aside>
       <aside id="safeShareStrip" class="safe-share-strip" aria-label="安全な共有" hidden>
         <button id="shareToolHeaderButton" type="button"><span data-sync-identity-ui="legacy">🤝 キーなしで安全に共有</span><span data-sync-identity-ui="v2-native" hidden>🤝 このツールを他の人に共有</span></button>
         <p class="safe-share-warning-mini" data-sync-identity-ui="legacy">
@@ -6908,15 +6940,25 @@ accurate 正確な"
                   </div>
                   <div id="syncV2CredentialPanel" class="sync-v2-code-panel" hidden>
                     <p><strong>引き継ぎコード</strong></p>
-                    <input
-                      id="syncV2TransferCode"
-                      class="sync-v2-code"
-                      type="text"
-                      inputmode="latin"
-                      autocomplete="off"
-                      readonly
-                      aria-label="新方式の引き継ぎコード"
-                    />
+                    <!-- iPhoneのパスワード（iCloudキーチェーン）へ控えられるよう、パスワード欄として置く。
+                         アプリ側の保存（localStorage・IndexedDB）が消えてもキーチェーンは残るので、
+                         別端末もテキストの控えも無い人の復元手段になる。username欄はパスワード管理が
+                         「何のパスワードか」を識別するために要る（画面には出さない）。
+                         submit はJSで止める（送信先は無い）。 -->
+                    <form id="syncV2KeychainForm" class="sync-v2-code-form" autocomplete="on">
+                      <input class="sr-only" type="text" name="username" autocomplete="username" value="WordBank 引き継ぎコード" readonly tabindex="-1" aria-label="パスワード保存用の名前" />
+                      <input
+                        id="syncV2TransferCode"
+                        class="sync-v2-code"
+                        type="password"
+                        name="password"
+                        inputmode="latin"
+                        autocomplete="new-password"
+                        readonly
+                        aria-label="新方式の引き継ぎコード"
+                      />
+                      <button id="syncV2ShowCodeButton" class="ghost mini" type="button" aria-pressed="false">コードを表示</button>
+                    </form>
                     <p id="syncV2CredentialWarning" class="sync-v2-code-warning"></p>
                     <div id="syncV2NoticeCard" class="sync-v2-recovery-notice" role="status" hidden>
                       <p id="syncV2NoticeHeadline" class="sync-v2-notice-headline">⚠️ <strong>引き継ぎコードを保存し直してください。</strong></p>
@@ -6926,30 +6968,35 @@ accurate 正確な"
                           <strong>コードが新しくなっています。</strong>APIキーの同期を有効にしたときに、この端末で暗号鍵を作りました。以前に保存したコードにはこの鍵が入っていないため、同期済みのAPIキーを復号できません。<small>単語データは個人リンクからも取り出せますが、APIキーの復号にはこの新しいコードが必要です。</small>
                         </p>
                         <p id="syncV2RecoveryNotice" hidden>
-                          <strong>まだ端末の外に保存されていません。</strong>サイトデータの消去や機種変更でこの端末の中身が失われると、コードが無ければ復旧できません。「テキストで保存」するか、「JSONを書き出す」で引き継ぎコードを含めて保管してください。<small>コピーだけでは、貼り付け先が残っている保証がないため注意は消えません。</small>
+                          <strong>まだ端末の外に保存されていません。</strong>サイトデータの消去や機種変更でこの端末の中身が失われると、コードが無ければ復旧できません。「パスワードに保存」（iPhoneのパスワードに控える）か「テキストで保存」、または「JSONを書き出す」で引き継ぎコードを含めて保管してください。<small>コピーだけでは、貼り付け先が残っている保証がないため注意は消えません。</small>
                         </p>
                       </details>
                     </div>
                     <div class="sync-v2-actions">
+                      <button id="syncV2KeychainSaveButton" class="secondary" type="button">パスワードに保存</button>
                       <button id="syncV2CopyCodeButton" class="secondary" type="button">コードをコピー</button>
                       <button id="syncV2DownloadCodeButton" class="ghost" type="button">テキストで保存</button>
                     </div>
+                    <p class="sync-v2-code-warning">「パスワードに保存」はiPhoneのパスワード（iCloudキーチェーン）に控えます。アプリの保存が消えても残るので、復元のときにコード入力欄を押すと自動入力から呼び出せます。</p>
                   </div>
                   <div>
                     <p><strong>別の端末で引き継ぎコードを使う</strong></p>
-                    <div class="sync-fix-actions sync-join-row">
+                    <!-- 「パスワードに保存」した控えを自動入力で呼び出せるよう、パスワード欄＋username欄の形にする -->
+                    <form id="syncV2JoinForm" class="sync-fix-actions sync-join-row" autocomplete="on">
+                      <input class="sr-only" type="text" name="username" autocomplete="username" value="WordBank 引き継ぎコード" readonly tabindex="-1" aria-label="パスワード保存用の名前" />
                       <input
                         id="syncV2JoinInput"
-                        type="text"
+                        type="password"
+                        name="password"
                         inputmode="latin"
-                        autocomplete="off"
+                        autocomplete="current-password"
                         autocapitalize="off"
                         spellcheck="false"
                         placeholder="wr_….wk_…（.wv_…）を貼り付け"
                         aria-label="新方式の引き継ぎコード"
                       />
                       <button id="syncV2JoinButton" class="secondary" type="button">このコードで合流</button>
-                    </div>
+                    </form>
                   </div>
                   <p id="syncV2Status" class="sync-status" role="status" aria-live="polite"></p>
                   <button id="syncV2UndoButton" class="ghost mini sync-v2-undo" type="button" hidden>
@@ -7208,7 +7255,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.138</span>
+        <span class="app-footer-version">バージョン 1.0.139</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7233,6 +7280,45 @@ accurate 正確な"
         <div class="tutorial-actions">
           <button id="tutorialSkipButton" class="ghost" type="button">スキップ</button>
           <button id="tutorialNextButton" type="button">次へ</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- 空の端末で起動したときの復元案内。端末内の保存が消えると新規利用者と区別できず、
+         黙って新しい同期先を作ってしまう。サーバーの元データは残るので、初回チュートリアルより先に
+         「以前使っていた方は復元できる」ことと、別端末の単語まで消す逆向きの操作を知らせる。 -->
+    <div id="recoveryPromptBackdrop" class="tutorial-backdrop" hidden>
+      <section
+        id="recoveryPromptDialog"
+        class="tutorial-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="recoveryPromptTitle"
+        aria-describedby="recoveryPromptText"
+      >
+        <div>
+          <p class="tutorial-kicker">はじめに確認</p>
+          <h2 id="recoveryPromptTitle">以前にWordBankを使っていましたか？</h2>
+          <div id="recoveryPromptText">
+            <p>
+              この端末には保存された単語がありません。以前使っていたのに単語が見当たらない場合、
+              端末側の保存が消えた可能性があります。
+              <strong>データ自体はサーバーに残っていることが多く、次のどれかで戻せます。</strong>
+            </p>
+            <ul class="recovery-prompt-list">
+              <li><strong>引き継ぎコード</strong>を控えている（テキスト・JSON・iPhoneのパスワード）→「コードで復元」から貼り付けるか、入力欄でパスワードの自動入力を使います。</li>
+              <li><strong>同期していた別の端末</strong>がある → その端末の設定で引き継ぎコードを表示し、この端末に入力します。<strong>逆向き（この端末の新しいコードを別端末に入れる）は、別端末の単語も消えるのでしないでください。</strong></li>
+              <li><strong>個人リンク</strong>（…?w=… のURL）をブックマーク等に残している → そのリンクを開き直します。</li>
+            </ul>
+            <p class="v2-announce-note">
+              「新しく始める」を選んでも、サーバー側の以前のデータは消えません。
+              あとからでも設定の「データの保存・引き継ぎ」で復元できます。
+            </p>
+          </div>
+        </div>
+        <div class="tutorial-actions">
+          <button id="recoveryPromptRestoreButton" class="ghost" type="button">コードで復元</button>
+          <button id="recoveryPromptNewButton" type="button">新しく始める</button>
         </div>
       </section>
     </div>
@@ -7346,7 +7432,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.138";
+  const APP_REV = "1.0.139";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7368,6 +7454,10 @@ const WordBankTelemetry = (() => {
     "v2-announce-shown",
     "v2-announce-open",
     "v2-announce-later",
+    // 空の端末で起動したときの復元案内（保存が消えた人がどれだけいるかの観測）
+    "recovery-prompt-shown",
+    "recovery-prompt-restore",
+    "recovery-prompt-new",
     // AIキーの暗号化同期。失敗をすべて黙って握り潰す設計なので、
     // これが無いと動いているのか壊れているのかを観測する手段が無い。
     "ai-key-sync-enable",
@@ -18121,6 +18211,15 @@ const elements = {
   syncV2CopyCodeButton: document.querySelector("#syncV2CopyCodeButton"),
   syncV2DownloadCodeButton: document.querySelector("#syncV2DownloadCodeButton"),
   syncV2JoinInput: document.querySelector("#syncV2JoinInput"),
+  syncV2KeychainForm: document.querySelector("#syncV2KeychainForm"),
+  syncV2KeychainSaveButton: document.querySelector("#syncV2KeychainSaveButton"),
+  syncV2ShowCodeButton: document.querySelector("#syncV2ShowCodeButton"),
+  v2BackupStrip: document.querySelector("#v2BackupStrip"),
+  v2BackupStripButton: document.querySelector("#v2BackupStripButton"),
+  recoveryPromptBackdrop: document.querySelector("#recoveryPromptBackdrop"),
+  recoveryPromptDialog: document.querySelector("#recoveryPromptDialog"),
+  recoveryPromptRestoreButton: document.querySelector("#recoveryPromptRestoreButton"),
+  recoveryPromptNewButton: document.querySelector("#recoveryPromptNewButton"),
   syncV2JoinButton: document.querySelector("#syncV2JoinButton"),
   syncV2Status: document.querySelector("#syncV2Status"),
   syncV2UndoButton: document.querySelector("#syncV2UndoButton"),
@@ -19483,7 +19582,69 @@ function maybeShowInitialTutorial() {
   }
   // 個人リンクや保存済み同期IDがある場合は、この直後の非同期pullで単語が戻る可能性がある。
   // 取得前の一時的な0件を「初回」と誤判定しないよう、自動表示は完全な新規入口だけに限る。
-  if (!completed && !hasExistingSyncIdentity && appState.words.length === 0) showTutorial();
+  if (!completed && !hasExistingSyncIdentity && appState.words.length === 0) {
+    // 保存が消えた既存利用者もここに来る。復元の案内を先に出し、「新しく始める」でチュートリアルへ。
+    if (!showRecoveryPrompt()) showTutorial();
+  }
+}
+
+// ---- 空の端末で起動したときの復元案内 ----
+let recoveryPromptReturnFocus = null;
+
+function showRecoveryPrompt() {
+  if (!elements.recoveryPromptBackdrop) return false;
+  recoveryPromptReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  elements.recoveryPromptBackdrop.hidden = false;
+  document.body.classList.add("tutorial-open");
+  elements.recoveryPromptNewButton?.focus();
+  trackUsage("recovery-prompt-shown");
+  return true;
+}
+
+function dismissRecoveryPrompt() {
+  if (elements.recoveryPromptBackdrop) elements.recoveryPromptBackdrop.hidden = true;
+  document.body.classList.remove("tutorial-open");
+  recoveryPromptReturnFocus?.focus?.();
+  recoveryPromptReturnFocus = null;
+}
+
+elements.recoveryPromptNewButton?.addEventListener("click", () => {
+  trackUsage("recovery-prompt-new");
+  dismissRecoveryPrompt();
+  showTutorial();
+});
+elements.recoveryPromptRestoreButton?.addEventListener("click", () => {
+  trackUsage("recovery-prompt-restore");
+  dismissRecoveryPrompt();
+  openSyncV2Section();
+  elements.syncV2JoinInput?.focus();
+});
+elements.recoveryPromptBackdrop?.addEventListener("click", (event) => {
+  if (event.target === elements.recoveryPromptBackdrop) dismissRecoveryPrompt();
+});
+elements.recoveryPromptDialog?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    dismissRecoveryPrompt();
+    return;
+  }
+  trapDialogTab(elements.recoveryPromptDialog, event);
+});
+
+// 設定タブの同期セクションを開き、引き継ぎコードの欄まで送る（復元案内と上部の帯から使う）
+function openSyncV2Section() {
+  const settingsTab = document.querySelector('[data-step-tab="settings"]');
+  if (settingsTab instanceof HTMLElement) settingsTab.click();
+  const syncSection = document.querySelector('[data-settings-section="sync"]');
+  if (syncSection) syncSection.open = true;
+  if (elements.syncV2Section) elements.syncV2Section.open = true;
+  elements.syncV2Section?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+}
+elements.v2BackupStripButton?.addEventListener("click", openSyncV2Section);
+
+// 引き継ぎコードを控えていない間だけ、設定タブ以外の上部に帯を出す
+function syncV2BackupStripVisibility() {
+  if (!elements.v2BackupStrip) return;
+  elements.v2BackupStrip.hidden = activeStepId === "settings" || !shouldPromptV2CodeBackup();
 }
 
 elements.tutorialNextButton?.addEventListener("click", () => {
@@ -19542,6 +19703,7 @@ function setActiveStep(id, options = {}) {
   // これにより「単語追加→他タブで反映」など、どのタブへ移っても最新の内容が保証される。
   activeStepId = nextId;
   syncSafeShareStripVisibility();
+  syncV2BackupStripVisibility();
   // クイズへ戻ったときは「要再描画」でなくても必ず描き直す。離脱時に stopQuizTimer() で
   // 止めた制限時間を組み直せるのは renderQuiz→syncQuizTimer だけで、dirty でない復帰では
   // renderDirtyActivePanel が何もせず、カウントダウンが止まったままになっていた。
@@ -21401,6 +21563,7 @@ function renderV2RecoveryNotice(identity = syncRequestRoute()) {
   // 段階4カード化: 2件の注意を1枚のカードにまとめ、見出しはどちらが当てはまるかで出し分ける。
   const card = elements.syncV2NoticeCard;
   if (card) card.hidden = !(prompt || vaultPrompt);
+  syncV2BackupStripVisibility();
   if (elements.syncV2NoticeHeadline && (prompt || vaultPrompt)) {
     const strong = document.createElement("strong");
     let tail;
@@ -21864,6 +22027,32 @@ function initV2SyncUi() {
   elements.syncV2UndoButton?.addEventListener("click", () => {
     // 元に戻す処理は既存ボタンのハンドラへ集約し、undoSnapshotの消費も一本化する。
     elements.undoButton?.click();
+  });
+  // iPhoneのパスワード（iCloudキーチェーン）へ控える。form の submit を起こすとブラウザが
+  // 「パスワードを保存しますか？」を出す。送信先は無いので submit 自体は止める。
+  elements.syncV2KeychainForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const credential = getActiveV2Credential();
+    if (!v2TransferCode(credential)) {
+      setV2Status("保存できる引き継ぎコードがありません。", "error");
+      return;
+    }
+    // 端末外（キーチェーン）へ出したので保存済みにする。ブラウザの確認で「保存しない」を選んだ
+    // 場合は控えられていないため、その旨を案内に含める。
+    markV2CodeSavedFor(credential);
+    setV2Status("「パスワードを保存」を選ぶと、端末の保存が消えてもコード入力欄の自動入力から呼び出せます。「保存しない」を選んだ場合は控えられていません。", "live");
+  });
+  elements.syncV2KeychainSaveButton?.addEventListener("click", () => {
+    // requestSubmit は submit イベントを経由する（submit() はイベントを起こさず、保存の確認も出ない）
+    elements.syncV2KeychainForm?.requestSubmit?.();
+  });
+  elements.syncV2ShowCodeButton?.addEventListener("click", () => {
+    const input = elements.syncV2TransferCode;
+    if (!input) return;
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    elements.syncV2ShowCodeButton.textContent = show ? "コードを隠す" : "コードを表示";
+    elements.syncV2ShowCodeButton.setAttribute("aria-pressed", String(show));
   });
   elements.syncV2CopyCodeButton?.addEventListener("click", async () => {
     const code = v2TransferCode(getActiveV2Credential());
