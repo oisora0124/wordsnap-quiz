@@ -171,9 +171,9 @@ test("フォーカス可能な要素が無いときは何もしない（例外�
   assert.equal(event.prevented, false);
 });
 
-test("2つのモーダルの両方に、Tabトラップが配線されている", () => {
+test("すべてのモーダルに、Tabトラップが配線されている", () => {
   // 片方だけ配線が外れる回帰（V2お知らせ側に無かった）を再発させない。
-  for (const dialogId of ["tutorialDialog", "v2AnnounceDialog"]) {
+  for (const dialogId of ["tutorialDialog", "v2AnnounceDialog", "recoveryPromptDialog"]) {
     const anchor = html.indexOf(`elements.${dialogId}?.addEventListener("keydown"`);
     assert.ok(anchor > 0, `${dialogId} の keydown ハンドラが見つからない`);
     const end = html.indexOf("\n});", anchor);
@@ -190,6 +190,7 @@ test("モーダルは開くときにフォーカスを移し、閉じるとき�
   for (const [open, close, saved] of [
     ["showTutorial", "completeTutorial", "tutorialReturnFocus"],
     ["maybeShowV2Announce", "dismissV2Announce", "v2AnnounceReturnFocus"],
+    ["showRecoveryPrompt", "dismissRecoveryPrompt", "recoveryPromptReturnFocus"],
   ]) {
     const openSrc = extractFunction(open);
     const closeSrc = extractFunction(close);

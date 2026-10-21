@@ -30,7 +30,11 @@ function recoveryUxSource() {
   const fingerprintStart = html.indexOf("function shortKeyFingerprint(");
   assert.ok(fingerprintStart >= 0, "shortKeyFingerprint が見つかること");
   const fingerprintEnd = html.indexOf("\n}", fingerprintStart) + 2;
-  return `${html.slice(start, end)}\n${html.slice(fingerprintStart, fingerprintEnd)}`;
+  // 上部の帯（設定タブ以外で「コード未控え」を知らせる）は renderV2RecoveryNotice から更新される
+  const stripStart = html.indexOf("function syncV2BackupStripVisibility(");
+  assert.ok(stripStart >= 0, "syncV2BackupStripVisibility が見つかること");
+  const stripEnd = html.indexOf("\n}", stripStart) + 2;
+  return `${html.slice(start, end)}\n${html.slice(fingerprintStart, fingerprintEnd)}\n${html.slice(stripStart, stripEnd)}`;
 }
 
 // identity と appState / syncState を差し替えて条件判定だけを評価する。
@@ -70,7 +74,9 @@ function makeRecoveryUx({
         },
       },
       syncV2Section: { open: false },
+      v2BackupStrip: { hidden: true },
     },
+    activeStepId: "import",
     document: {
       querySelector: () => null,
       // renderV2RecoveryNotice が見出しの<strong>をDOM APIで組み立てるためのスタブ
@@ -661,4 +667,26 @@ test("金庫鍵を持たない資格情報では金庫鍵の注意を出さな�
   assert.equal(context.shouldPromptVaultKeyBackup(), false);
   assert.equal(context.elements.syncV2VaultNotice.hidden, true);
   assert.equal(context.elements.syncV2NoticeCard.hidden, true, "金庫鍵が無ければカードも出さないこと");
+});
+
+// ---- 上部の帯: 設定タブを開かない人にも「コード未控え」を知らせる（1.0.139） ----
+test("帯: コード未控えなら設定タブ以外で出て、控えたら消える", () => {
+  const { context } = makeRecoveryUx({ identity: NATIVE, words: 3, verifiedSyncTarget: ROOM_A });
+  assert.equal(context.elements.v2BackupStrip.hidden, false, "取り込みタブで出ていない");
+  context.activeStepId = "settings";
+  context.syncV2BackupStripVisibility();
+  assert.equal(context.elements.v2BackupStrip.hidden, true, "設定タブでは設定内の注意に任せる");
+  context.activeStepId = "quiz";
+  context.markV2CodeSavedFor(ROOM_A);
+  assert.equal(context.elements.v2BackupStrip.hidden, true, "控えたあとも出ている");
+});
+
+test("帯: 個人リンクを持つ人・単語が無い人には出さない", () => {
+  for (const [name, opts] of [
+    ["legacy", { identity: LEGACY, words: 50, verifiedSyncTarget: ROOM_A }],
+    ["単語なし", { identity: NATIVE, words: 0, verifiedSyncTarget: ROOM_A }],
+  ]) {
+    const { context } = makeRecoveryUx(opts);
+    assert.equal(context.elements.v2BackupStrip.hidden, true, name);
+  }
 });
