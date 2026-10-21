@@ -1,8 +1,9 @@
 # パスキーによる復旧（「パスキーで控える」）設計書
 
-作成: 2026-10-21 / 状態: **rev3・未実装**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol xhigh、
+作成: 2026-10-21 / 状態: **rev4・未実装**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol xhigh、
 Haiku→上位モデルで反証）に掛け、生き残った 29 件（高 0・中 18・低 11）を rev2 で反映。rev2 を Codex gpt-6.1-sol xhigh で
-再確認し、部分的 4 件と新規 6 件（高 3）を rev3 で反映した。設計の担当は Fable。
+再確認し、部分的 4 件と新規 6 件（高 3）を rev3 で反映。rev3 の再確認で残った高 3 件（既存 Undo・単語帳の合体・退避の再取り込み）を
+rev4 で反映した。設計の担当は Fable。
 リスク区分: **高**（同期・データ移行・セキュリティ。CLAUDE.md の高リスク領域）。
 
 凡例: 【事実】はリポジトリの該当箇所または公式情報に根拠がある。【推測】は根拠が無い判断。
@@ -201,17 +202,31 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
 2. 復旧は `recover-room` の `{roomId, secret}` から資格情報を組み立て、`adoptV2Room` を呼ぶ。**DOM の入力欄に秘密を書かない**。
 3. `onBeforeReplace`: 端末に語が 1 つでもあれば、置き換える前に必ず選ばせる。
    「この端末の N 語を捨てて復旧先（M 語）を採用」／「この端末の語を復旧先へ**合流**」／「やめる」。
-   - **合流の規則（復旧専用）**: `mergeAppStates`（`index.html:22274`）は単純な和集合ではなく、両側の**削除の記録を統合し、
-     追加・最終学習より新しい削除記録があれば相手側の語も除外する**。空に近い端末の削除記録で復旧先の生存語が消えうるので、
-     復旧では**端末側の削除の記録とゴミ箱を捨ててから**（`stripDeletions(local)`）`mergeAppStates` に渡す。
-     結果に残る削除記録は復旧先のものだけになり、後続の同期で再削除は起きない。送信は既存の初回 PUT と同じ経路
-     （409 → 取り込み → 再送）。テストは「端末に削除記録 X がある状態で復旧先の生存語 X が残ること」と 409 再送までを含める。
-4. **復旧では `offerUndo` を呼ばない。** 既存の「元に戻す」（`performUndoOnce`, `index.html:24383`）は旧 `appState` だけを戻して
-   通常送信を予約し、資格情報と rev は復旧先のままなので、空端末から復旧→直後に戻す→復旧先の rev が未更新、という条件で
-   通常 PUT の CAS（`wordsnap-state.js:1038`）が通り**復旧先を空で上書きできる**。代わりに、置換前の端末の状態を
-   `wordsnap-recovery-backup:v1`（1 件、上書き）に退避し、設定の「データの保存・引き継ぎ」から **JSON で書き出す**ことだけできる
-   （自動では戻さない。読み込みは既存の JSON 取り込みと同じ経路＝マージ）。3 択の確認が主な安全装置で、退避は保険。
-5. 復旧は recovery barrier が `settled` / `inconclusive` になってから、identity claim（`IDENTITY_CLAIM_KEY`, `index.html:38153`）を
+   - **合流の規則（復旧専用。`mergeAppStates` は使わない）**: `mergeAppStates`（`index.html:22274`）は和集合ではない。
+     両側の削除の記録を統合して適用し（`:22298`）、さらに**単語帳を名前で合体**する（`:22243-22265`）ため、端末側で単語帳を
+     改名していると復旧先の別の単語帳と合体し、その単語帳の削除記録が復旧先の生存語に読み替えられて消える反例がある。
+     端末側の削除記録を捨てるだけでは防げない。復旧では次の **`appendLocalWords(remote, local)`** だけを行う。
+     - 復旧先 `remote` を**正**とし、その単語帳・語・学習状態・削除記録・ゴミ箱・履歴は**一切変えない**。
+     - `local` の語のうち、`normalizeTerm` で `remote` に存在しないものだけを、**新しい単語帳「復旧前のこの端末の単語（日付）」**
+       （新規 ID）へ追加する。語の学習状態・履歴はその語に付いたまま持ち込む。
+     - `local` の単語帳の名前・ID・削除記録・ゴミ箱は**使わない**（合体も適用もしない）。
+     - 結果の送信は既存の初回 PUT と同じ経路（409 → 取り込み → 再送）。409 で取り込む側も `remote` の削除記録しか持たないので、
+       再マージで語は消えない。
+     テストは「端末に削除記録 X・改名した単語帳がある状態で、復旧先の生存語 X・Y が残り、端末だけの語 Z が新しい単語帳に入ること」と
+     409 再送までを含める。
+4. **復旧では `offerUndo` を呼ばず、確定時に既存の Undo を `clearUndo()` で消す。** 既存の「元に戻す」（`performUndoOnce`,
+   `index.html:24383`）は旧 `appState` だけを戻して通常送信を予約し、資格情報と rev は復旧先のままなので、復旧の直前に別の操作で
+   作られた Undo（例: 空端末で引き継ぎコードから合流したときの「空へ戻す」Undo、`:21989`）が残っていると、復旧後に押すだけで
+   通常 PUT の CAS（`wordsnap-state.js:1038`）が通り**復旧先を空で上書きできる**。よって、復旧の確定（置換または追加の直前）で
+   `clearUndo()` を呼び、復旧処理中は Undo ボタンを無効化する。テストは「既存 Undo を持った状態から復旧し、再読込後も Undo が
+   出ない」を含める。
+5. **退避**: 置換前の端末の状態を `wordsnap-recovery-backup:v1`（1 件、上書き）に保存し、設定の「データの保存・引き継ぎ」から
+   **JSON で書き出す**ことと、**「退避の単語を今の単語帳へ追加」**（上の `appendLocalWords` と同じ規則）だけができる。
+   書き出す JSON は `kind: "wordsnap-recovery-backup"` を持ち、**既存の JSON 取り込み（`index.html:37821` 付近、読み込んだ状態へ
+   置換し消えた語に削除記録を付ける）では受け付けない**（この形式を検出したら「設定の『退避の単語を追加』から読み込んでください」と
+   案内して何もしない）。0 語の退避を既存取り込みで読み戻すと、復旧先の全語に削除記録が付いて空上書きできるため。
+   3 択の確認が主な安全装置で、退避は保険。
+6. 復旧は recovery barrier が `settled` / `inconclusive` になってから、identity claim（`IDENTITY_CLAIM_KEY`, `index.html:38153`）を
    取って行う。起動時の自動実行はしない。
 
 **自動発行された空の部屋との混同**
@@ -356,7 +371,8 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 | WebAuthn 検証 | **Phase A で実機から採った登録・認証データ**（DER 署名のまま）をフィクスチャとして保存し、それが通ること。加えて FakeAuthenticator（Node の WebCrypto で P-256 鍵を作り、CBOR の `attestationObject` を組み立て、**署名は r\|\|s から DER へ変換して**出す）で、`rpIdHash` 不一致・`origin` 不一致・challenge 再利用・`purpose` 不一致・期限切れ・`type` 不一致・未知 `fmt`・UP/UV 無し・`userHandle` 不一致・`alg` 不一致・`sign_count` 減少（拒否しない）を網羅 | 新規 |
 | challenge の原子性 | 同じ challenge で 2 リクエストを同時に流し、1 つだけ通る | 新規 |
 | トークン | `delete-account` 後の `link-room` が 403、`iat` 2 分超の `recover-room` / `add-passkey` が 403、`remove-passkey` 後にその `cid` のトークンが 403、A の challenge ＋ B のトークンの `add-passkey` が 403 | 新規 |
-| 復旧の合流 | 端末に削除記録 X・ゴミ箱 Y がある状態で復旧先の生存語 X・Y が残る。復旧後に「元に戻す」が出ない。退避 JSON の書き出し→取り込みがマージになる | 新規 |
+| 復旧の合流 | `appendLocalWords`: 端末に削除記録 X・ゴミ箱 Y・復旧先と同名に改名した単語帳がある状態で、復旧先の生存語 X・Y が残り、端末だけの語 Z が新しい単語帳に入る。復旧先の単語帳 ID・削除記録が変わらない。409 再送後も同じ | 新規 |
+| Undo と退避 | 既存 Undo を持った状態から復旧→確定で Undo が消え、再読込後も出ない。退避 JSON（`kind: "wordsnap-recovery-backup"`）を既存の JSON 取り込みに渡すと何もせず案内が出る。「退避の単語を追加」が `appendLocalWords` の規則で動く | 新規 |
 | 不変条件 1・2 | 全 SQL を記録し、`states` / `rooms` への INSERT/UPDATE/DELETE が **0 件**。**鍵リングを 2 本にして旧鍵で作った部屋**でも 0 件。ソースの静的 grep も併用（対象は `account.js` 全文） | `data-retention.md:100-103` |
 | KEK | 鍵リングのローテーションで lazy re-wrap が起き、旧鍵を外した後も開けること。KEK 未設定で全 op が 503 | 新規 |
 | 不変条件 3・4 | `adoptV2Room` の `onBeforeReplace` が端末に語があるとき必ず呼ばれ、「やめる」で何も変わらないこと。`joinV2Room` 経由の既存挙動が不変（`ai-secret-sync.test.mjs:243-247`） | `empty-start-recovery.test.mjs` |
