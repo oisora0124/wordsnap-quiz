@@ -1046,3 +1046,148 @@ test("中7/18: ダイアログを閉じても、ほかのモーダルが開い�
   assert.ok(recover.indexOf("capturePasskeyFocusOrigin()") < recover.indexOf("setPasskeyBusy(true)"));
   assert.match(extractFunction("askPasskeyDialog"), /passkeyDialogReturnFocus = returnFocus \|\| passkeyFocusOrigin \|\|/);
 });
+
+// ---- 最終確認の反例への対応 ----
+
+test("反例(2): 候補の保存が IndexedDB を待っている間は、退避の追加を始めない（保存中の語を置換で消さない）", async () => {
+  const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
+  let releaseIdb;
+  ctx.idb.set = (key, value) => (key === "state"
+    ? new Promise((r) => { releaseIdb = () => r(true); })
+    : Promise.resolve(true));
+  Object.assign(ctx, {
+    STORAGE_KEY: "state",
+    sanitizeDeletions: (d) => d || {},
+    sanitizeTrash: (t) => t || [],
+    showRuntimeStorageWarning: () => {},
+    scheduleSyncPush: () => { ctx.syncState.dirtyGen += 1; },
+  });
+  run(ctx, [
+    "let storageWriteGeneration = 0;",
+    extractFunction("beginLocalPersist"),
+    extractFunction("endLocalPersist"),
+    extractFunction("persistAppStateCheckedOnce"),
+    extractFunction("persistAppStateChecked"),
+  ]);
+  // 候補の保存と同じ順: appState に先に入れてから、保存の完了を待つ
+  ctx.appState.words.push(word("z", "zeta", "rd"));
+  const saving = ctx.persistAppStateChecked();
+  assert.equal(ctx.syncState.persistInFlight, 1, "保存の途中を数える");
+  assert.notEqual(ctx.syncState.dirtyGen, ctx.syncState.syncedGen, "入口で同期的に編集世代を進める");
+  assert.equal(await ctx.appendBackupWords([word("b", "backup", "x")]), false, "始めない");
+  assert.deepEqual(ctx.requests, [], "送信しない");
+  assert.ok(ctx.appState.words.some((w) => w.term === "zeta"), "保存中の語が残る");
+  releaseIdb();
+  assert.equal(await saving, true);
+  assert.equal(ctx.syncState.persistInFlight, 0, "完了で戻す");
+  // 世代だけが残っていても（送信前）始めない
+  assert.equal(await ctx.appendBackupWords([word("b", "backup", "x")]), false);
+  assert.match(extractFunction("recoveryBeforeReplace"), /if \(\(Number\(syncState\.persistInFlight\) \|\| 0\) > 0\) \{/, "復旧の確定も保存の途中なら始めない");
+});
+
+// 実物の syncRequest / syncPutState を、圧縮と fetch だけ差し替えて走らせる。
+function transportSandbox() {
+  const fetched = [];
+  const listeners = {};
+  const ctx = {
+    fetched,
+    listeners,
+    __target: ROOM_A,
+    SYNC_REQUEST_TIMEOUT_MS: 60000,
+    SYNC_GZ_BASE64_LIMIT: 1800000,
+    SYNC_V2_CREDENTIAL_KEY: "cred",
+    SYNC_ID_KEY: "sync",
+    AbortController,
+    window: { setTimeout: () => 0, clearTimeout: () => {}, addEventListener: (t, fn) => { listeners[t] = fn; } },
+    syncState: { requestGen: 0, pushTimer: 0, retryTimer: 0, pushQueued: false, abortControllers: new Set(), connected: true },
+    syncRequestRoute: () => ({ endpoint: `/api/wordsnap-state?room=${ctx.__target}`, expectedSyncId: ctx.__target, isV2: true }),
+    syncEndpoint: () => `/api/wordsnap-state?room=${ctx.__target}`,
+    syncHeaders: () => ({}),
+    syncStateExceedsLimits: () => false,
+    cleanSyncId: (v) => String(v || ""),
+    stopSyncPolling: () => {},
+    setSyncStatus: (m) => { ctx.lastStatus = m; },
+    normalizeV2Credential: (c) => c,
+    buildSyncPayloadState: () => ({ words: [{ term: "old-tab" }], decks: [] }),
+    syncShouldCompress: () => true,
+    gzipJsonToBase64: async () => { if (ctx.duringGzip) await ctx.duringGzip(); return "H4sI"; },
+    fetch: async (url, options) => {
+      fetched.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null });
+      return { ok: true, status: 200, json: async () => ({ ok: true, syncId: ctx.__target, stateRev: 5, state: { words: [], decks: [] } }) };
+    },
+  };
+  const storageStart = html.indexOf('window.addEventListener("storage", (event) => {');
+  run(ctx, [
+    "let connectedSyncTarget = ''; let syncTargetHalted = false;",
+    extractFunction("staleSyncError"),
+    extractFunction("isStaleSyncError"),
+    extractFunction("syncSendGuardHolds"),
+    extractFunction("validSyncGetResponse"),
+    extractFunction("validSyncHistoryResponse"),
+    extractFunction("validSyncPutResponse"),
+    extractFunction("bumpSyncRequestGen"),
+    extractFunction("resetConnectedSyncTarget"),
+    extractFunction("haltSyncForForeignTarget"),
+    extractFunction("syncTargetChangedElsewhere"),
+    extractFunction("activeRoomIdFromStored"),
+    html.slice(storageStart, html.indexOf("\n});", storageStart) + 4),
+    extractFunction("syncRequest"),
+    extractFunction("syncPutState"),
+    "globalThis.__halted = () => syncTargetHalted;",
+  ]);
+  return ctx;
+}
+
+test("反例(3B): 圧縮の途中で世代が進んだ（同期先が切り替わった）ら、旧い state を送らない", async () => {
+  const ctx = transportSandbox();
+  await ctx.syncPutState(3);
+  assert.equal(ctx.fetched.length, 1, "通常は圧縮して送る");
+  assert.equal(ctx.fetched[0].body.format, "gzip-base64");
+  for (const change of [
+    (t) => t.bumpSyncRequestGen(), // 同じタブでの復旧完了など（世代だけが進む）
+    (t) => { t.__target = ROOM_B; }, // 別タブが資格情報を切り替えた
+  ]) {
+    const t = transportSandbox();
+    t.duringGzip = async () => change(t);
+    await assert.rejects(() => t.syncPutState(3), (e) => t.isStaleSyncError(e));
+    assert.equal(t.fetched.length, 0, "送らない");
+  }
+});
+
+test("反例(3B): 圧縮の途中で資格情報が切り替わったら送らない（別タブ）", async () => {
+  const t = transportSandbox();
+  t.duringGzip = async () => { t.__target = ROOM_B; };
+  await assert.rejects(() => t.syncPutState(3), (e) => t.isStaleSyncError(e));
+  assert.equal(t.fetched.length, 0);
+});
+
+test("反例(3A): 接続時の最初の GET の前に同期先を束縛し、別タブの新規発行（oldValue が null）も検出する", async () => {
+  const ctx = transportSandbox();
+  await ctx.syncRequest("GET"); // 接続処理の最初の GET（needsPush=false でも束縛済みになる）
+  assert.equal(ctx.fetched.length, 1);
+  ctx.__target = ROOM_B; // 別タブで V2 を新規発行した
+  ctx.listeners.storage({ key: "cred", oldValue: null });
+  assert.equal(ctx.__halted(), true, "oldValue に頼らず、束縛済みの同期先と比べて止める");
+  await assert.rejects(() => ctx.syncRequest("GET", null, { sinceRev: 1 }), (e) => ctx.isStaleSyncError(e));
+  assert.equal(ctx.fetched.length, 1, "前面復帰の最初の pull でも新しい部屋へ取りに行かない");
+});
+
+test("通常経路: 同期先が一定なら pull・push・409 の合流と再送は従来どおり", async () => {
+  const ctx = crossTabSandbox();
+  await ctx.pullWordsnapState({ silent: false });
+  assert.ok(ctx.calls.includes("merge"), "pull は合流する");
+  ctx.calls.length = 0;
+  let first = true;
+  ctx.onPut = async () => {
+    if (!first) return { stateRev: 11, verifiedSyncTarget: ROOM_A };
+    first = false;
+    const error = new Error("conflict");
+    error.status = 409;
+    error.data = { state: { words: [], decks: [] }, stateRev: 10, syncId: ROOM_A };
+    throw error;
+  };
+  await ctx.pushWordsnapState();
+  assert.ok(ctx.calls.includes("merge"), "409 は従来どおり合流する");
+  assert.equal(ctx.calls.filter((c) => c === "put").length, 2, "合流後に再送する");
+  assert.ok(!reloadMessage(ctx.calls));
+});

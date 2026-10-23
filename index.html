@@ -19907,6 +19907,8 @@ const syncState = {
   dirtyGen: 0,
   // 送信が通った最新の世代。dirtyGen と違えば、この端末に未送信の変更がある（退避の追加で使う）。
   syncedGen: 0,
+  // 端末への保存（localStorage・IndexedDB）の途中の件数。0 でなければ退避の追加・復旧の確定を始めない。
+  persistInFlight: 0,
   // PUT送信中に届いた送信要求の保留フラグ（1回分だけ予約し、完了後に消化する）
   pushQueued: false,
   // 【キー切替対策】同期リクエストの世代番号。キー切替（別リンク採用・接続先変更・
@@ -20046,6 +20048,7 @@ function showRuntimeStorageWarning(visible) {
 // Writes the app state to localStorage AND the IndexedDB mirror, stamped with
 // a save time so we can tell which copy is newer when recovering.
 function persistAppState(options = {}) {
+  if (typeof beginLocalPersist === "function") beginLocalPersist(options);
   appState.deletions = sanitizeDeletions(appState.deletions, Date.now());
   appState.trash = sanitizeTrash(appState.trash, Date.now());
   appState.savedAt = Date.now();
@@ -20064,13 +20067,37 @@ function persistAppState(options = {}) {
     if (writeGeneration !== storageWriteGeneration) return;
     showRuntimeStorageWarning(!localSaved && !idbSaved);
   };
-  idb.set(STORAGE_KEY, json).then(finishStorageCheck, () => finishStorageCheck(false));
+  const settle = () => {
+    if (typeof endLocalPersist === "function") endLocalPersist();
+  };
+  idb.set(STORAGE_KEY, json).then(finishStorageCheck, () => finishStorageCheck(false)).then(settle, settle);
   if (options.sync !== false) scheduleSyncPush();
+}
+
+// 端末の内容が appState に入った時点（保存の入口）で、同期的に編集世代を進め、保存中の件数を数える。
+// 送信の予約は従来どおり保存のあと（scheduleSyncPush）。IndexedDB の保存を待つ間も
+// 「未送信の変更がある」「保存の途中」と分かるようにし、退避の追加・復旧の確定がその変更を置換で消さないようにする。
+function beginLocalPersist(options = {}) {
+  syncState.persistInFlight = (Number(syncState.persistInFlight) || 0) + 1;
+  if (options.sync !== false && !syncState.applyingRemote) syncState.dirtyGen += 1;
+}
+
+function endLocalPersist() {
+  syncState.persistInFlight = Math.max(0, (Number(syncState.persistInFlight) || 0) - 1);
 }
 
 // identity切替では、切替先stateの耐久保存を確認してから旧資格情報の破棄を確定する。
 // 通常保存のタイミングや送信挙動は変えず、native→legacy切替だけがこのawait可能版を使う。
 async function persistAppStateChecked(options = {}) {
+  if (typeof beginLocalPersist === "function") beginLocalPersist(options);
+  try {
+    return await persistAppStateCheckedOnce(options);
+  } finally {
+    if (typeof endLocalPersist === "function") endLocalPersist();
+  }
+}
+
+async function persistAppStateCheckedOnce(options) {
   appState.deletions = sanitizeDeletions(appState.deletions, Date.now());
   appState.trash = sanitizeTrash(appState.trash, Date.now());
   appState.savedAt = Date.now();
@@ -21116,6 +21143,15 @@ function isStaleSyncError(error) {
   return Boolean(error && error.staleSync);
 }
 
+// 送る state を作った時点の同期先・世代のままか。別タブのガードで止まっている間も送らない。
+function syncSendGuardHolds(guard) {
+  if (typeof syncTargetHalted !== "undefined" && syncTargetHalted) return false;
+  if (!guard) return true;
+  if (guard.gen !== syncState.requestGen) return false;
+  const current = typeof syncRequestRoute === "function" ? String(syncRequestRoute().expectedSyncId || "") : "";
+  return guard.target === current;
+}
+
 // キー切替（別リンク採用・接続先変更・強制取得）時に呼ぶ：
 // リクエスト世代を進め、進行中の同期fetchをすべて中断する。中断された/世代の古い
 // 応答は syncRequest が staleSyncError にして返すため、マージ・push・UI反映されない。
@@ -21196,6 +21232,9 @@ function validSyncPutResponse(data, expectedSyncId = "") {
 }
 
 async function syncRequest(method, body = null, requestOptions = {}) {
+  // 最初の送受信（接続時の GET を含む）の前に、このタブの同期先を束縛する。
+  // 既に束縛済みで別タブが同期先を変えていたら、ここで止めて送受信しない（設計書 §4.4 の 4）。
+  if (typeof syncTargetChangedElsewhere === "function" && syncTargetChangedElsewhere()) throw staleSyncError();
   // 送信時の世代を覚え、応答受信時に世代が変わっていたら結果を破棄する
   const gen = syncState.requestGen;
   // URL・ヘッダ・応答照合IDは同じ資格情報スナップショットから作り、処理中の
@@ -21235,6 +21274,8 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     } else if (method === "GET" && Number.isFinite(Number(requestOptions.sinceRev))) {
       endpoint += `&sinceRev=${encodeURIComponent(String(Number(requestOptions.sinceRev)))}`;
     }
+    // 共通の送信境界: 停止中・送る state を作った後に同期先か世代が変わったなら送らない。
+    if (!syncSendGuardHolds(requestOptions.sendGuard)) throw staleSyncError();
     response = await fetch(endpoint, options);
     data = await response.json().catch(() => ({}));
   } catch (error) {
@@ -21369,6 +21410,13 @@ const SYNC_GZ_BASE64_LIMIT = 1_800_000;
 // 圧縮が使えない環境ではプレーン { baseRev, state }（従来形式）で送る。
 // 圧縮形式を知らない旧サーバーが4xxを返した場合も、プレーンで1回だけ再試行する。
 async function syncPutState(baseRev, requestOptions = {}) {
+  // 送る state を作った時点の同期先と世代。圧縮の await は bumpSyncRequestGen で中断できないので、
+  // 圧縮後・プレーン再送の前・fetch の直前で照合し、違えば送らない（旧い state を新しい同期先へ送らない）。
+  const sendGuard = {
+    gen: syncState.requestGen,
+    target: typeof syncRequestRoute === "function" ? String(syncRequestRoute().expectedSyncId || "") : "",
+  };
+  const guardedOptions = { ...requestOptions, sendGuard };
   const state = buildSyncPayloadState();
   if (syncShouldCompress()) {
     let stateGz = null;
@@ -21377,6 +21425,7 @@ async function syncPutState(baseRev, requestOptions = {}) {
     } catch {
       stateGz = null; // 圧縮に失敗したらプレーン送信へフォールバック
     }
+    if (!syncSendGuardHolds(sendGuard)) throw staleSyncError();
     if (stateGz) {
       if (stateGz.length > SYNC_GZ_BASE64_LIMIT) {
         const mb = (stateGz.length / 1024 / 1024).toFixed(1);
@@ -21389,7 +21438,7 @@ async function syncPutState(baseRev, requestOptions = {}) {
       const body = { stateGz, format: "gzip-base64" };
       if (baseRev !== null) body.baseRev = baseRev;
       try {
-        return await syncRequest("PUT", body, requestOptions);
+        return await syncRequest("PUT", body, guardedOptions);
       } catch (error) {
         // 旧サーバー（stateGz未対応）が返す400/422だけ、プレーン形式で1回再試行する。
         // 409（競合）・413・5xx・通信断・キー切替は従来どおり呼び出し側の処理へ渡す。
@@ -21399,12 +21448,13 @@ async function syncPutState(baseRev, requestOptions = {}) {
           typeof error?.data?.error === "string" && /^(invalid state|force required)$/.test(error.data.error);
         const unknownFormat = error && (error.status === 400 || error.status === 422) && !knownRejection;
         if (isStaleSyncError(error) || !unknownFormat) throw error;
+        if (!syncSendGuardHolds(sendGuard)) throw staleSyncError();
       }
     }
   }
   const body = { state };
   if (baseRev !== null) body.baseRev = baseRev;
-  return await syncRequest("PUT", body, requestOptions);
+  return await syncRequest("PUT", body, guardedOptions);
 }
 
 function setSyncStatus(message, mode = "") {
@@ -22286,6 +22336,12 @@ function recoveryBeforeReplace(credential, outcome, choose = askPasskeyDialog) {
         return null;
       }
     }
+    // 端末への保存の途中なら確定しない（保存中の変更を置換で消さない）。
+    if ((Number(syncState.persistInFlight) || 0) > 0) {
+      outcome.value = "fail";
+      setV2Status("この端末への保存の途中です。少し待ってから、もう一度「パスキーで復元」を押してください。", "error");
+      return null;
+    }
     outcome.lock = beginRecoveryCommit();
     // 選んだ時点の内容を退避する（確認を待つ間の変更も含める）。
     const snapshot = snapshotState();
@@ -22337,7 +22393,10 @@ async function appendBackupWords(words) {
     return false;
   }
   const unsent = (Number(syncState.dirtyGen) || 0) !== (Number(syncState.syncedGen) || 0);
-  if (syncState.pushing || syncState.pushQueued || syncState.pulling || syncState.pushTimer || syncState.retryTimer || unsent) {
+  if (
+    syncState.pushing || syncState.pushQueued || syncState.pulling || syncState.pushTimer || syncState.retryTimer ||
+    unsent || (Number(syncState.persistInFlight) || 0) > 0
+  ) {
     // 未送信分は通常の送信で先に送る（終わったら押し直してもらう）。
     if (unsent && !syncState.pushing && typeof pushWordsnapState === "function") pushWordsnapState({ force: true });
     setPasskeyStatus("この端末にまだ送っていない変更があります。先に同期を完了してから、もう一度お試しください。", "error");
@@ -23396,6 +23455,8 @@ function activeRoomIdFromStored(value) {
 }
 
 // storage イベントは書き込んだタブ以外にだけ届く＝別のタブによる変更そのもの。
+// 判定は「束縛済みの同期先と、localStorage から読み直した今の同期先が違うか」。oldValue には頼らない
+// （別タブが新しく発行したときは oldValue が null）。まだ一度も送受信していないタブだけ、oldValue を手掛かりに使う。
 window.addEventListener("storage", (event) => {
   if (event.key !== null && event.key !== SYNC_V2_CREDENTIAL_KEY && event.key !== SYNC_ID_KEY) return;
   if (syncTargetHalted) return;
