@@ -1,0 +1,92 @@
+{
+  "_note": "Phase A スパイク（2026-10-23）で iPhone（iOS 18.7 / Safari 27.0.1、ホーム画面アプリ）から採った WebAuthn の生データ。公開鍵と署名のみで秘密は含まない。rpId はスパイクのプレビューホスト。Phase B のテストで『実機の DER 署名が通ること』のフィクスチャに使う（設計書 §6.2）。",
+  "env": {
+    "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Mobile/15E148 Safari/604.1",
+    "standalone": true,
+    "host": "spike-passkey.wordbank.pages.dev",
+    "hasPublicKeyCredential": true,
+    "platformAuthenticator": true,
+    "conditionalMediation": true
+  },
+  "register": {
+    "ms": 5303,
+    "id": "HWOttFjI5EO8ipGQFEGlHS6sz6E",
+    "type": "public-key",
+    "transports": [
+      "internal",
+      "hybrid"
+    ],
+    "publicKeyAlgorithm": -7,
+    "publicKeySpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERDTBWWdOAn-XIi3crpQl1oJKckgeczvR2fhle3W8X_VXJFHG-S49PQSqi6lHOb76S4fWjrNMENUgFolAUEQI3g",
+    "authenticatorData": {
+      "raw": "nRrpO4SG-077iuP8DJ9oh3VbqIttJyMwpMIIeogVdH9dAAAAAPv8MAcVTk7MjAtuAgVX170AFB1jrbRYyORDvIqRkBRBpR0urM-hpQECAyYgASFYIEQ0wVlnTgJ_lyIt3K6UJdaCSnJIHnM70dn4ZXt1vF_1IlggVyRRxvkuPT0EqoupRzm--kuH1o6zTBDVIBaJQFBECN4",
+      "flags": 93,
+      "up": true,
+      "uv": true,
+      "be": true,
+      "bs": true,
+      "signCount": 0
+    },
+    "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViYnRrpO4SG-077iuP8DJ9oh3VbqIttJyMwpMIIeogVdH9dAAAAAPv8MAcVTk7MjAtuAgVX170AFB1jrbRYyORDvIqRkBRBpR0urM-hpQECAyYgASFYIEQ0wVlnTgJ_lyIt3K6UJdaCSnJIHnM70dn4ZXt1vF_1IlggVyRRxvkuPT0EqoupRzm--kuH1o6zTBDVIBaJQFBECN4",
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoic2NRQU1JS1JuaGRrRmlLX0hmeXQ1Ni1OTVF0QjNQMHJMai1LN25OQlRJMCIsIm9yaWdpbiI6Imh0dHBzOi8vc3Bpa2UtcGFzc2tleS53b3JkYmFuay5wYWdlcy5kZXYiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "challenge": "scQAMIKRnhdkFiK_Hfyt56-NMQtB3P0rLj-K7nNBTI0",
+    "userId": "zMJB0eOXveIuQqjHUBR_r4iMPUkTBgnz_QD2Rw33a5A",
+    "rpId": "spike-passkey.wordbank.pages.dev"
+  },
+  "login": {
+    "ms": 1866,
+    "id": "HWOttFjI5EO8ipGQFEGlHS6sz6E",
+    "sameAsRegistered": true,
+    "userHandle": "zMJB0eOXveIuQqjHUBR_r4iMPUkTBgnz_QD2Rw33a5A",
+    "authenticatorData": {
+      "raw": "nRrpO4SG-077iuP8DJ9oh3VbqIttJyMwpMIIeogVdH8dAAAAAA",
+      "flags": 29,
+      "up": true,
+      "uv": true,
+      "be": true,
+      "bs": true,
+      "signCount": 0
+    },
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoieWhUTG1JNDg2MWRGYUFlM1pwUXNwdXc1dEdCV1dhRFNIdEZWQlhUVTJoayIsIm9yaWdpbiI6Imh0dHBzOi8vc3Bpa2UtcGFzc2tleS53b3JkYmFuay5wYWdlcy5kZXYiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "signature": "MEUCIQCWaWgUkcLSRZFaJOT1GBTwLZbkFp3w4QOy5zHwEfRfqAIgG-Q7ViPYfLDIHdxE3YyR-XchGkFD5QqmZvKsVZFq9KQ",
+    "challenge": "yhTLmI4861dFaAe3ZpQspuw5tGBWWaDSHtFVBXTU2hk"
+  },
+  "loginAgain": {
+    "ms": 2963,
+    "id": "HWOttFjI5EO8ipGQFEGlHS6sz6E",
+    "sameAsRegistered": true,
+    "userHandle": "zMJB0eOXveIuQqjHUBR_r4iMPUkTBgnz_QD2Rw33a5A",
+    "authenticatorData": {
+      "raw": "nRrpO4SG-077iuP8DJ9oh3VbqIttJyMwpMIIeogVdH8dAAAAAA",
+      "flags": 29,
+      "up": true,
+      "uv": true,
+      "be": true,
+      "bs": true,
+      "signCount": 0
+    },
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiMllLT3lDdGVQQ2xPd3pFbDRBQWs5dlJ1UXoyT3Q4RjkzSHpsd2pOZVhYOCIsIm9yaWdpbiI6Imh0dHBzOi8vc3Bpa2UtcGFzc2tleS53b3JkYmFuay5wYWdlcy5kZXYiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "signature": "MEUCIQDUNwh_1RDK7fgFfeW_TR9OJrpqUzWBFo8QcQ3ilR8KSwIgal2cZP1yPehGZblkj5i2Q9bf8nStnzE6l8lU6GGrV48",
+    "challenge": "2YKOyCtePClOwzEl4AAk9vRuQz2Ot8F93HzlwjNeXX8"
+  },
+  "errors": [],
+  "fetchDelayMs": 3044,
+  "loginAfterFetch": {
+    "ms": 3764,
+    "id": "HWOttFjI5EO8ipGQFEGlHS6sz6E",
+    "sameAsRegistered": true,
+    "userHandle": "zMJB0eOXveIuQqjHUBR_r4iMPUkTBgnz_QD2Rw33a5A",
+    "authenticatorData": {
+      "raw": "nRrpO4SG-077iuP8DJ9oh3VbqIttJyMwpMIIeogVdH8dAAAAAA",
+      "flags": 29,
+      "up": true,
+      "uv": true,
+      "be": true,
+      "bs": true,
+      "signCount": 0
+    },
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoibU5VTDI1SFFTWXNwMmpnOXpySmVEeXg4THk0eUFWcGFwR0g2b0FzRDVBayIsIm9yaWdpbiI6Imh0dHBzOi8vc3Bpa2UtcGFzc2tleS53b3JkYmFuay5wYWdlcy5kZXYiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "signature": "MEUCIHdPZO9ww8w_Di-9Y-6dBQfnK-rn7LG-c4MqrCYFVcF6AiEAqY9cfwSWtPfjl0kn6YQhxGA4eC7SOWh5pE0oKwkInrI",
+    "challenge": "mNUL25HQSYsp2jg9zrJeDyx8Ly4yAVpapGH6oAsD5Ak"
+  }
+}
