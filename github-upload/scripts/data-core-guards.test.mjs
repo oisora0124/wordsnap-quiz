@@ -194,7 +194,11 @@ function undoSandbox() {
     "let undoCreatedAt = 0;",
     // 1.0.141: Undo を作成時の同期先に束縛する。__target で今の同期先を差し替える
     "let undoTarget = null;",
+    "let undoEpoch = null;",
     "let undoSuspended = false;",
+    "const UNDO_EPOCH_KEY = 'undo-epoch:test';",
+    extractFunction("readUndoEpoch"),
+    extractFunction("advanceUndoEpoch"),
     "let __target = '';",
     "function syncRequestRoute() { return { expectedSyncId: __target }; }",
     extractFunction("currentUndoTarget"),
@@ -213,7 +217,7 @@ function undoSandbox() {
       " status: () => __status, saved: () => __saved, hasUndo: () => Boolean(undoSnapshot)," +
       " setPersistOk: (v) => { __persistOk = v; }, rendered: () => __rendered, quiz: () => currentQuiz, setQuiz: (q) => { currentQuiz = q; }," +
       " setDuringPersist: (f) => { __duringPersist = f; }," +
-      " setTarget: (t) => { __target = t; }, suspend: (v) => { undoSuspended = v; }," +
+      " setTarget: (t) => { __target = t; }, suspend: (v) => { undoSuspended = v; }, advanceEpoch: advanceUndoEpoch," +
       " raw: () => JSON.parse(__store[UNDO_STORAGE_KEY] || 'null') };",
   ];
   const sandbox = {};
@@ -438,7 +442,7 @@ test("元に戻す: 指紋は favoriteUpdatedAt も見る（値が同じで時�
 
 test("元に戻す: 起動時に保存した指紋を読み戻す配線がある", async () => {
   // 1.0.141: 作成時の同期先（target）も読み戻す
-  assert.match(html, /if \(undoSnapshot\) \(\{ after: undoAfterSignature, createdAt: undoCreatedAt, target: undoTarget \} = readLocalUndoRecordMeta\(\)\);/);
+  assert.match(html, /if \(undoSnapshot\) \(\{ after: undoAfterSignature, createdAt: undoCreatedAt, target: undoTarget, epoch: undoEpoch \} = readLocalUndoRecordMeta\(\)\);/);
   assert.match(extractFunction("readLocalUndoRecordMeta"), /typeof record\?\.after === "string"/);
   assert.match(extractFunction("clearUndo"), /undoAfterSignature = null;\s*\n\s*undoCreatedAt = 0;/);
 });
@@ -1740,7 +1744,7 @@ test("元に戻す: 作成時と同期先が違えば実行せずに捨てる", 
   assert.match(u.status().at(-1), /同期先が変わった/);
 });
 
-test("元に戻す: 同じ同期先なら従来どおり、接続前（同期先が空）に作った Undo は束縛しない", async () => {
+test("元に戻す: 同じ同期先なら従来どおり。接続前（同期先が空）に作った Undo も空の目印で束縛し、接続後は実行しない", async () => {
   const same = undoSandbox();
   same.setTarget("ws_" + "1".repeat(60));
   same.setState(baseState());
@@ -1755,10 +1759,25 @@ test("元に戻す: 同じ同期先なら従来どおり、接続前（同期先
   const s2 = early.snapshotState();
   early.getState().words = [];
   early.offerUndo(s2);
-  assert.equal(early.raw().target, undefined, "空の同期先は記録しない");
+  assert.equal(early.raw().target, "", "空の同期先も記録する");
   early.setTarget("ws_" + "2".repeat(60));
   await early.performUndo();
-  assert.equal(early.getState().words.length, 2, "接続しただけで取り消せなくならない");
+  assert.equal(early.getState().words.length, 0, "接続後は戻さない（空の同期先の Undo を別の同期先へ当てない）");
+  assert.equal(early.hasUndo(), false);
+});
+
+test("元に戻す: 復旧の確定で Undo 世代が進んだら、同じ同期先でも実行せずに捨てる（別タブの Undo）", async () => {
+  const u = undoSandbox();
+  u.setTarget("wr_" + "a".repeat(32));
+  u.setState(baseState());
+  const snapshot = u.snapshotState();
+  u.getState().words = [];
+  u.offerUndo(snapshot);
+  assert.equal(u.raw().epoch, 0, "作成時の世代を残す");
+  u.advanceEpoch(); // 別タブが同じ部屋へ復旧を確定した
+  await u.performUndo();
+  assert.equal(u.getState().words.length, 0, "旧い内容で復旧先を上書きしない");
+  assert.equal(u.hasUndo(), false);
 });
 
 test("元に戻す: 復旧の処理中は受け付けない", async () => {
