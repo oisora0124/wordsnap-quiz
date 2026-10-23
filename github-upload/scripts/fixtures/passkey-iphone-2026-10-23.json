@@ -1,5 +1,5 @@
 {
-  "_note": "Phase A スパイク（2026-10-23）で iPhone（iOS 18.7 / Safari 27.0.1、ホーム画面アプリ）から採った WebAuthn の生データ。公開鍵と署名のみで秘密は含まない。rpId はスパイクのプレビューホスト。Phase B のテストで『実機の DER 署名が通ること』のフィクスチャに使う（設計書 §6.2）。",
+  "_note": "Phase A スパイク（2026-10-23）で iPhone（iOS 27.0.1、ホーム画面アプリ。UA の 18_7 は固定値）から採った WebAuthn の生データ。公開鍵と署名のみで秘密は含まない。rpId はスパイクのプレビューホスト。Phase B のテストで『実機の DER 署名が通ること』のフィクスチャに使う（設計書 §6.2）。",
   "env": {
     "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Mobile/15E148 Safari/604.1",
     "standalone": true,
