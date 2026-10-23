@@ -5475,6 +5475,12 @@ textarea:focus-visible {
   gap: 8px;
 }
 
+/* パスキーで復元の選択肢（部屋の一覧・3 択）は長い文言なので縦に並べる */
+.passkey-dialog-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
 body.tutorial-open {
   overflow: hidden;
 }
@@ -7263,7 +7269,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.140</span>
+        <span class="app-footer-version">バージョン 1.0.141</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7440,7 +7446,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.140";
+  const APP_REV = "1.0.141";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -7471,10 +7477,19 @@ const WordBankTelemetry = (() => {
     "ai-key-sync-enable",
     "ai-key-sync-adopt",
     "ai-key-sync-mismatch",
+    // パスキーで控える（Phase C）。登録・結びつけ・復旧の成否
+    "account-register",
+    "account-link",
+    "account-recover-success",
+    "account-recover-fail",
   ]);
   // wv_ はAIキー暗号化同期のvault key。封筒の復号鍵そのものなので、
-  // 万一エラー文へ混ざっても送信されないよう伏せる対象に含める。
-  const SECRET_PATTERN = /w(s|k|r|v)?_[0-9a-f]{16,}/gi;
+  // 万一エラー文へ混ざっても送信されないよう伏せる対象に含める。wa_ はアカウントID。
+  const SECRET_PATTERN = /w(s|k|r|v|a)?_[0-9a-f]{16,}/gi;
+  // パスキーのトークン（`{"accountId":` の base64url ＋"."＋43 文字）と challenge（ちょうど 43 文字の base64url）。
+  // サーバー側（telemetry.js・feedback.js）と同じ形。後読みは使えない（Safari 13.1 系）ので前の 1 文字を取って戻す。
+  const ACCOUNT_TOKEN_PATTERN = /eyJhY2NvdW50SWQi[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{43}/g;
+  const CHALLENGE_PATTERN = /(^|[^A-Za-z0-9_.@/+-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_.@/+-])/g;
   const URL_QUERY_PATTERN = /\b(https?:\/\/[^\s?#]+)\?[^#\s]*/gi;
   const W_QUERY_PATTERN = /([?&]w=)[^&#\s]*/gi;
   let usageFlushPending = false;
@@ -7493,6 +7508,8 @@ const WordBankTelemetry = (() => {
         .replace(URL_QUERY_PATTERN, "$1?[redacted]")
         .replace(W_QUERY_PATTERN, "$1[redacted]")
         .replace(SECRET_PATTERN, "[redacted]")
+        .replace(ACCOUNT_TOKEN_PATTERN, "[redacted]")
+        .replace(CHALLENGE_PATTERN, "$1[redacted]")
         .slice(0, maxLength);
     } catch {
       return "";
@@ -19888,6 +19905,13 @@ const syncState = {
   // 【送信キュー】ローカル変更の世代番号。保存（scheduleSyncPush）のたびに進める。
   // PUT送信中に進んだ世代＝そのPUTに乗らなかった変更は、送信完了後に必ず送り直す。
   dirtyGen: 0,
+  // 送信が通った最新の世代。dirtyGen と違えば、この端末に未送信の変更がある（退避の追加で使う）。
+  syncedGen: 0,
+  // 端末への保存（localStorage・IndexedDB）の途中の件数。0 でなければ退避の追加・復旧の確定を始めない。
+  persistInFlight: 0,
+  // 編集検出用の世代（保存の入口で進める）と、送信が通った時点の値。違えば未送信の編集がある（ガード専用）。
+  persistEditGen: 0,
+  syncedEditGen: 0,
   // PUT送信中に届いた送信要求の保留フラグ（1回分だけ予約し、完了後に消化する）
   pushQueued: false,
   // 【キー切替対策】同期リクエストの世代番号。キー切替（別リンク採用・接続先変更・
@@ -20027,6 +20051,7 @@ function showRuntimeStorageWarning(visible) {
 // Writes the app state to localStorage AND the IndexedDB mirror, stamped with
 // a save time so we can tell which copy is newer when recovering.
 function persistAppState(options = {}) {
+  if (typeof beginLocalPersist === "function") beginLocalPersist(options);
   appState.deletions = sanitizeDeletions(appState.deletions, Date.now());
   appState.trash = sanitizeTrash(appState.trash, Date.now());
   appState.savedAt = Date.now();
@@ -20045,13 +20070,40 @@ function persistAppState(options = {}) {
     if (writeGeneration !== storageWriteGeneration) return;
     showRuntimeStorageWarning(!localSaved && !idbSaved);
   };
-  idb.set(STORAGE_KEY, json).then(finishStorageCheck, () => finishStorageCheck(false));
+  const settle = () => {
+    if (typeof endLocalPersist === "function") endLocalPersist();
+  };
+  idb.set(STORAGE_KEY, json).then(finishStorageCheck, () => finishStorageCheck(false)).then(settle, settle);
   if (options.sync !== false) scheduleSyncPush();
+}
+
+// 端末の内容が appState に入った時点（保存の入口）で、同期的に「編集検出用の世代」を進め、保存中の件数を数える。
+// これは退避の追加・復旧の確定のガード専用。送信予約用の世代（dirtyGen）は従来どおり保存成功後の
+// scheduleSyncPush でだけ進める（入口で dirtyGen を進めると、応答待ち中の PUT の finally が再送を予約し、
+// 保存に失敗して取り消される変更まで送ってしまう）。
+function beginLocalPersist(options = {}) {
+  syncState.persistInFlight = (Number(syncState.persistInFlight) || 0) + 1;
+  if (options.sync !== false && !syncState.applyingRemote) {
+    syncState.persistEditGen = (Number(syncState.persistEditGen) || 0) + 1;
+  }
+}
+
+function endLocalPersist() {
+  syncState.persistInFlight = Math.max(0, (Number(syncState.persistInFlight) || 0) - 1);
 }
 
 // identity切替では、切替先stateの耐久保存を確認してから旧資格情報の破棄を確定する。
 // 通常保存のタイミングや送信挙動は変えず、native→legacy切替だけがこのawait可能版を使う。
 async function persistAppStateChecked(options = {}) {
+  if (typeof beginLocalPersist === "function") beginLocalPersist(options);
+  try {
+    return await persistAppStateCheckedOnce(options);
+  } finally {
+    if (typeof endLocalPersist === "function") endLocalPersist();
+  }
+}
+
+async function persistAppStateCheckedOnce(options) {
   appState.deletions = sanitizeDeletions(appState.deletions, Date.now());
   appState.trash = sanitizeTrash(appState.trash, Date.now());
   appState.savedAt = Date.now();
@@ -20918,6 +20970,7 @@ function writeV2Credential(credential) {
   const normalized = normalizeV2Credential(credential);
   if (!normalized) throw new Error("新方式の資格情報が不正です。");
   localStorage.setItem(SYNC_V2_CREDENTIAL_KEY, JSON.stringify(normalized));
+  if (typeof resetConnectedSyncTarget === "function") resetConnectedSyncTarget();
   // activeだけを、既存のwordsnap/kvへ同じ専用キーで自動退避する。
   // localStorage保存が成功した後に行い、legacyのID・アクセスキーとは混ぜない。
   backupActiveV2Credential(normalized);
@@ -21096,11 +21149,22 @@ function isStaleSyncError(error) {
   return Boolean(error && error.staleSync);
 }
 
+// 送る state を作った時点の同期先・世代のままか。別タブのガードで止まっている間も送らない。
+function syncSendGuardHolds(guard) {
+  if (typeof syncTargetHalted !== "undefined" && syncTargetHalted) return false;
+  if (!guard) return true;
+  if (guard.gen !== syncState.requestGen) return false;
+  const current = typeof syncRequestRoute === "function" ? String(syncRequestRoute().expectedSyncId || "") : "";
+  return guard.target === current;
+}
+
 // キー切替（別リンク採用・接続先変更・強制取得）時に呼ぶ：
 // リクエスト世代を進め、進行中の同期fetchをすべて中断する。中断された/世代の古い
 // 応答は syncRequest が staleSyncError にして返すため、マージ・push・UI反映されない。
 function bumpSyncRequestGen() {
   syncState.requestGen += 1;
+  // このタブ自身が同期先を切り替える操作。次の送受信で今の同期先を覚え直す。
+  if (typeof resetConnectedSyncTarget === "function") resetConnectedSyncTarget();
   // 旧キー向けに予約されていた通常送信・失敗リトライを、新しいキーへ持ち越さない。
   window.clearTimeout(syncState.pushTimer);
   window.clearTimeout(syncState.retryTimer);
@@ -21174,6 +21238,9 @@ function validSyncPutResponse(data, expectedSyncId = "") {
 }
 
 async function syncRequest(method, body = null, requestOptions = {}) {
+  // 最初の送受信（接続時の GET を含む）の前に、このタブの同期先を束縛する。
+  // 既に束縛済みで別タブが同期先を変えていたら、ここで止めて送受信しない（設計書 §4.4 の 4）。
+  if (typeof syncTargetChangedElsewhere === "function" && syncTargetChangedElsewhere()) throw staleSyncError();
   // 送信時の世代を覚え、応答受信時に世代が変わっていたら結果を破棄する
   const gen = syncState.requestGen;
   // URL・ヘッダ・応答照合IDは同じ資格情報スナップショットから作り、処理中の
@@ -21213,6 +21280,8 @@ async function syncRequest(method, body = null, requestOptions = {}) {
     } else if (method === "GET" && Number.isFinite(Number(requestOptions.sinceRev))) {
       endpoint += `&sinceRev=${encodeURIComponent(String(Number(requestOptions.sinceRev)))}`;
     }
+    // 共通の送信境界: 停止中・送る state を作った後に同期先か世代が変わったなら送らない。
+    if (!syncSendGuardHolds(requestOptions.sendGuard)) throw staleSyncError();
     response = await fetch(endpoint, options);
     data = await response.json().catch(() => ({}));
   } catch (error) {
@@ -21347,6 +21416,13 @@ const SYNC_GZ_BASE64_LIMIT = 1_800_000;
 // 圧縮が使えない環境ではプレーン { baseRev, state }（従来形式）で送る。
 // 圧縮形式を知らない旧サーバーが4xxを返した場合も、プレーンで1回だけ再試行する。
 async function syncPutState(baseRev, requestOptions = {}) {
+  // 送る state を作った時点の同期先と世代。圧縮の await は bumpSyncRequestGen で中断できないので、
+  // 圧縮後・プレーン再送の前・fetch の直前で照合し、違えば送らない（旧い state を新しい同期先へ送らない）。
+  const sendGuard = {
+    gen: syncState.requestGen,
+    target: typeof syncRequestRoute === "function" ? String(syncRequestRoute().expectedSyncId || "") : "",
+  };
+  const guardedOptions = { ...requestOptions, sendGuard };
   const state = buildSyncPayloadState();
   if (syncShouldCompress()) {
     let stateGz = null;
@@ -21355,6 +21431,7 @@ async function syncPutState(baseRev, requestOptions = {}) {
     } catch {
       stateGz = null; // 圧縮に失敗したらプレーン送信へフォールバック
     }
+    if (!syncSendGuardHolds(sendGuard)) throw staleSyncError();
     if (stateGz) {
       if (stateGz.length > SYNC_GZ_BASE64_LIMIT) {
         const mb = (stateGz.length / 1024 / 1024).toFixed(1);
@@ -21367,7 +21444,7 @@ async function syncPutState(baseRev, requestOptions = {}) {
       const body = { stateGz, format: "gzip-base64" };
       if (baseRev !== null) body.baseRev = baseRev;
       try {
-        return await syncRequest("PUT", body, requestOptions);
+        return await syncRequest("PUT", body, guardedOptions);
       } catch (error) {
         // 旧サーバー（stateGz未対応）が返す400/422だけ、プレーン形式で1回再試行する。
         // 409（競合）・413・5xx・通信断・キー切替は従来どおり呼び出し側の処理へ渡す。
@@ -21377,12 +21454,13 @@ async function syncPutState(baseRev, requestOptions = {}) {
           typeof error?.data?.error === "string" && /^(invalid state|force required)$/.test(error.data.error);
         const unknownFormat = error && (error.status === 400 || error.status === 422) && !knownRejection;
         if (isStaleSyncError(error) || !unknownFormat) throw error;
+        if (!syncSendGuardHolds(sendGuard)) throw staleSyncError();
       }
     }
   }
   const body = { state };
   if (baseRev !== null) body.baseRev = baseRev;
-  return await syncRequest("PUT", body, requestOptions);
+  return await syncRequest("PUT", body, guardedOptions);
 }
 
 function setSyncStatus(message, mode = "") {
@@ -21529,6 +21607,8 @@ function shouldPromptV2CodeBackup(identity = syncRequestRoute()) {
   if (!identity?.isV2Native) return false; // 個人リンクを持つ人には出さない
   if (!identity.roomId) return false;
   if (isV2CodeSavedFor(identity.roomId)) return false;
+  // 同期されたパスキーに結びつき、7 日以内に確かめた部屋だけ（設計書 §7.1。wv_ の注意は別に残る）。
+  if (typeof passkeyLinkProtects === "function" && passkeyLinkProtects(identity.roomId)) return false;
   if (!(appState?.words?.length > 0)) return false; // 守る価値のあるデータができてから
   // この部屋に単語が実際に入ったと検証できてから。別の部屋の成功や、
   // 同期を伴わない操作（共有リンクのコピー等）、空のcreateを根拠にしない。
@@ -21932,7 +22012,13 @@ async function joinV2Room() {
     }
   }
   v2JoinConfirm = { roomId: "", at: 0 };
+  return adoptV2Room(credential);
+}
 
+// 確認済みの資格情報で部屋を取得し、この端末をその部屋へ切り替える（joinV2Room とパスキー復旧で共用。設計書 §4.4）。
+// onBeforeReplace を渡したときは、置き換える前に必ず呼ぶ。null を返せば何も変えずに終わる（「やめる」）。
+// 値を返したら { state, stateRev } をその内容として採用し、Undo は作らず既存の Undo を消す（復旧専用）。
+async function adoptV2Room(credential, { onBeforeReplace } = {}) {
   setV2Busy(true);
   setV2Status("引き継ぎコードを確認しています…");
   try {
@@ -21973,12 +22059,17 @@ async function joinV2Room() {
     // 合流先を貼り間違えても、端末ローカルの単語が復元不能にならない）。
     const localSnapshot = snapshotState();
     const localWordCount = localSnapshot.words.length;
-    const active = activateV2Credential(credential, data.stateRev);
+    let adopted = data;
+    if (onBeforeReplace) {
+      adopted = await onBeforeReplace(data, localSnapshot);
+      if (!adopted) return null;
+    }
+    const active = activateV2Credential(credential, adopted.stateRev);
     // 合流時は手元のデータを勝手に新しい領域へ送らず、確認済みの同期先を正として
     // 端末表示を切り替える。以後の通常同期はactive資格情報で行う。
     syncState.applyingRemote = true;
     try {
-      appState = normalizeState(data.state || defaultState());
+      appState = normalizeState(adopted.state || defaultState());
       invalidatePersonalFactorCache();
       currentQuiz = null;
       selectedIds.clear();
@@ -21986,12 +22077,14 @@ async function joinV2Room() {
     } finally {
       syncState.applyingRemote = false;
     }
-    offerUndo(localSnapshot);
+    // 復旧では Undo を作らない（旧 appState を戻すと復旧先を空で上書きできる。設計書 §4.4 の 4）。
+    if (onBeforeReplace) clearUndo();
+    else offerUndo(localSnapshot);
     // 合流先の内容をそのまま採用した＝この保存先に何語入っているかが確定している
     recordVerifiedSync(credential.roomId, appState.words.length);
-    setV2JoinUndoVisible(true);
+    if (!onBeforeReplace) setV2JoinUndoVisible(true);
     renderAll();
-    if (elements.syncV2JoinInput) elements.syncV2JoinInput.value = "";
+    if (!onBeforeReplace && elements.syncV2JoinInput) elements.syncV2JoinInput.value = "";
     renderV2CredentialUi();
     setV2Status(
       `✓ 新方式のデータに合流しました（${appState.words.length}語）。合流前のこの端末には ${localWordCount}語 がありました。`,
@@ -22004,6 +22097,365 @@ async function joinV2Room() {
     setV2Busy(false);
   }
 }
+
+// ---- パスキー復旧の合流（Phase C。設計書 §4.4 の 3・5）----
+// mergeAppStates は使わない（削除記録の統合と単語帳の名前による合体で、復旧先の生存語が消える反例がある）。
+// 復旧先 remote を正とし、その単語帳・語・学習状態・削除記録・ゴミ箱・履歴は一切変えない。
+// local の語のうち、normalizeTerm で remote に無いものだけを新しい単語帳へ足す（学習状態・履歴は語に付いたまま）。
+// local の単語帳・削除記録・ゴミ箱は使わない。
+function appendLocalWords(remote, localWords, dateLabel = localDateString()) {
+  const base = remote && typeof remote === "object" && !Array.isArray(remote) ? remote : {};
+  const remoteWords = Array.isArray(base.words) ? base.words : [];
+  const remoteDecks = Array.isArray(base.decks) ? base.decks : [];
+  const remoteDeletions = base.deletions && typeof base.deletions === "object" ? base.deletions : {};
+  const terms = new Set(remoteWords.map((word) => normalizeTerm(String(word?.term || ""))));
+  const wordIds = new Set(remoteWords.map((word) => String(word?.id || "")));
+  const deckIds = new Set(remoteDecks.map((deck) => String(deck?.id || "")));
+  const deckNames = new Set(remoteDecks.map((deck) => String(deck?.name || "")));
+  let deckId = createId();
+  while (deckIds.has(deckId)) deckId = createId();
+  const baseName = `復旧前のこの端末の単語（${dateLabel}）`;
+  let deckName = baseName;
+  for (let n = 2; deckNames.has(deckName); n += 1) deckName = `${baseName} ${n}`;
+  const now = Date.now();
+  const added = [];
+  for (const raw of Array.isArray(localWords) ? localWords : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const term = String(raw.term || "").trim();
+    const key = normalizeTerm(term);
+    if (!key || !String(raw.meaning || "").trim() || terms.has(key)) continue;
+    terms.add(key);
+    const { enrich, ...rest } = JSON.parse(JSON.stringify(raw));
+    const word = { ...rest, deckId, deckUpdatedAt: now };
+    if (!word.id || wordIds.has(String(word.id))) word.id = createId();
+    while (wordIds.has(String(word.id))) word.id = createId();
+    wordIds.add(String(word.id));
+    // 復旧先の旧形式の削除記録（語だけのキー）に負けると、他の端末で消える。記録は変えず、追加時刻だけ新しくする。
+    const tombstone = Number(remoteDeletions[key] || 0);
+    if (tombstone && tombstone >= wordAddedMs(word)) word.addedAt = revivedAddedAtIso(tombstone);
+    added.push(word);
+  }
+  if (added.length === 0) return { state: base, addedCount: 0 };
+  return {
+    state: {
+      ...base,
+      words: [...remoteWords, ...added],
+      decks: [...remoteDecks, { id: deckId, name: deckName, updatedAt: now }],
+    },
+    addedCount: added.length,
+  };
+}
+
+const RECOVERY_PUT_MAX_ATTEMPTS = 5;
+
+// 復旧先の部屋へ直接話す（通常同期の経路・409 マージを通さないため、syncRequest は使わない）。
+async function recoveryRoomRequest(credential, method, body = null) {
+  const response = await v2Fetch(v2SyncEndpoint(credential.roomId), {
+    method,
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", "x-room-key": credential.secret },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  return { status: response.status, data: await readJsonResponse(response) };
+}
+
+async function recoveryPutBody(state, baseRev) {
+  const payload = {
+    ...state,
+    words: (Array.isArray(state.words) ? state.words : []).map((word) => {
+      const { enrich, ...rest } = word || {};
+      return rest;
+    }),
+  };
+  if (syncShouldCompress()) {
+    let stateGz = null;
+    try {
+      stateGz = await gzipJsonToBase64(JSON.stringify(payload));
+    } catch {
+      stateGz = null;
+    }
+    if (stateGz && stateGz.length > SYNC_GZ_BASE64_LIMIT) throw new Error("too large");
+    if (stateGz) return { stateGz, format: "gzip-base64", baseRev };
+  }
+  return { state: payload, baseRev };
+}
+
+// 復旧専用の送信。毎回「最新 remote を GET → appendLocalWords を組み直す → その rev で PUT」。
+// 入力は常に「追加予定だった端末の語」だけで、前回の送信結果は使わない。409 は最大 5 回まで繰り返し、超えたら中止する。
+// 追加する語が無くても（「採用」でも）必ず 1 回 PUT して rev を進める（古い rev を持つ別タブの送信を 409 にする）。
+async function commitRecoveryAppend(credential, localWords) {
+  for (let attempt = 0; attempt < RECOVERY_PUT_MAX_ATTEMPTS; attempt += 1) {
+    const got = await recoveryRoomRequest(credential, "GET");
+    if (
+      got.status !== 200 ||
+      !validSyncGetResponse(got.data, null, credential.roomId) ||
+      syncStateExceedsLimits(got.data.state)
+    ) {
+      return { ok: false, status: got.status };
+    }
+    const baseRev = Number(got.data.stateRev) || 0;
+    const merged = appendLocalWords(got.data.state || defaultState(), localWords);
+    const put = await recoveryRoomRequest(credential, "PUT", await recoveryPutBody(merged.state, baseRev));
+    if (put.status === 200 && validSyncPutResponse(put.data, credential.roomId)) {
+      return { ok: true, state: merged.state, stateRev: Number(put.data.stateRev), addedCount: merged.addedCount };
+    }
+    if (put.status !== 409) return { ok: false, status: put.status };
+  }
+  return { ok: false, status: 409 };
+}
+
+// 置換前の端末の状態の退避（1 件、上書き）。既存の JSON 取り込みでは受け付けない形式にする（設計書 §4.4 の 5）。
+// 置き場所は IndexedDB（既存の idb kv）。localStorage の容量（数 MB）では大きな単語帳の退避が書けないため。
+// 30 日で自動的に消し、「追加」に成功したときと「退避を削除」でも消す。
+const RECOVERY_BACKUP_KEY = "wordsnap-recovery-backup:v1";
+const RECOVERY_BACKUP_KIND = "wordsnap-recovery-backup";
+const RECOVERY_BACKUP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function saveRecoveryBackup(snapshot) {
+  try {
+    const record = {
+      kind: RECOVERY_BACKUP_KIND,
+      version: 1,
+      savedAt: Date.now(),
+      state: {
+        ...snapshot,
+        words: (snapshot.words || []).map((word) => {
+          const { enrich, ...rest } = word || {};
+          return rest;
+        }),
+      },
+    };
+    return (await idb.set(RECOVERY_BACKUP_KEY, JSON.stringify(record))) === true;
+  } catch {
+    return false;
+  }
+}
+
+function parseRecoveryBackup(value) {
+  if (!value || typeof value !== "object" || value.kind !== RECOVERY_BACKUP_KIND) return null;
+  if (!value.state || !Array.isArray(value.state.words)) return null;
+  return value;
+}
+
+async function readRecoveryBackup(now = Date.now()) {
+  try {
+    const raw = await idb.get(RECOVERY_BACKUP_KEY);
+    if (!raw) return null;
+    const backup = parseRecoveryBackup(JSON.parse(raw));
+    if (backup && now - (Number(backup.savedAt) || 0) > RECOVERY_BACKUP_TTL_MS) {
+      await deleteRecoveryBackup();
+      return null;
+    }
+    return backup;
+  } catch {
+    return null;
+  }
+}
+
+async function deleteRecoveryBackup() {
+  try {
+    await idb.delete(RECOVERY_BACKUP_KEY);
+  } catch {
+    // 消せなくても 30 日で読まなくなる
+  }
+}
+
+// 復旧の確定ごとに進める。起動時の復元（recoverPersisted）は、読み取り開始時と違えば結果を捨てる。
+let recoveryGeneration = 0;
+
+// 別のタブの Undo も止めるための世代。復旧の確定で進め、Undo は作成時の値と違えば実行しない（設計書 §4.4 の 4）。
+const UNDO_EPOCH_KEY = "wordsnap-undo-epoch:v1";
+
+function readUndoEpoch() {
+  try {
+    return Number(localStorage.getItem(UNDO_EPOCH_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function advanceUndoEpoch() {
+  try {
+    localStorage.setItem(UNDO_EPOCH_KEY, String(readUndoEpoch() + 1));
+  } catch {
+    // 書けなくても、このタブの Undo は clearUndo で消え、別タブは同期先の束縛で止まる
+  }
+}
+
+// 復旧専用の UI ロック（端末内 OCR のロックと同じ作り: 押せる状態を控えてから止め、終わったら控えに戻す）。
+// 送信から置換までの間に解答・編集・取り込み・設定の操作で端末の内容が変わると、その変更が置換で消えるため。
+function lockUiForRecovery() {
+  const controls = Array.from(
+    document.querySelectorAll(
+      "[data-step-panel] button, [data-step-panel] input, [data-step-panel] select, [data-step-panel] textarea, [data-step-tab]",
+    ),
+  );
+  const snapshot = controls.map((control) => ({ control, disabled: control.disabled }));
+  for (const { control } of snapshot) control.disabled = true;
+  const ariaBusy = document.body.getAttribute("aria-busy");
+  document.body.setAttribute("aria-busy", "true");
+  return { snapshot, ariaBusy };
+}
+
+function restoreUiAfterRecovery(lock) {
+  if (!lock) return;
+  for (const { control, disabled } of lock.snapshot) control.disabled = disabled;
+  if (lock.ariaBusy === null) document.body.removeAttribute("aria-busy");
+  else document.body.setAttribute("aria-busy", lock.ariaBusy);
+}
+
+// 送信を始める前の共通の準備。通常同期を止め、送信予約を捨て、UI を止める。
+function beginRecoveryCommit() {
+  stopSyncPolling();
+  bumpSyncRequestGen();
+  return lockUiForRecovery();
+}
+
+// 端末の内容（語・ゴミ箱）が 1 つでもあれば、置き換える前に選ばせ、退避する。
+function hasLocalContent(state) {
+  return (state?.words?.length || 0) > 0 || (state?.trash?.length || 0) > 0;
+}
+
+// 復旧の onBeforeReplace。端末に語（またはゴミ箱）があれば必ず 3 択を経る（不変条件 3）。
+// 結果は outcome.value に "ok" / "cancel" / "fail" で残す（adoptV2Room の戻り値だけでは区別できない）。
+// outcome.lock には UI ロックを置く。置換が終わったら呼び出し側が restoreUiAfterRecovery で戻す。
+function recoveryBeforeReplace(credential, outcome, choose = askPasskeyDialog) {
+  return async (remote) => {
+    const remoteCount = Array.isArray(remote?.state?.words) ? remote.state.words.length : 0;
+    const localCount = appState?.words?.length || 0;
+    const trashCount = appState?.trash?.length || 0;
+    let mode = "replace";
+    if (hasLocalContent(appState)) {
+      const trashNote = trashCount > 0 ? `（ゴミ箱に ${trashCount} 語）` : "";
+      mode = await choose({
+        title: "この端末の単語をどうしますか？",
+        text: `この端末に ${localCount} 語${trashNote}、復旧先に ${remoteCount} 語あります。どれを選んでも、置き換える前のこの端末の内容は「退避」として残ります。`,
+        choices: [
+          { value: "replace", label: `この端末の ${localCount} 語を捨てて、復旧先（${remoteCount} 語）を採用` },
+          { value: "append", label: "この端末の語を復旧先へ追加（新しい単語帳に入ります）" },
+          { value: null, label: "やめる" },
+        ],
+      });
+      if (mode !== "replace" && mode !== "append") {
+        outcome.value = "cancel";
+        setV2Status("復旧をやめました。この端末の内容は変えていません。");
+        return null;
+      }
+    }
+    // 端末への保存の途中なら確定しない（保存中の変更を置換で消さない）。
+    if ((Number(syncState.persistInFlight) || 0) > 0) {
+      outcome.value = "fail";
+      setV2Status("この端末への保存の途中です。少し待ってから、もう一度「パスキーで復元」を押してください。", "error");
+      return null;
+    }
+    outcome.lock = beginRecoveryCommit();
+    // 選んだ時点の内容を退避する（確認を待つ間の変更も含める）。
+    const snapshot = snapshotState();
+    const fingerprint = stateSignature(appState);
+    if (hasLocalContent(snapshot) && !(await saveRecoveryBackup(snapshot))) {
+      outcome.value = "fail";
+      setV2Status("置き換える前の内容を退避できなかったため、復旧を中止しました。先に「JSONを書き出す」で控えてください。", "error");
+      return null;
+    }
+    clearUndo();
+    advanceUndoEpoch();
+    recoveryGeneration += 1;
+    setV2Status("復旧先へ保存しています…");
+    let result;
+    try {
+      result = await commitRecoveryAppend(credential, mode === "append" ? snapshot.words : []);
+    } catch {
+      result = { ok: false, status: 0 };
+    }
+    if (!result.ok) {
+      outcome.value = "fail";
+      setV2Status(
+        result.status === 409
+          ? "ほかの端末の保存と重なり続けたため、復旧を中止しました。この端末の内容は退避に残っています。"
+          : "復旧先へ保存できなかったため、復旧を中止しました。この端末の内容は変えていません。",
+        "error",
+      );
+      return null;
+    }
+    // 送信の間に端末の内容が変わっていたら置き換えない（その変更が消えるため）。復旧先への保存は済んでいる。
+    if (stateSignature(appState) !== fingerprint) {
+      outcome.value = "fail";
+      setV2Status("保存の途中でこの端末の内容が変わったため、切り替えを中止しました。この端末の内容は退避に残っています。", "error");
+      return null;
+    }
+    outcome.value = "ok";
+    outcome.addedCount = result.addedCount;
+    outcome.credential = credential;
+    return result;
+  };
+}
+
+// 退避の語を、今の部屋へ appendLocalWords と同じ規則で足す（送信も復旧専用の再送）。
+// 未送信の変更があるときは始めない（結果で置き換えると、端末だけの未送信の語が消えるため）。
+async function appendBackupWords(words) {
+  const credential = getActiveV2Credential();
+  if (!credential) {
+    setPasskeyStatus("退避の単語を追加するには、新方式（引き継ぎコード）で同期している必要があります。", "error");
+    return false;
+  }
+  const unsent =
+    (Number(syncState.dirtyGen) || 0) !== (Number(syncState.syncedGen) || 0) ||
+    (Number(syncState.persistEditGen) || 0) !== (Number(syncState.syncedEditGen) || 0);
+  if (
+    syncState.pushing || syncState.pushQueued || syncState.pulling || syncState.pushTimer || syncState.retryTimer ||
+    unsent || (Number(syncState.persistInFlight) || 0) > 0
+  ) {
+    // 未送信分は通常の送信で先に送る（終わったら押し直してもらう）。
+    if (unsent && !syncState.pushing && typeof pushWordsnapState === "function") pushWordsnapState({ force: true });
+    setPasskeyStatus("この端末にまだ送っていない変更があります。先に同期を完了してから、もう一度お試しください。", "error");
+    return false;
+  }
+  const fingerprint = stateSignature(appState);
+  const lock = beginRecoveryCommit();
+  try {
+    const result = await commitRecoveryAppend(credential, words);
+    if (!result.ok) {
+      setPasskeyStatus("退避の単語を保存できませんでした。退避はそのまま残っています。もう一度お試しください。", "error");
+      return false;
+    }
+    // 送信の間に端末の内容が変わっていたら置き換えない（次の通常同期で、追加分はサーバーから届く）。
+    if (stateSignature(appState) !== fingerprint) {
+      setPasskeyStatus("保存の途中でこの端末の内容が変わったため、表示の切り替えを中止しました。追加分は次の同期で届きます。退避は残しています。", "error");
+      return false;
+    }
+    syncState.rev = result.stateRev;
+    syncState.applyingRemote = true;
+    try {
+      appState = normalizeState(result.state);
+      invalidatePersonalFactorCache();
+      currentQuiz = null;
+      selectedIds.clear();
+      persistAppState({ sync: false });
+    } finally {
+      syncState.applyingRemote = false;
+    }
+    syncState.syncedGen = syncState.dirtyGen;
+    syncState.syncedEditGen = Number(syncState.persistEditGen) || 0;
+    clearUndo();
+    recordVerifiedSync(credential.roomId, appState.words.length);
+    await deleteRecoveryBackup();
+    renderAll();
+    setPasskeyStatus(
+      result.addedCount > 0
+        ? `✓ 退避から ${result.addedCount} 語を新しい単語帳に追加しました（退避は削除しました）。`
+        : "退避の単語はすべて今の単語帳にありました（追加はありません。退避は削除しました）。",
+      "live",
+    );
+    return true;
+  } catch {
+    setPasskeyStatus("退避の単語を追加できませんでした。退避はそのまま残っています。", "error");
+    return false;
+  } finally {
+    restoreUiAfterRecovery(lock);
+    if (syncServerAvailable()) startSyncPolling();
+  }
+}
+
 
 function initV2SyncUi() {
   renderV2CredentialUi();
@@ -22136,7 +22588,893 @@ function initV2SyncUi() {
     markV2CodeSavedFor(credential);
     setV2Status("✓ 引き継ぎコードをテキストファイルで保存しました。", "live");
   });
+  // 対応環境でだけ「パスキーで控える」の節と復元案内のボタンを足す（非対応では何も足さない）。
+  initPasskeyUi();
 }
+
+// ---- パスキーで控える（Phase C。設計書 §3・§4.2・§7.1）----
+// 対応環境（PublicKeyCredential と isUserVerifyingPlatformAuthenticatorAvailable() が真）でだけ、
+// 設定の節と復元案内のボタンを DOM に足す。非対応ではここから何も足さず、保存も通信もしない（不変条件 6）。
+// サーバーのフラグを探りに行く通信はしない。操作したときの 503 で「準備中」を出す。
+// トークンはメモリにだけ持つ（10 分。破壊的な操作は発行から 2 分以内が要るので、古ければ認証し直す）。
+const PASSKEY_LINKED_KEY = "wordsnap-passkey-linked:v1";
+const PASSKEY_LINKED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PASSKEY_TOKEN_MAX_AGE_MS = 9 * 60 * 1000;
+const PASSKEY_FRESH_MAX_AGE_MS = 100 * 1000;
+let passkeySession = null; // { token, accountId, cid, backedUp, at }
+let passkeyBusy = false;
+// 認証は 1 つずつ（同時に 2 回 Face ID を出さない・別々のトークンを混ぜない）。
+let passkeyLoginInFlight = null;
+// 一覧を表示しているアカウント。破壊的な操作の再認証で別のパスキー（別アカウント）を選ばれたら中止する。
+let passkeyShownAccountId = "";
+// フォーカスの戻し先。操作中はボタンが無効になりフォーカスが外れるので、無効にする前に取る。
+let passkeyFocusOrigin = null;
+// 起動時の復元（recoverPersisted）の完了。済むまで「パスキーで復元」は押せない（設計書 §4.4 の 6）。
+let recoverPersistedReady = null;
+let recoverPersistedSettled = false;
+// 復旧先への保存は済んだが端末の切り替えに失敗したとき、利用者の操作でだけ表示する引き継ぎコード。
+let passkeyRecoveredCode = "";
+
+function markRecoverPersistedSettled() {
+  recoverPersistedSettled = true;
+  if (typeof setPasskeyBusy === "function") setPasskeyBusy(passkeyBusy);
+}
+
+async function passkeySupported() {
+  try {
+    if (typeof PublicKeyCredential !== "function") return false;
+    if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable !== "function") return false;
+    if (!navigator.credentials || typeof navigator.credentials.create !== "function") return false;
+    return (await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()) === true;
+  } catch {
+    return false;
+  }
+}
+
+// 「控え済み」の記録。V2_CODE_SAVED_KEY には書かない（wv_ を含むコードの保管状態とは別物。§7.1）。
+function readPasskeyLinked() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PASSKEY_LINKED_KEY));
+    if (!parsed || typeof parsed !== "object" || !V2_ROOM_ID_PATTERN.test(String(parsed.roomId || ""))) return null;
+    return { roomId: parsed.roomId, backedUp: parsed.backedUp === true, checkedAt: Number(parsed.checkedAt) || 0 };
+  } catch {
+    return null;
+  }
+}
+
+function writePasskeyLinked(roomId, backedUp) {
+  try {
+    localStorage.setItem(PASSKEY_LINKED_KEY, JSON.stringify({ roomId, backedUp: backedUp === true, checkedAt: Date.now() }));
+  } catch {
+    // 書けなければ帯が出続けるだけ（安全側）
+  }
+}
+
+function clearPasskeyLinked() {
+  try {
+    if (localStorage.getItem(PASSKEY_LINKED_KEY) !== null) localStorage.removeItem(PASSKEY_LINKED_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+// 帯を隠してよいのは、今の部屋が結びつき済み・同期されたパスキー・7 日以内に確かめた、の 3 つが揃うときだけ。
+function passkeyLinkProtects(roomId, now = Date.now()) {
+  const linked = readPasskeyLinked();
+  if (!linked || !roomId || linked.roomId !== roomId || !linked.backedUp) return false;
+  return linked.checkedAt <= now + 60 * 1000 && now - linked.checkedAt <= PASSKEY_LINKED_TTL_MS;
+}
+
+function bytesToBase64Url(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlToBytes(text) {
+  const value = String(text || "").replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(value + "=".repeat((4 - (value.length % 4)) % 4));
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+function passkeyError(code, status = 0) {
+  const error = new Error(code);
+  error.passkeyCode = code;
+  error.status = status;
+  return error;
+}
+
+async function accountApi(op, body = {}, token = "") {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.authorization = `Bearer ${token}`;
+  let response;
+  try {
+    response = await v2Fetch("/api/account", {
+      method: "POST",
+      cache: "no-store",
+      headers,
+      body: JSON.stringify({ ...body, op }),
+    });
+  } catch {
+    throw passkeyError("network");
+  }
+  const data = await readJsonResponse(response);
+  if (response.status === 503) {
+    // フラグ OFF・KEK 不備。「守られている」と誤認させないよう、控え済みの記録を即座に無効にする。
+    clearPasskeyLinked();
+    renderV2RecoveryNotice();
+    throw passkeyError("unavailable", 503);
+  }
+  if (response.status === 403 && token) passkeySession = null;
+  if (!response.ok) throw passkeyError(response.status === 429 ? "rate-limited" : "rejected", response.status);
+  return data;
+}
+
+function passkeyErrorMessage(error) {
+  if (error?.name === "NotAllowedError" || error?.name === "AbortError") return "パスキーの操作が取り消されました。";
+  if (error?.name === "InvalidStateError") return "このパスキーはすでに登録されています。";
+  switch (error?.passkeyCode) {
+    case "unavailable":
+      return "パスキーで控える機能は準備中です。引き継ぎコードで控えてください。";
+    case "network":
+      return "通信できませんでした。接続を確認してもう一度お試しください。";
+    case "rate-limited":
+      return "短時間に操作が集中したため制限中です。しばらくおいてからお試しください。";
+    case "rejected":
+      return "確認できませんでした。もう一度お試しください。";
+    case "account-mismatch":
+      return "表示しているのとは別のアカウントのパスキーが選ばれたため、中止しました。「パスキーで確認・管理」で表示し直してからやり直してください。";
+    default:
+      return "パスキーの操作を完了できませんでした。";
+  }
+}
+
+function setPasskeyStatus(message, mode = "") {
+  const status = elements.passkeyStatus;
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle("is-live", mode === "live");
+  status.classList.toggle("is-error", mode === "error");
+}
+
+function passkeySessionValid(fresh = false, maxAgeMs = 0) {
+  if (!passkeySession) return false;
+  const limit = maxAgeMs || (fresh ? PASSKEY_FRESH_MAX_AGE_MS : PASSKEY_TOKEN_MAX_AGE_MS);
+  return Date.now() - passkeySession.at < limit;
+}
+
+async function passkeyRegister() {
+  const options = await accountApi("register-options");
+  const credential = await navigator.credentials.create({
+    publicKey: {
+      rp: options.rp,
+      user: { ...options.user, id: base64UrlToBytes(options.user?.id) },
+      challenge: base64UrlToBytes(options.challenge),
+      pubKeyCredParams: options.pubKeyCredParams,
+      authenticatorSelection: options.authenticatorSelection,
+      attestation: options.attestation,
+      excludeCredentials: (options.excludeCredentials || []).map((c) => ({ type: c.type, id: base64UrlToBytes(c.id) })),
+    },
+  });
+  return credential;
+}
+
+function serializeRegistration(credential) {
+  return {
+    id: credential.id,
+    response: {
+      clientDataJSON: bytesToBase64Url(credential.response.clientDataJSON),
+      attestationObject: bytesToBase64Url(credential.response.attestationObject),
+    },
+  };
+}
+
+async function passkeyLogin() {
+  const options = await accountApi("login-options");
+  const credential = await navigator.credentials.get({
+    publicKey: {
+      challenge: base64UrlToBytes(options.challenge),
+      rpId: options.rpId,
+      userVerification: options.userVerification || "required",
+      allowCredentials: [],
+    },
+  });
+  const response = credential.response;
+  const result = await accountApi("login", {
+    credential: {
+      id: credential.id,
+      response: {
+        clientDataJSON: bytesToBase64Url(response.clientDataJSON),
+        authenticatorData: bytesToBase64Url(response.authenticatorData),
+        signature: bytesToBase64Url(response.signature),
+        userHandle: response.userHandle ? bytesToBase64Url(response.userHandle) : null,
+      },
+    },
+  });
+  passkeySession = { token: result.token, accountId: result.accountId, cid: credential.id, backedUp: result.backedUp === true, at: Date.now() };
+  return passkeySession.token;
+}
+
+async function passkeyToken({ fresh = false, maxAgeMs = 0 } = {}) {
+  if (passkeySessionValid(fresh, maxAgeMs)) return passkeySession.token;
+  if (!passkeyLoginInFlight) {
+    passkeyLoginInFlight = passkeyLogin().finally(() => {
+      passkeyLoginInFlight = null;
+    });
+  }
+  await passkeyLoginInFlight;
+  if (!passkeySession) throw passkeyError("rejected");
+  return passkeySession.token;
+}
+
+// 破壊的な操作の再認証。表示中と別のアカウントのパスキーが選ばれたら、そのアカウントには何もしない。
+async function freshTokenForShownAccount(options = {}) {
+  const token = await passkeyToken({ fresh: true, ...options });
+  if (passkeyShownAccountId && passkeySession?.accountId !== passkeyShownAccountId) {
+    throw passkeyError("account-mismatch");
+  }
+  return token;
+}
+
+function setPasskeyBusy(busy) {
+  passkeyBusy = busy;
+  elements.passkeySection?.querySelectorAll("button").forEach((button) => {
+    button.disabled = busy || (button.dataset.passkey === "recover" && !recoverPersistedSettled);
+  });
+  if (elements.recoveryPromptPasskeyButton) {
+    elements.recoveryPromptPasskeyButton.disabled = busy || !recoverPersistedSettled;
+  }
+}
+
+function capturePasskeyFocusOrigin() {
+  passkeyFocusOrigin = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+    ? document.activeElement
+    : passkeyFocusOrigin;
+}
+
+// 操作が終わってボタンが押せる状態に戻ってから、行き場を失ったフォーカスを戻す。
+function restorePasskeyFocus() {
+  const origin = passkeyFocusOrigin;
+  passkeyFocusOrigin = null;
+  if (!origin || (document.activeElement && document.activeElement !== document.body)) return;
+  if (origin.isConnected !== false && !origin.disabled) origin.focus?.();
+}
+
+function formatPasskeyDate(ms) {
+  const value = Number(ms) || 0;
+  return value > 0 ? new Date(value).toLocaleDateString("ja-JP") : "—";
+}
+
+function passkeyRoomLabel(room, currentRoomId = "") {
+  const words = room.wordCount === null || room.wordCount === undefined
+    ? "語数不明"
+    : room.wordCount === 0 ? "空（0 語）" : `${room.wordCount} 語`;
+  const decks = Number.isInteger(room.deckCount) ? `・単語帳 ${room.deckCount}` : "";
+  const mark = currentRoomId && room.roomId === currentRoomId ? "（この端末で自動発行）" : "";
+  return `${words}${decks}・最終更新 ${formatPasskeyDate(room.updatedAt)}${mark}`;
+}
+
+// 復旧画面の並び。語数の多い順、語数不明は最後。
+function sortRecoveryRooms(rooms) {
+  const count = (room) => (Number.isInteger(room?.wordCount) ? room.wordCount : -1);
+  return [...rooms].sort((a, b) => count(b) - count(a));
+}
+
+// 選択肢を出す小さなモーダル。押した値（「やめる」・Escape・背景は null）で解決する。
+let passkeyDialogResolve = null;
+let passkeyDialogReturnFocus = null;
+
+function ensurePasskeyDialog() {
+  if (elements.passkeyDialogBackdrop) return;
+  const backdrop = document.createElement("div");
+  backdrop.className = "tutorial-backdrop";
+  backdrop.hidden = true;
+  backdrop.innerHTML =
+    '<section id="passkeyDialog" class="tutorial-dialog" role="dialog" aria-modal="true"' +
+    ' aria-labelledby="passkeyDialogTitle" aria-describedby="passkeyDialogText">' +
+    '<div><p class="tutorial-kicker">パスキーで復元</p><h2 id="passkeyDialogTitle"></h2><p id="passkeyDialogText"></p></div>' +
+    '<div class="tutorial-actions passkey-dialog-actions"></div></section>';
+  document.body.append(backdrop);
+  elements.passkeyDialogBackdrop = backdrop;
+  elements.passkeyDialog = backdrop.querySelector("#passkeyDialog");
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) closePasskeyDialog(null);
+  });
+  elements.passkeyDialog?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePasskeyDialog(null);
+      return;
+    }
+    trapDialogTab(elements.passkeyDialog, event);
+  });
+}
+
+function askPasskeyDialog({ title, text, choices, returnFocus = null }) {
+  ensurePasskeyDialog();
+  closePasskeyDialog(null);
+  const dialog = elements.passkeyDialog;
+  dialog.querySelector("#passkeyDialogTitle").textContent = title;
+  dialog.querySelector("#passkeyDialogText").textContent = text || "";
+  const buttons = choices.map((choice) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = choice.value === null ? "ghost" : "secondary";
+    button.textContent = choice.label;
+    button.addEventListener("click", () => closePasskeyDialog(choice.value));
+    return button;
+  });
+  dialog.querySelector(".passkey-dialog-actions").replaceChildren(...buttons);
+  // 呼び出し側が操作前に取った戻し先を優先する（操作中はボタンが無効で activeElement が body になっている）。
+  passkeyDialogReturnFocus = returnFocus || passkeyFocusOrigin ||
+    (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  elements.passkeyDialogBackdrop.hidden = false;
+  document.body.classList.add("tutorial-open");
+  buttons[0]?.focus();
+  return new Promise((resolve) => {
+    passkeyDialogResolve = resolve;
+  });
+}
+
+function closePasskeyDialog(value) {
+  const resolve = passkeyDialogResolve;
+  if (!resolve) return;
+  passkeyDialogResolve = null;
+  if (elements.passkeyDialogBackdrop) elements.passkeyDialogBackdrop.hidden = true;
+  // ほかのモーダル（チュートリアル・お知らせ・復元案内）が開いていれば、背景のスクロール止めは外さない。
+  if (!document.querySelector(".tutorial-backdrop:not([hidden])")) document.body.classList.remove("tutorial-open");
+  passkeyDialogReturnFocus?.focus?.();
+  passkeyDialogReturnFocus = null;
+  resolve(value);
+}
+
+function setUndoControlsDisabled(disabled) {
+  if (elements.undoButton) elements.undoButton.disabled = disabled;
+  if (elements.syncV2UndoButton) elements.syncV2UndoButton.disabled = disabled;
+}
+
+// 空の端末からパスキーで部屋へ戻る（起動時には自動で走らせない）。
+// 成功は adoptV2Room が切り替えを終えたとき（戻り値あり）だけ。復旧先への PUT が済んでも、
+// この端末の資格情報の保存に失敗したら成功にしない（設計書 §4.4 の 3）。
+async function recoverWithPasskey() {
+  if (passkeyBusy) return;
+  capturePasskeyFocusOrigin();
+  if (!recoverPersistedSettled) {
+    setPasskeyStatus("起動時の読み込みがまだ終わっていません。数秒おいてからもう一度お試しください。", "error");
+    return;
+  }
+  if (v2RecoveryBarrierStatus() === "pending") {
+    setPasskeyStatus("起動時の確認がまだ終わっていません。数秒おいてからもう一度お試しください。", "error");
+    return;
+  }
+  setPasskeyBusy(true);
+  let outcome = "fail";
+  const result = { value: "fail" };
+  try {
+    await passkeyToken();
+    const rooms = await accountApi("rooms", {}, passkeySession.token);
+    if (!Array.isArray(rooms) || rooms.length === 0) {
+      outcome = "none";
+      setPasskeyStatus("このパスキーに結びついた部屋はありません。引き継ぎコードで復元してください。", "error");
+      return;
+    }
+    const currentRoomId = getActiveV2Credential()?.roomId || "";
+    const roomId = await askPasskeyDialog({
+      title: "どの部屋へ戻しますか？",
+      text: "このパスキーに結びついた部屋です（語数の多い順）。",
+      choices: [
+        ...sortRecoveryRooms(rooms).map((room) => ({ value: room.roomId, label: passkeyRoomLabel(room, currentRoomId) })),
+        { value: null, label: "やめる" },
+      ],
+    });
+    if (!roomId) {
+      outcome = "cancel";
+      setPasskeyStatus("復旧をやめました。");
+      return;
+    }
+    const recovered = await accountApi("recover-room", { roomId }, await passkeyToken({ fresh: true }));
+    if (recovered?.roomId !== roomId || !/^wk_[0-9a-f]{60}$/.test(String(recovered?.secret || ""))) {
+      throw passkeyError("rejected");
+    }
+    // 同じ部屋の同じ秘密なら、この端末だけが持つ vault key は捨てない（joinV2Room と同じ）。
+    const active = getActiveV2Credential();
+    const credential = {
+      v: 2,
+      status: "pending",
+      roomId,
+      secret: recovered.secret,
+      origin: "",
+      ...(active?.roomId === roomId && active.secret === recovered.secret && active.vaultKey ? { vaultKey: active.vaultKey } : {}),
+    };
+    const claimToken = await acquireIdentityClaim("recover");
+    if (!claimToken) {
+      setPasskeyStatus("別のタブでこの端末の同期設定を変更中です。少し待ってからもう一度お試しください。", "error");
+      return;
+    }
+    undoSuspended = true;
+    setUndoControlsDisabled(true);
+    let adopted = null;
+    try {
+      adopted = await adoptV2Room(credential, { onBeforeReplace: recoveryBeforeReplace(credential, result) });
+    } finally {
+      restoreUiAfterRecovery(result.lock);
+      undoSuspended = false;
+      setUndoControlsDisabled(false);
+      releaseIdentityClaim(claimToken);
+    }
+    if (result.value === "ok" && adopted) {
+      outcome = "ok";
+      writePasskeyLinked(roomId, passkeySession?.backedUp === true);
+      renderV2RecoveryNotice();
+      const added = result.addedCount > 0 ? `この端末の ${result.addedCount} 語を新しい単語帳に追加しました。` : "";
+      setPasskeyStatus(
+        `✓ パスキーで復元しました（${appState.words.length}語）。${added}AIキーは復元されないので、使う場合は入れ直してください。`,
+        "live",
+      );
+      setV2Status("✓ パスキーで復元した部屋と同期しています。", "live");
+    } else if (result.value === "ok") {
+      // 復旧先への保存は済んだのに、この端末の切り替え（資格情報の保存）ができなかった。
+      passkeyRecoveredCode = `${roomId}.${recovered.secret}`;
+      setPasskeyStatus(
+        "サーバーへの保存は済みましたが、この端末の切り替えに失敗しました。引き継ぎコードで合流してください（下の「復旧先の引き継ぎコードを表示」）。",
+        "error",
+      );
+    } else if (result.value === "cancel") {
+      outcome = "cancel";
+      setPasskeyStatus("復旧をやめました。この端末の内容は変えていません。");
+    } else {
+      setPasskeyStatus("復旧を完了できませんでした。上の状態表示を確認してください。", "error");
+    }
+  } catch (error) {
+    setPasskeyStatus(passkeyErrorMessage(error), "error");
+  } finally {
+    // 切り替えなかったときは、止めた通常同期を元の同期先で再開する（切り替えたときは activateV2Credential が再開済み）。
+    if (outcome !== "ok" && result.lock && syncServerAvailable() && !syncTargetHalted) startSyncPolling();
+    setPasskeyBusy(false);
+    renderPasskeySection();
+    restorePasskeyFocus();
+    if (outcome === "ok") trackUsage("account-recover-success");
+    else if (outcome === "fail") trackUsage("account-recover-fail");
+  }
+}
+
+// いまの部屋をパスキーに結びつける。register が真なら新しいパスキーを登録し、偽なら既存のパスキーで認証する。
+// 控え済みの記録が無いことを理由に、勝手に新規登録はしない（別アカウントを作ってしまうため）。
+async function passkeyLinkCurrentRoom({ register = false } = {}) {
+  if (passkeyBusy) return;
+  capturePasskeyFocusOrigin();
+  const credential = getActiveV2Credential();
+  if (!credential) {
+    setPasskeyStatus("先に「新方式へ移行」で引き継ぎコードを作ってください。", "error");
+    return;
+  }
+  // 0 語の部屋（起動時に自動発行した空の部屋など）は結びつけない（設計書 §4.4）。
+  if (!(appState?.words?.length > 0)) return;
+  setPasskeyBusy(true);
+  try {
+    if (register) {
+      const created = await passkeyRegister();
+      const result = await accountApi("register", { credential: serializeRegistration(created) });
+      passkeySession = { token: result.token, accountId: result.accountId, cid: created.id, backedUp: false, at: Date.now() };
+      trackUsage("account-register");
+    }
+    const token = await passkeyToken();
+    const linked = await accountApi("link-room", { roomId: credential.roomId, secret: credential.secret }, token);
+    writePasskeyLinked(credential.roomId, linked?.backedUp === true);
+    trackUsage("account-link");
+    renderV2RecoveryNotice();
+    setPasskeyStatus(
+      linked?.backedUp === true
+        ? "✓ 今の部屋をパスキーに結びつけました。端末の保存が消えても、パスキーで戻れます。"
+        : "✓ 結びつけました。ただし、このパスキーは端末に固定されていて同期されていません。引き継ぎコードも必ず控えてください。",
+      "live",
+    );
+  } catch (error) {
+    setPasskeyStatus(passkeyErrorMessage(error), "error");
+  } finally {
+    setPasskeyBusy(false);
+    renderPasskeySection();
+    restorePasskeyFocus();
+  }
+}
+
+// 一覧（パスキー・結びつき）を読み、控え済みの記録を確かめ直す。interactive が偽なら認証を求めない。
+async function loadPasskeyAccount({ interactive = true } = {}) {
+  if (passkeyBusy) return;
+  if (!interactive && !passkeySessionValid()) return;
+  if (interactive) capturePasskeyFocusOrigin();
+  setPasskeyBusy(true);
+  try {
+    const token = await passkeyToken();
+    const [keys, rooms] = [await accountApi("passkeys", {}, token), await accountApi("rooms", {}, token)];
+    const currentRoomId = getActiveV2Credential()?.roomId || "";
+    const backedUp = Array.isArray(keys) && keys.some((key) => key.backedUp === true);
+    if (Array.isArray(rooms) && currentRoomId && rooms.some((room) => room.roomId === currentRoomId)) {
+      writePasskeyLinked(currentRoomId, backedUp);
+    } else {
+      clearPasskeyLinked();
+    }
+    passkeyShownAccountId = passkeySession?.accountId || "";
+    renderV2RecoveryNotice();
+    renderPasskeyAccount(Array.isArray(keys) ? keys : [], Array.isArray(rooms) ? rooms : [], currentRoomId);
+    if (interactive) setPasskeyStatus("✓ パスキーで確認しました。", "live");
+  } catch (error) {
+    setPasskeyStatus(passkeyErrorMessage(error), "error");
+  } finally {
+    setPasskeyBusy(false);
+    renderPasskeySection();
+    if (interactive) restorePasskeyFocus();
+  }
+}
+
+function passkeyListItem(text, button) {
+  const item = document.createElement("li");
+  const label = document.createElement("span");
+  label.textContent = text;
+  item.append(label);
+  if (button) item.append(" ", button);
+  return item;
+}
+
+function passkeyActionButton(label, onClick, className = "ghost mini") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function renderPasskeyAccount(keys, rooms, currentRoomId) {
+  const panel = elements.passkeySection?.querySelector('[data-passkey="panel"]');
+  if (!panel) return;
+  panel.hidden = false;
+  const keyList = panel.querySelector('[data-passkey="keys"]');
+  keyList.replaceChildren(
+    ...keys.map((key) => {
+      const text = `登録 ${formatPasskeyDate(key.createdAt)}・最終使用 ${formatPasskeyDate(key.lastUsedAt)}${key.backedUp ? "" : "・端末に固定（同期なし）"}`;
+      const remove = keys.length > 1
+        ? passkeyActionButton("削除", (event) => passkeyRemove(key.credentialId, event.currentTarget))
+        : null;
+      return passkeyListItem(text, remove);
+    }),
+  );
+  const lastNote = panel.querySelector('[data-passkey="last-key"]');
+  if (lastNote) lastNote.hidden = keys.length > 1;
+  const roomList = panel.querySelector('[data-passkey="rooms"]');
+  roomList.replaceChildren(
+    ...rooms.map((room) => {
+      const words = Number.isInteger(room.wordCount) ? `${room.wordCount} 語` : "語数不明";
+      const current = room.roomId === currentRoomId ? "（この端末の部屋）" : "";
+      const unlink = passkeyActionButton("結びつけを外す", (event) => passkeyUnlink(room.roomId, event.currentTarget));
+      return passkeyListItem(`${words}・結びつけ ${formatPasskeyDate(room.linkedAt)}${current}`, unlink);
+    }),
+  );
+  if (rooms.length === 0) roomList.replaceChildren(passkeyListItem("結びついた部屋はありません。"));
+  const linkCurrent = panel.querySelector('[data-passkey="link-current"]');
+  // 0 語の部屋を結びつける動機は無い（設計書 §4.4 の空の部屋との混同）。
+  if (linkCurrent) {
+    linkCurrent.hidden =
+      !currentRoomId || !(appState?.words?.length > 0) || rooms.some((room) => room.roomId === currentRoomId);
+  }
+}
+
+async function passkeyRemove(credentialId, button) {
+  if (!armDangerButton(button, "もう一度押すと削除")) return;
+  await passkeyMutate(async () => {
+    await accountApi("remove-passkey", { credentialId }, await freshTokenForShownAccount());
+    if (passkeySession?.cid === credentialId) passkeySession = null;
+    // 同期されたパスキーを消したかもしれない。認証し直した一覧で確かめるまで、帯を隠さない。
+    clearPasskeyLinked();
+    renderV2RecoveryNotice();
+    setPasskeyStatus("✓ パスキーを削除しました。", "live");
+  });
+}
+
+async function passkeyUnlink(roomId, button) {
+  if (!armDangerButton(button, "もう一度押すと外す")) return;
+  await passkeyMutate(async () => {
+    await accountApi("unlink-room", { roomId }, await freshTokenForShownAccount());
+    if (readPasskeyLinked()?.roomId === roomId) clearPasskeyLinked();
+    renderV2RecoveryNotice();
+    setPasskeyStatus("✓ 結びつけを外しました。部屋と単語はそのまま残ります。", "live");
+  });
+}
+
+async function passkeyAdd() {
+  await passkeyMutate(async () => {
+    // options と登録（Face ID の操作を含む）を 2 分の窓に収めるため、残りが 60 秒未満なら先に認証し直す。
+    const token = await freshTokenForShownAccount({ maxAgeMs: 60 * 1000 });
+    const options = await accountApi("add-passkey-options", {}, token);
+    const created = await navigator.credentials.create({
+      publicKey: {
+        rp: options.rp,
+        user: { ...options.user, id: base64UrlToBytes(options.user?.id) },
+        challenge: base64UrlToBytes(options.challenge),
+        pubKeyCredParams: options.pubKeyCredParams,
+        authenticatorSelection: options.authenticatorSelection,
+        attestation: options.attestation,
+        excludeCredentials: (options.excludeCredentials || []).map((c) => ({ type: c.type, id: base64UrlToBytes(c.id) })),
+      },
+    });
+    await accountApi("add-passkey", { credential: serializeRegistration(created) }, token);
+    setPasskeyStatus("✓ パスキーを追加しました。", "live");
+  });
+}
+
+async function passkeyDeleteAccount(button) {
+  if (!armDangerButton(button, "もう一度押すとアカウントを削除")) {
+    setPasskeyStatus("アカウントを削除すると、結びつけと鍵の封筒だけが消え、部屋と単語は残ります。よければもう一度押してください（4秒で取り消し）。");
+    return;
+  }
+  if (passkeyBusy) return;
+  capturePasskeyFocusOrigin();
+  setPasskeyBusy(true);
+  try {
+    await accountApi("delete-account", {}, await freshTokenForShownAccount());
+    passkeySession = null;
+    passkeyShownAccountId = "";
+    clearPasskeyLinked();
+    renderV2RecoveryNotice();
+    const panel = elements.passkeySection?.querySelector('[data-passkey="panel"]');
+    if (panel) panel.hidden = true;
+    setPasskeyStatus("✓ アカウントを削除しました。部屋と単語はそのまま残り、引き継ぎコードで使えます。", "live");
+  } catch (error) {
+    setPasskeyStatus(passkeyErrorMessage(error), "error");
+  } finally {
+    setPasskeyBusy(false);
+    renderPasskeySection();
+    restorePasskeyFocus();
+  }
+}
+
+async function passkeyMutate(action) {
+  if (passkeyBusy) return;
+  capturePasskeyFocusOrigin();
+  setPasskeyBusy(true);
+  try {
+    await action();
+  } catch (error) {
+    setPasskeyStatus(passkeyErrorMessage(error), "error");
+  } finally {
+    setPasskeyBusy(false);
+  }
+  await loadPasskeyAccount({ interactive: false });
+  restorePasskeyFocus();
+}
+
+// 状態に応じて出し分ける（legacy のみ／控える／端末固定の警告／退避／復旧先のコード）。
+async function renderPasskeySection() {
+  const section = elements.passkeySection;
+  if (!section) return;
+  const pick = (name) => section.querySelector(`[data-passkey="${name}"]`);
+  const credential = getActiveV2Credential();
+  const legacyOnly = !credential && Boolean(syncRequestRoute().legacyId);
+  const canLink = Boolean(credential) && appState?.words?.length > 0;
+  pick("legacy").hidden = !legacyOnly;
+  pick("upgrade").hidden = !legacyOnly;
+  pick("link-new").hidden = !canLink;
+  pick("link-existing").hidden = !canLink;
+  const linked = readPasskeyLinked();
+  pick("warn").hidden = !(linked && credential && linked.roomId === credential.roomId && !linked.backedUp);
+  pick("show-code").hidden = !passkeyRecoveredCode;
+  const backup = await readRecoveryBackup();
+  pick("backup-stored").hidden = !backup;
+  if (backup) {
+    pick("backup-text").textContent =
+      `${formatPasskeyDate(backup.savedAt)} に退避した ${backup.state.words.length} 語があります（復旧で置き換える前のこの端末の内容。30 日で自動的に消えます）。`;
+  }
+}
+
+const PASSKEY_SECTION_HTML =
+  '<summary>🔐 パスキーで控える（試験的・iPhone で最も確実）</summary>' +
+  '<div class="sync-fix-body">' +
+  '<p class="settings-desc">今の部屋（引き継ぎコードの行き先）をパスキーに結びつけて控えます。端末の保存が消えても、パスキーで本人確認すると戻れます。iPhone では iCloud キーチェーンに入るので最も確実です。</p>' +
+  '<p class="settings-desc">同期サーバーは今までも鍵を受け取っています。保存のしかたが 1 つ増えます。AIキーの暗号鍵は控えないので、復元後は AIキーを入れ直してください。</p>' +
+  '<p class="settings-desc"><strong>パスキーを失うと戻れません。引き継ぎコードも別に控えると安心です。</strong></p>' +
+  '<p class="settings-desc" data-passkey="legacy" hidden>この端末は旧方式（個人キー）で同期しています。パスキーで控えるには、先に「新方式へ移行」で引き継ぎコードを作ってください。移行は片道で、パスキーを外しても元へは戻りません（個人リンクは引き続き使えます）。</p>' +
+  '<p class="sync-status is-error" data-passkey="warn" hidden>このパスキーは端末に固定されていて、iCloud キーチェーン等へ同期されていません。端末を失うと戻れないため、引き継ぎコードの注意は消えません。</p>' +
+  '<div class="sync-v2-actions">' +
+  '<button type="button" class="secondary" data-passkey="upgrade" hidden>新方式へ移行</button>' +
+  '<button type="button" class="secondary" data-passkey="link-new" hidden>初めて控える（新しいパスキーを登録）</button>' +
+  '<button type="button" class="ghost" data-passkey="link-existing" hidden>すでに控えてある（パスキーで確認して、この部屋を結びつける）</button>' +
+  '<button type="button" class="ghost" data-passkey="recover">パスキーで復元</button>' +
+  '<button type="button" class="ghost" data-passkey="manage">パスキーで確認・管理</button>' +
+  '</div>' +
+  '<p class="sync-status" data-passkey="status" role="status" aria-live="polite"></p>' +
+  '<div class="sync-v2-actions"><button type="button" class="ghost" data-passkey="show-code" hidden>復旧先の引き継ぎコードを表示</button></div>' +
+  '<p class="sync-v2-code-warning" data-passkey="code" hidden></p>' +
+  '<div data-passkey="panel" hidden>' +
+  '<p><strong>パスキー</strong></p><ul class="settings-desc" data-passkey="keys"></ul>' +
+  '<p class="settings-desc" data-passkey="last-key">最後の 1 本は削除できません。すべて消すときは「アカウントを削除」を使ってください。</p>' +
+  '<div class="sync-v2-actions"><button type="button" class="ghost" data-passkey="add">パスキーを追加</button></div>' +
+  '<p><strong>結びついた部屋</strong></p><ul class="settings-desc" data-passkey="rooms"></ul>' +
+  '<div class="sync-v2-actions"><button type="button" class="ghost" data-passkey="link-current" hidden>今の部屋を結びつける</button></div>' +
+  '<p class="settings-desc">アカウントを削除すると、結びつけと鍵の封筒だけが消えます。部屋と単語は残り、引き継ぎコードで引き続き使えます。</p>' +
+  '<div class="sync-v2-actions"><button type="button" class="ghost danger" data-passkey="delete">アカウントを削除</button></div>' +
+  '</div>' +
+  '<div data-passkey="backup-stored" hidden>' +
+  '<p><strong>復旧前の退避</strong></p><p class="settings-desc" data-passkey="backup-text"></p>' +
+  '<div class="sync-v2-actions">' +
+  '<button type="button" class="ghost" data-passkey="backup-export">JSON で書き出す</button>' +
+  '<button type="button" class="secondary" data-passkey="backup-append">退避の単語を今の単語帳へ追加</button>' +
+  '<button type="button" class="ghost danger" data-passkey="backup-delete">退避を削除</button>' +
+  '</div></div>' +
+  '<div class="sync-v2-actions"><button type="button" class="ghost" data-passkey="backup-file">退避の単語を追加（JSON を選ぶ）</button></div>' +
+  '<input type="file" accept="application/json,.json" data-passkey="backup-input" aria-label="退避の JSON ファイル" hidden />' +
+  '</div>';
+
+async function runBackupAppend(words) {
+  if (passkeyBusy) return;
+  capturePasskeyFocusOrigin();
+  setPasskeyBusy(true);
+  try {
+    await appendBackupWords(words);
+  } finally {
+    setPasskeyBusy(false);
+    renderPasskeySection();
+    restorePasskeyFocus();
+  }
+}
+
+function buildPasskeySection() {
+  const section = document.createElement("details");
+  section.className = "sync-fix";
+  section.id = "passkeySection";
+  section.innerHTML = PASSKEY_SECTION_HTML;
+  elements.syncV2Section.after(section);
+  elements.passkeySection = section;
+  elements.passkeyStatus = section.querySelector('[data-passkey="status"]');
+  const on = (name, handler) => section.querySelector(`[data-passkey="${name}"]`)?.addEventListener("click", handler);
+  on("upgrade", () => upgradeToV2().then(renderPasskeySection));
+  on("link-new", () => passkeyLinkCurrentRoom({ register: true }));
+  on("link-existing", () => passkeyLinkCurrentRoom({ register: false }));
+  on("link-current", () => passkeyLinkCurrentRoom({ register: false }));
+  on("recover", () => recoverWithPasskey());
+  on("manage", () => loadPasskeyAccount());
+  on("add", () => passkeyAdd());
+  on("delete", (event) => passkeyDeleteAccount(event.currentTarget));
+  // 秘密を DOM に書かない原則の例外: 利用者がこのボタンを押したときだけ表示する（設計書 §4.4 の 3）。
+  on("show-code", () => {
+    const code = section.querySelector('[data-passkey="code"]');
+    if (!code || !passkeyRecoveredCode) return;
+    code.textContent = `復旧先の引き継ぎコード: ${passkeyRecoveredCode}（「別の端末で引き継ぎコードを使う」に貼り付けて合流してください。他人に見せないでください）`;
+    code.hidden = false;
+  });
+  on("backup-export", async () => {
+    const backup = await readRecoveryBackup();
+    if (!backup) return;
+    downloadBlob(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }), "wordsnap-recovery-backup.json");
+    setPasskeyStatus("退避を JSON で書き出しました。", "live");
+  });
+  on("backup-append", async () => {
+    const backup = await readRecoveryBackup();
+    if (backup) await runBackupAppend(backup.state.words);
+  });
+  on("backup-delete", async (event) => {
+    if (!armDangerButton(event.currentTarget, "もう一度押すと退避を削除")) return;
+    await deleteRecoveryBackup();
+    setPasskeyStatus("退避を削除しました。", "live");
+    renderPasskeySection();
+  });
+  const input = section.querySelector('[data-passkey="backup-input"]');
+  on("backup-file", () => input?.click());
+  input?.addEventListener("change", async () => {
+    const [file] = input.files || [];
+    input.value = "";
+    if (!file || passkeyBusy) return;
+    let backup = null;
+    try {
+      backup = file.size <= IMPORT_MAX_FILE_BYTES ? parseRecoveryBackup(JSON.parse(await file.text())) : null;
+    } catch {
+      backup = null;
+    }
+    if (!backup) {
+      setPasskeyStatus("復旧前の退避の JSON ではありません。通常のバックアップは「JSONを読み込む」から読み込んでください。", "error");
+      return;
+    }
+    await runBackupAppend(backup.state.words);
+  });
+  // 節を開いたときに、認証済みの間だけ静かに結びつきを確かめ直す（アカウントを持つ端末だけの通信）。
+  section.addEventListener("toggle", () => {
+    if (!section.open) return;
+    renderPasskeySection();
+    loadPasskeyAccount({ interactive: false });
+  });
+  setPasskeyBusy(false);
+  renderPasskeySection();
+}
+
+function addRecoveryPromptPasskeyButton() {
+  const restore = elements.recoveryPromptRestoreButton;
+  if (!restore) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary";
+  button.textContent = "パスキーで復元";
+  button.disabled = !recoverPersistedSettled;
+  restore.before(button);
+  elements.recoveryPromptPasskeyButton = button;
+  button.addEventListener("click", () => {
+    dismissRecoveryPrompt();
+    openSyncV2Section();
+    if (elements.passkeySection) {
+      elements.passkeySection.open = true;
+      elements.passkeySection.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    }
+    recoverWithPasskey();
+  });
+}
+
+// 対応環境でだけ UI を足す。非対応・http(s) 以外では何もしない（不変条件 6）。
+async function initPasskeyUi() {
+  if (!elements.syncV2Section || !syncServerAvailable()) return false;
+  if (!(await passkeySupported())) return false;
+  buildPasskeySection();
+  addRecoveryPromptPasskeyButton();
+  return true;
+}
+
+// ---- 別のタブによる同期先の切り替え（パスキー復旧 Phase C。設計書 §4.4 の 4）----
+// V2 の資格情報は localStorage から毎回読むので、別のタブが復旧・合流で資格情報を切り替えると、
+// このタブの通常同期は新しい同期先へ「このタブの古い内容」を送り、409 では mergeAppStates で合流させてしまう。
+// rev を進めても、409 の本文で最新を受け取って合流する経路なので止まらない。
+// そこで、このタブが送受信している同期先（connectedSyncTarget）を覚え、送受信と 409 処理の直前に
+// 今の同期先と比べる。違えば同期を止め、合流も送信もせずに再読み込みを促す。
+// このタブ自身の切り替え（bumpSyncRequestGen・writeV2Credential を通る）では覚え直す。
+let connectedSyncTarget = "";
+let syncTargetHalted = false;
+
+function resetConnectedSyncTarget() {
+  connectedSyncTarget = "";
+}
+
+function haltSyncForForeignTarget() {
+  syncTargetHalted = true;
+  stopSyncPolling();
+  bumpSyncRequestGen();
+  syncState.connected = false;
+  setSyncStatus("同期先が別のタブで変わりました。このタブを再読み込みしてください。", "error");
+}
+
+// true なら、このタブは送受信も合流もしてはいけない。
+function syncTargetChangedElsewhere() {
+  if (syncTargetHalted) return true;
+  const current = String(syncRequestRoute().expectedSyncId || "");
+  if (!current) return false;
+  if (!connectedSyncTarget) {
+    connectedSyncTarget = current;
+    return false;
+  }
+  if (current === connectedSyncTarget) return false;
+  haltSyncForForeignTarget();
+  return true;
+}
+
+function activeRoomIdFromStored(value) {
+  try {
+    const credential = normalizeV2Credential(JSON.parse(value));
+    return credential?.status === "active" ? credential.roomId : "";
+  } catch {
+    return "";
+  }
+}
+
+// storage イベントは書き込んだタブ以外にだけ届く＝別のタブによる変更そのもの。
+// 判定は「束縛済みの同期先と、localStorage から読み直した今の同期先が違うか」。oldValue には頼らない
+// （別タブが新しく発行したときは oldValue が null）。まだ一度も送受信していないタブだけ、oldValue を手掛かりに使う。
+window.addEventListener("storage", (event) => {
+  if (event.key !== null && event.key !== SYNC_V2_CREDENTIAL_KEY && event.key !== SYNC_ID_KEY) return;
+  if (syncTargetHalted) return;
+  // まだ一度も送受信していないタブでも、切り替え前の active な部屋が分かれば比べる。
+  const baseline = connectedSyncTarget || (event.key === SYNC_V2_CREDENTIAL_KEY ? activeRoomIdFromStored(event.oldValue) : "");
+  if (!baseline) return;
+  if (String(syncRequestRoute().expectedSyncId || "") !== baseline) haltSyncForForeignTarget();
+});
+
 
 // 経過時間を「たった今 / ○分前 / HH:MM」で表す
 function describeSyncedAt(ts) {
@@ -22797,12 +24135,15 @@ function scheduleSyncRetry(requestGen, requestedId, retryAttempt) {
   }, retryAttempt * 1500);
 }
 
+
 async function pushWordsnapState(options = {}) {
   const identity = typeof syncRequestRoute === "function"
     ? syncRequestRoute()
     : { expectedSyncId: syncState.connected ? "connected" : "" };
   if (!identity.expectedSyncId || !syncServerAvailable()) return;
   if (!syncState.connected && !options.force) return;
+  // 別のタブが同期先を変えていたら、この端末の内容をそこへ送らない（設計書 §4.4 の 4）。
+  if (typeof syncTargetChangedElsewhere === "function" && syncTargetChangedElsewhere()) return;
   if (syncState.pushing) {
     // 送信中の呼び出しは黙って捨てず、完了後に送り直す予約に変える
     // （PUT中の変更が送られず「最新です」と誤表示されるのを防ぐ）
@@ -22814,6 +24155,8 @@ async function pushWordsnapState(options = {}) {
   syncState.retryTimer = 0;
   // この送信のボディに乗るのは現時点の世代までの変更。送信中に世代が進んだら再送する。
   const sentGen = syncState.dirtyGen;
+  // この送信の本文に乗る編集（appState に入っている分）の世代。ガード用に成功時だけ記録する。
+  const sentEditGen = Number(syncState.persistEditGen) || 0;
   const requestGen = syncState.requestGen;
   const requestedId = identity.expectedSyncId;
   const retryAttempt = Math.max(0, Number(options.retryAttempt) || 0);
@@ -22827,6 +24170,8 @@ async function pushWordsnapState(options = {}) {
     const result = await syncPutState(syncState.rev);
     syncState.rev = Number(result.stateRev) || syncState.rev;
     syncState.connected = true;
+    syncState.syncedGen = Math.max(Number(syncState.syncedGen) || 0, sentGen);
+    syncState.syncedEditGen = Math.max(Number(syncState.syncedEditGen) || 0, sentEditGen);
     // 段階4: 送信が通ったので、この保存先への保存を検証済みとして記録する。
     // 保存先は「応答のsyncIdと照合済み」の値を最優先する。呼び出し前のスナップショットでは、
     // gzip圧縮のawaitを跨いで別タブが資格情報を切り替えた場合に実際の送信先とずれる。
@@ -22852,6 +24197,10 @@ async function pushWordsnapState(options = {}) {
         // 欠落・構造不正は異常応答としてfail closedにし、次のGETで安全に取り直す。
         error.noRetry = true;
         error.message = "同期の競合データを確認できないため、自動再送を中止しました。もう一度同期してください。";
+      } else if (typeof syncTargetChangedElsewhere === "function" && syncTargetChangedElsewhere()) {
+        // 別タブが同期先を変えた後の 409 は合流しない（復旧先へ古い端末状態を混ぜない）。
+        handedOff = true;
+        return;
       } else {
         syncState.rev = Number(error.data.stateRev) || syncState.rev;
         applyMergedRemoteState(error.data.state);
@@ -22889,6 +24238,7 @@ async function pullWordsnapState(options = {}) {
     return false;
   }
   if (syncState.pulling) return false;
+  if (typeof syncTargetChangedElsewhere === "function" && syncTargetChangedElsewhere()) return false;
   syncState.pulling = true;
   if (!options.silent) setSyncStatus("サーバーから読み込んでいます…");
   try {
@@ -22901,6 +24251,7 @@ async function pullWordsnapState(options = {}) {
       options.silent && syncState.rev > 0 ? { sinceRev: syncState.rev } : {},
     );
     if (requestedId !== syncRequestRoute().expectedSyncId) return false;
+    if (typeof syncTargetChangedElsewhere === "function" && syncTargetChangedElsewhere()) return false;
     const remoteRev = Number(remote.stateRev) || 0;
     // サーバーが state を返してきた（＝未変更ではない）なら、rev が上がった時だけでなく
     // 下がった時（D1のバックアップ復元・rev再採番など）も取り込む。remoteRev===syncState.rev の
@@ -24245,9 +25596,11 @@ function readLocalUndoRecordMeta() {
     return {
       after: typeof record?.after === "string" ? record.after : null,
       createdAt: nonNegativeNumber(record?.createdAt),
+      target: typeof record?.target === "string" ? record.target : null,
+      epoch: Number.isInteger(record?.epoch) ? record.epoch : null,
     };
   } catch {
-    return { after: null, createdAt: 0 };
+    return { after: null, createdAt: 0, target: null, epoch: null };
   }
 }
 
@@ -24255,8 +25608,16 @@ function readLocalUndoRecordMeta() {
 // 保存データの読み戻し（次の行）より前に宣言すること（後ろだと起動時に TDZ で止まる）。
 let undoAfterSignature = null;
 let undoCreatedAt = 0; // 提示時刻。指紋の無い旧い保存データでは、これと最後の保存時刻で判断する
+// 作成時の同期先（roomId または legacy キー）。違う同期先で戻すと、その同期先を旧い内容で上書きする
+// （別タブに残った Undo で復旧先を空にできる。設計書 §4.4 の 4）。記録の無い旧い Undo は null（従来どおり）。
+// 同期先が空（接続前）のときに作った Undo も空の目印で束縛し、接続後は実行しない。
+let undoTarget = null;
+// 作成時の Undo 世代（wordsnap-undo-epoch:v1）。復旧の確定で進むので、同じ部屋への復旧でも別タブの Undo を止める。
+let undoEpoch = null;
+// パスキー復旧の処理中は Undo を受け付けない。
+let undoSuspended = false;
 let undoSnapshot = readLocalUndoSnapshot();
-if (undoSnapshot) ({ after: undoAfterSignature, createdAt: undoCreatedAt } = readLocalUndoRecordMeta());
+if (undoSnapshot) ({ after: undoAfterSignature, createdAt: undoCreatedAt, target: undoTarget, epoch: undoEpoch } = readLocalUndoRecordMeta());
 if (undoSnapshot && elements.undoButton) elements.undoButton.hidden = false;
 
 function snapshotState() {
@@ -24295,14 +25656,31 @@ function undoSignature(state) {
   });
 }
 
+// 今の同期先。同期の経路が無い文脈（切り出しての検査・接続前）では空。
+function currentUndoTarget() {
+  try {
+    return typeof syncRequestRoute === "function" ? String(syncRequestRoute().expectedSyncId || "") : "";
+  } catch {
+    return "";
+  }
+}
+
 function offerUndo(snapshot) {
   undoSnapshot = snapshot;
   undoAfterSignature = undoSignature(appState);
   undoCreatedAt = Date.now();
+  undoTarget = currentUndoTarget();
+  undoEpoch = readUndoEpoch();
   // V2合流専用の導線は、合流処理側がこの直後にだけ表示する。
   // ほかの操作がUndoを置き換えた場合は古い合流導線を残さない。
   setV2JoinUndoVisible(false);
-  const json = JSON.stringify({ createdAt: undoCreatedAt, state: snapshot, after: undoAfterSignature });
+  const json = JSON.stringify({
+    createdAt: undoCreatedAt,
+    state: snapshot,
+    after: undoAfterSignature,
+    target: undoTarget,
+    epoch: undoEpoch,
+  });
   try {
     localStorage.setItem(UNDO_STORAGE_KEY, json);
   } catch {
@@ -24315,6 +25693,8 @@ function clearUndo() {
   undoSnapshot = null;
   undoAfterSignature = null;
   undoCreatedAt = 0;
+  undoTarget = null;
+  undoEpoch = null;
   setV2JoinUndoVisible(false);
   try {
     localStorage.removeItem(UNDO_STORAGE_KEY);
@@ -24329,7 +25709,7 @@ function clearUndo() {
 let undoInFlight = false;
 
 async function performUndo() {
-  if (!undoSnapshot || undoInFlight) return;
+  if (!undoSnapshot || undoInFlight || undoSuspended) return;
   undoInFlight = true;
   try {
     await performUndoOnce();
@@ -24340,6 +25720,13 @@ async function performUndo() {
 
 async function performUndoOnce() {
   if (!undoSnapshot) return;
+  // 作成時と同期先が違う（別タブで復旧・合流した等）Undo は実行せずに捨てる。
+  // 復旧が確定した（Undo 世代が進んだ）後の Undo も同じく捨てる。
+  if ((undoTarget !== null && undoTarget !== currentUndoTarget()) || (undoEpoch !== null && undoEpoch !== readUndoEpoch())) {
+    clearUndo();
+    setStatus("同期先が変わったため、元に戻す操作を取り下げました。");
+    return;
+  }
   // 取り消す操作のあとに学習・同期・編集で内容が変わっていたら、丸ごと戻すと
   // それらまで消えるので戻さない（削除した語は「削除済み」から個別に戻せる）。
   // 指紋の無い旧い保存データは、提示のあとに保存（学習・同期・編集はすべて保存を伴う）が
@@ -37755,6 +39142,12 @@ elements.importJsonInput.addEventListener("change", async () => {
       setStatus("これは共有単語帳のJSONです。隣の「共有単語帳を追加」から読み込んでください。");
       return;
     }
+    // 復旧前の退避は置換で読み込ませない（0 語の退避で全語に削除記録が付き、復旧先を空で上書きできる）。
+    if (imported?.kind === "wordsnap-recovery-backup") {
+      hideImportConfirmBar();
+      setStatus("これは復旧前の退避のJSONです。設定の『退避の単語を追加』から読み込んでください。");
+      return;
+    }
     if (!imported || !Array.isArray(imported.words)) throw new Error("Invalid data");
     if (imported.words.length > IMPORT_MAX_WORDS) {
       hideImportConfirmBar();
@@ -38348,6 +39741,9 @@ async function settleV2RecoveryFromIdb() {
 // 3) if the IndexedDB copy is newer than what we loaded, restore it
 async function recoverPersisted() {
   const stateBeforeRecovery = stateSignature(appState);
+  // 復旧の確定（recoveryGeneration を進める）より前に始まった読み取りの結果は捨てる。
+  // 遅れて返った旧 IndexedDB の内容を、復旧先の内容へ mergeAppStates で混ぜないため（設計書 §4.4 の 6）。
+  const generationAtStart = recoveryGeneration;
   try {
     if (navigator.storage && navigator.storage.persist) {
       await navigator.storage.persist();
@@ -38375,7 +39771,9 @@ async function recoverPersisted() {
 
   try {
     const idbClient = await idb.get(CLIENT_KEY);
-    if (clientIdWasNew && idbClient) {
+    if (recoveryGeneration !== generationAtStart) {
+      // 復旧が先に確定した。旧い読み取りは使わない。
+    } else if (clientIdWasNew && idbClient) {
       // localStorage had no id (likely wiped): adopt the durable id and reload
       localStorage.setItem(CLIENT_KEY, idbClient);
       STORAGE_KEY = storageKeyFor(idbClient);
@@ -38393,7 +39791,7 @@ async function recoverPersisted() {
 
   try {
     const json = await idb.get(STORAGE_KEY);
-    if (json) {
+    if (json && recoveryGeneration === generationAtStart) {
       const backup = JSON.parse(json);
       if (syncInitStarted) {
         // フォールバックで同期が先に始まった後は、丸ごと置換するとサーバーとマージ済みの
@@ -38610,7 +40008,8 @@ const startWordsnapSync = () => {
   syncInitStarted = true;
   initWordsnapSync();
 };
-recoverPersisted()
+// 「パスキーで復元」はこの完了（成功・失敗とも）を待ってから有効にする（設計書 §4.4 の 6）。
+recoverPersistedReady = recoverPersisted()
   .then(() => {
     promoteInitialStepAfterRecovery();
     // IndexedDBから既存単語を復元したユーザーには初回チュートリアルを誤表示しない。
@@ -38622,6 +40021,7 @@ recoverPersisted()
     maybeShowInitialTutorial();
     startWordsnapSync();
   });
+recoverPersistedReady.then(markRecoverPersistedSettled, markRecoverPersistedSettled);
 window.setTimeout(startWordsnapSync, 4000);
 
 // 起動時の導入アニメーション。CSSの既定は「見えている状態」なので、

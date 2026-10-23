@@ -192,6 +192,16 @@ function undoSandbox() {
     "let undoSnapshot = null;",
     "let undoAfterSignature = null;",
     "let undoCreatedAt = 0;",
+    // 1.0.141: Undo を作成時の同期先に束縛する。__target で今の同期先を差し替える
+    "let undoTarget = null;",
+    "let undoEpoch = null;",
+    "let undoSuspended = false;",
+    "const UNDO_EPOCH_KEY = 'undo-epoch:test';",
+    extractFunction("readUndoEpoch"),
+    extractFunction("advanceUndoEpoch"),
+    "let __target = '';",
+    "function syncRequestRoute() { return { expectedSyncId: __target }; }",
+    extractFunction("currentUndoTarget"),
     extractFunction("snapshotState"),
     extractFunction("undoSignature"),
     extractFunction("offerUndo"),
@@ -207,6 +217,7 @@ function undoSandbox() {
       " status: () => __status, saved: () => __saved, hasUndo: () => Boolean(undoSnapshot)," +
       " setPersistOk: (v) => { __persistOk = v; }, rendered: () => __rendered, quiz: () => currentQuiz, setQuiz: (q) => { currentQuiz = q; }," +
       " setDuringPersist: (f) => { __duringPersist = f; }," +
+      " setTarget: (t) => { __target = t; }, suspend: (v) => { undoSuspended = v; }, advanceEpoch: advanceUndoEpoch," +
       " raw: () => JSON.parse(__store[UNDO_STORAGE_KEY] || 'null') };",
   ];
   const sandbox = {};
@@ -430,7 +441,8 @@ test("元に戻す: 指紋は favoriteUpdatedAt も見る（値が同じで時�
 });
 
 test("元に戻す: 起動時に保存した指紋を読み戻す配線がある", async () => {
-  assert.match(html, /if \(undoSnapshot\) \(\{ after: undoAfterSignature, createdAt: undoCreatedAt \} = readLocalUndoRecordMeta\(\)\);/);
+  // 1.0.141: 作成時の同期先（target）も読み戻す
+  assert.match(html, /if \(undoSnapshot\) \(\{ after: undoAfterSignature, createdAt: undoCreatedAt, target: undoTarget, epoch: undoEpoch \} = readLocalUndoRecordMeta\(\)\);/);
   assert.match(extractFunction("readLocalUndoRecordMeta"), /typeof record\?\.after === "string"/);
   assert.match(extractFunction("clearUndo"), /undoAfterSignature = null;\s*\n\s*undoCreatedAt = 0;/);
 });
@@ -1713,4 +1725,69 @@ test("通知: 同じ文の入れ直し待ちの間に別の文が来たら、入
   st.__s("文B"); // 別の文 → 予約を取り消す
   assert.equal(pending, null, "入れ直しは取り消される");
   assert.equal(st.elements.status.textContent, "文B");
+});
+
+// 1.0.141（パスキー復旧 Phase C、設計書 §4.4 の 4）: Undo は作成時の同期先に束縛する。
+// 別タブで復旧・合流して同期先が変わったあとに古い Undo を押すと、新しい同期先を旧い内容（空を含む）で上書きできる。
+test("元に戻す: 作成時と同期先が違えば実行せずに捨てる", async () => {
+  const u = undoSandbox();
+  u.setTarget("wr_" + "a".repeat(32));
+  u.setState(baseState());
+  const snapshot = u.snapshotState();
+  u.getState().words = [];
+  u.offerUndo(snapshot);
+  assert.equal(u.raw().target, "wr_" + "a".repeat(32), "同期先を保存に残す");
+  u.setTarget("wr_" + "b".repeat(32));
+  await u.performUndo();
+  assert.equal(u.getState().words.length, 0, "別の同期先へ旧い内容を戻さない");
+  assert.equal(u.hasUndo(), false, "捨てる");
+  assert.match(u.status().at(-1), /同期先が変わった/);
+});
+
+test("元に戻す: 同じ同期先なら従来どおり。接続前（同期先が空）に作った Undo も空の目印で束縛し、接続後は実行しない", async () => {
+  const same = undoSandbox();
+  same.setTarget("ws_" + "1".repeat(60));
+  same.setState(baseState());
+  const s1 = same.snapshotState();
+  same.getState().words = [];
+  same.offerUndo(s1);
+  await same.performUndo();
+  assert.equal(same.getState().words.length, 2);
+
+  const early = undoSandbox();
+  early.setState(baseState());
+  const s2 = early.snapshotState();
+  early.getState().words = [];
+  early.offerUndo(s2);
+  assert.equal(early.raw().target, "", "空の同期先も記録する");
+  early.setTarget("ws_" + "2".repeat(60));
+  await early.performUndo();
+  assert.equal(early.getState().words.length, 0, "接続後は戻さない（空の同期先の Undo を別の同期先へ当てない）");
+  assert.equal(early.hasUndo(), false);
+});
+
+test("元に戻す: 復旧の確定で Undo 世代が進んだら、同じ同期先でも実行せずに捨てる（別タブの Undo）", async () => {
+  const u = undoSandbox();
+  u.setTarget("wr_" + "a".repeat(32));
+  u.setState(baseState());
+  const snapshot = u.snapshotState();
+  u.getState().words = [];
+  u.offerUndo(snapshot);
+  assert.equal(u.raw().epoch, 0, "作成時の世代を残す");
+  u.advanceEpoch(); // 別タブが同じ部屋へ復旧を確定した
+  await u.performUndo();
+  assert.equal(u.getState().words.length, 0, "旧い内容で復旧先を上書きしない");
+  assert.equal(u.hasUndo(), false);
+});
+
+test("元に戻す: 復旧の処理中は受け付けない", async () => {
+  const u = undoSandbox();
+  u.setState(baseState());
+  const snapshot = u.snapshotState();
+  u.getState().words = [];
+  u.offerUndo(snapshot);
+  u.suspend(true);
+  await u.performUndo();
+  assert.equal(u.getState().words.length, 0);
+  assert.equal(u.hasUndo(), true, "控えは残す");
 });

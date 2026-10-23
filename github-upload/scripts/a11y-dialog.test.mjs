@@ -173,7 +173,7 @@ test("フォーカス可能な要素が無いときは何もしない（例外�
 
 test("すべてのモーダルに、Tabトラップが配線されている", () => {
   // 片方だけ配線が外れる回帰（V2お知らせ側に無かった）を再発させない。
-  for (const dialogId of ["tutorialDialog", "v2AnnounceDialog", "recoveryPromptDialog"]) {
+  for (const dialogId of ["tutorialDialog", "v2AnnounceDialog", "recoveryPromptDialog", "passkeyDialog"]) {
     const anchor = html.indexOf(`elements.${dialogId}?.addEventListener("keydown"`);
     assert.ok(anchor > 0, `${dialogId} の keydown ハンドラが見つからない`);
     const end = html.indexOf("\n});", anchor);
@@ -191,6 +191,8 @@ test("モーダルは開くときにフォーカスを移し、閉じるとき�
     ["showTutorial", "completeTutorial", "tutorialReturnFocus"],
     ["maybeShowV2Announce", "dismissV2Announce", "v2AnnounceReturnFocus"],
     ["showRecoveryPrompt", "dismissRecoveryPrompt", "recoveryPromptReturnFocus"],
+    // 1.0.141: パスキーで復元の選択肢（部屋の一覧・3 択）。対応環境でだけ JS で作る
+    ["askPasskeyDialog", "closePasskeyDialog", "passkeyDialogReturnFocus"],
   ]) {
     const openSrc = extractFunction(open);
     const closeSrc = extractFunction(close);

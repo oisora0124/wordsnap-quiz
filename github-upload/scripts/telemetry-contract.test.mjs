@@ -266,8 +266,33 @@ test("アカウントID wa_・トークン・challenge も保存前に伏せる"
 
 test("クライアント側のredactionもwv_を伏せる（送信前に落とす）", () => {
   const html = readFileSync(join(here, "..", "publish", "index.html"), "utf8");
-  const line = /const SECRET_PATTERN = \/w\(s\|k\|r\|v\)\?_\[0-9a-f\]\{16,\}\/gi;/.exec(html);
-  assert.ok(line, "クライアント側のSECRET_PATTERNがwv_を含むこと");
+  const line = /const SECRET_PATTERN = \/w\(s\|k\|r\|v\|a\)\?_\[0-9a-f\]\{16,\}\/gi;/.exec(html);
+  assert.ok(line, "クライアント側のSECRET_PATTERNがwv_とwa_を含むこと");
+});
+
+// 1.0.141: クライアントがパスキーのトークンと challenge を持つようになった。送信前に伏せる（設計書 §5.1）。
+test("クライアント側のredactionはトークン・challenge・wa_を伏せ、前後の文は残す", () => {
+  const html = readFileSync(join(here, "..", "publish", "index.html"), "utf8");
+  const pick = (name) => {
+    const m = new RegExp(`const ${name} = (/.*/g?i?);`).exec(html);
+    assert.ok(m, name);
+    return `const ${name} = ${m[1]};`;
+  };
+  const start = html.indexOf("  function sanitize(value, maxLength) {");
+  const end = html.indexOf("\n  }\n", start);
+  const src = [
+    pick("SECRET_PATTERN"), pick("ACCOUNT_TOKEN_PATTERN"), pick("CHALLENGE_PATTERN"),
+    pick("URL_QUERY_PATTERN"), pick("W_QUERY_PATTERN"),
+    html.slice(start, end + 4), "sanitize;",
+  ].join("\n");
+  const sanitize = new Function(`${src}\nreturn sanitize;`)();
+  const wa = `wa_${"1".repeat(32)}`;
+  const token = `${Buffer.from(JSON.stringify({ accountId: wa, cid: "x".repeat(27), iat: 1, exp: 2 })).toString("base64url")}.${"b".repeat(43)}`;
+  const challenge = "scQAMIKRnhdkFiK_Hfyt56-NMQtB3P0rLj-K7nNBTI0";
+  const out = sanitize(`account ${wa} token ${token} challenge ${challenge} at x.js:1`, 2000);
+  for (const secret of [wa, token.split(".")[0], token.split(".")[1], challenge]) assert.ok(!out.includes(secret), secret);
+  assert.ok(out.includes("at x.js:1"), "前後の文は残す");
+  assert.doesNotMatch(html, /\(\?<[=!]/, "後読みを使わない");
 });
 
 test("the 61st request from one IP is rate limited with 429", async () => {

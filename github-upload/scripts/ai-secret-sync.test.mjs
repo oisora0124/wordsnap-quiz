@@ -241,6 +241,8 @@ async function runSuccessfulV2Join(app, transferCode) {
       'let v2JoinConfirm = { roomId: "", at: 0 };',
       extractFunction("parseV2TransferCode"),
       extractFunction("joinV2Room"),
+      // 1.0.141: joinV2Room は入力欄を読んで adoptV2Room を呼ぶだけになった（中身は共用。挙動は不変）
+      extractFunction("adoptV2Room"),
     ].join("\n"),
     app.ctx,
   );
