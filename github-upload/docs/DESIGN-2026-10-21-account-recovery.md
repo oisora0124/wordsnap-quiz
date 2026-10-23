@@ -405,7 +405,7 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 
 （Phase E メール回復は §8 決定 1 で不採用。）
 
-**Phase A の結果（2026-10-23、iPhone iOS 18.7 / Safari 27.0.1、ホーム画面アプリ）**
+**Phase A の結果（2026-10-23、iPhone iOS 27.0.1、ホーム画面アプリ。UA の「iPhone OS 18_7」は Safari が固定で出す値で実際の版ではない）**
 
 | 項目 | 結果 |
 |---|---|
@@ -466,4 +466,4 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 ---
 
 本書で確認していないこと: 対応 iOS の下限、Related Origin Requests の対応状況、Cloudflare 側のメール送信機能の現状。
-Phase A で確認済み: iOS 18.7 standalone での WebAuthn、Apple パスキーの `sign_count`（常に 0）と BE/BS（ともに 1）、Workers と同じ WebCrypto での DER 署名の検証。
+Phase A で確認済み: iOS 27.0.1 standalone での WebAuthn、Apple パスキーの `sign_count`（常に 0）と BE/BS（ともに 1）、Workers と同じ WebCrypto での DER 署名の検証。
