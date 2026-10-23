@@ -31,6 +31,21 @@ D1 の `states` には `appState` が丸ごと入っている。単語・履歴�
 | `state_revisions` | 過去状態の履歴 | 上位5件＋直近7日の日次 | PUTのたびに適用 |
 | `rate_limits` | レート制限のカウンタ | 窓が明けたら削除 | 4経路すべてが毎回掃除 |
 | `telemetry` | 匿名の利用回数とエラー | **180日** | 集計値のみ。進捗と無関係 |
+| `accounts` | パスキーのアカウント（乱数の ID と user handle だけ） | **無期限**（利用者の `delete-account` でだけ消える） | 消すとパスキーで復旧できなくなる |
+| `passkeys` | パスキーの公開鍵 | **無期限**（`remove-passkey` / `delete-account` でだけ消える） | 同上 |
+| `account_rooms` | アカウントと部屋の結びつき＋`wk_` の封筒（`ACCOUNT_KEK` で暗号化） | **無期限**（`unlink-room` / `delete-account` でだけ消える） | 同上。部屋（`rooms` / `states`）はどの操作でも消えない |
+| `auth_challenges` | WebAuthn の challenge | **10 分**。`*-options` のたびに最大 100 行ずつ掃除 | 期限は消費時に必ず判定するので、掃除が遅れても安全 |
+
+## アカウントの削除と D1 の Time Travel（1.0.140 で追加）
+
+設計: `DESIGN-2026-10-21-account-recovery.md` §5.3。
+
+- `delete-account` は `accounts` / `passkeys` / `account_rooms` / `auth_challenges` の**そのアカウントの行だけ**を 1 batch で消す。
+  `rooms` / `states` / `state_revisions` は触らない（`scripts/account-api.test.mjs` が全 SQL を記録して 0 件を確かめる）。
+- 消した封筒（`secret_env`）も、D1 の **Time Travel（過去時点への復元）とバックアップには残りうる**。
+  「D1 の過去版 ＋ `ACCOUNT_KEK`」の両方が漏れれば、削除済みの結びつけの `wk_` も復号できる。
+  削除を「どこにも残らない」とは利用者に説明しない。
+- `ACCOUNT_KEK` を失うと全封筒が開かなくなる（部屋と単語は無傷。利用者は引き継ぎコードで戻る）。
 
 ## `telemetry` の保持期限（1.0.73 で追加）
 

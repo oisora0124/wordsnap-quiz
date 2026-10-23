@@ -1,6 +1,6 @@
 # パスキーによる復旧（「パスキーで控える」）設計書
 
-作成: 2026-10-21 / 状態: **rev5・未実装**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol xhigh、
+作成: 2026-10-21 / 状態: **rev5・Phase B 実装済み（1.0.140、フラグ OFF）**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol xhigh、
 Haiku→上位モデルで反証）に掛け、生き残った 29 件（高 0・中 18・低 11）を rev2 で反映。rev2 を Codex gpt-6.1-sol xhigh で
 再確認し、部分的 4 件と新規 6 件（高 3）を rev3 で反映。rev3 の再確認で残った高 3 件（既存 Undo・単語帳の合体・退避の再取り込み）を
 rev4 で反映。rev4 の再確認で残った 2 件（別タブの Undo、復旧の 409 再送が既存マージを通る）を rev5 で反映し、設計書の確認はここで打ち切る
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS passkeys (
 CREATE INDEX IF NOT EXISTS idx_passkeys_account ON passkeys (account_id);
 CREATE TABLE IF NOT EXISTS account_rooms (
   account_id  TEXT NOT NULL,
-  room_id     TEXT NOT NULL,                -- rooms.room_id（wr_…）。legacy ws_ は結びつけない（§4.4）
+  room_id     TEXT NOT NULL UNIQUE,         -- rooms.room_id（wr_…）。legacy ws_ は結びつけない（§4.4）。1 部屋 1 アカウント（§8 決定 9）
   secret_env  TEXT NOT NULL,                -- AES-GCM(wk_)。鍵は ACCOUNT_KEK 鍵リング、AAD = account_id||room_id
   env_kid     TEXT NOT NULL,
   linked_at   INTEGER NOT NULL,
@@ -155,7 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
 | `add-passkey` | token（**2 分以内**） | challenge 消費の条件に `account_id = token.accountId` を含める（§4.3）→検証→`passkeys` INSERT（`user_handle` は accounts の既存値。**1 アカウント 10 本まで**、上限は INSERT 文の条件で原子的に） | `{ok}` |
 | `login-options` | なし | challenge 保存。`allowCredentials` は**空**（discoverable credential。ユーザー名入力無し＝列挙不能） | `{challenge, rpId, userVerification:"required"}` |
 | `login` | なし | challenge 消費→`credential_id` で passkey 取得→検証（§5.2。`userHandle` が `accounts.user_handle` と一致すること）→`sign_count`・`backed_up`・`last_used_at` 更新 | `{accountId, token, backedUp}` |
-| `link-room` | token | `matchRoomSecret`（§4.4。**副作用の無い照合**）に通った部屋だけ `INSERT OR IGNORE INTO account_rooms ... SELECT ... WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id=?) AND (SELECT COUNT(*) FROM account_rooms WHERE account_id=?) < 10`（アカウント存在と **1 アカウント 10 部屋まで**を同じ文で確認）。直後に封筒を開いて `wk_` と一致することを確かめてから `{ok}` | `{ok, backedUp}` |
+| `link-room` | token | `matchRoomSecret`（§4.4。**副作用の無い照合**）に通った部屋だけ `INSERT OR IGNORE INTO account_rooms ... SELECT ... WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id=?) AND (SELECT COUNT(*) FROM account_rooms WHERE account_id=?) < 10`（アカウント存在と **1 アカウント 10 部屋まで**を同じ文で確認。**別アカウントに結びつき済みの部屋は `room_id` の UNIQUE で無視され、他の失敗と同じ 403**）。直後に自分の行を読み、封筒を開いて `wk_` と一致することを確かめてから `{ok}`。`backedUp` は「アカウントに同期済み（BS=1）のパスキーが 1 本以上あるか」 | `{ok, backedUp}` |
 | `rooms` | token | 結びついた部屋の一覧。各部屋の `states.state` を読み、**語数・単語帳数・最終更新**を返す（state 本体は返さない。最大 10 部屋） | `[{roomId, linkedAt, stateRev, updatedAt, wordCount, deckCount}]` |
 | `recover-room` | token（**発行から 2 分以内**） | 自分に結びついた部屋なら封筒を開けて秘密を返す。アカウント存在を再確認 | `{roomId, secret}` |
 | `passkeys` | token | 一覧 `[{credentialId, createdAt, lastUsedAt, backedUp}]` | |
@@ -171,7 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
 - 発行: 32byte 乱数。`INSERT INTO auth_challenges (challenge, purpose, account_id, user_handle, created_at)`。
 - 消費: **1 文で** `DELETE FROM auth_challenges WHERE challenge = ? AND purpose = ? AND created_at > ? [AND account_id = ?] RETURNING account_id, user_handle`
   （`?` = now − 10 分。`add-passkey` では `account_id = token.accountId` を条件に含める）を実行し、**返った行が 1 件**のときだけ続行
-  （D1 は `RETURNING` に対応。`meta.changes` だけでは消費した行の値が取れない）。SELECT→DELETE に分けない（並行 2 リクエストで二重使用できる）。
+  （D1 は `RETURNING` に対応。`meta.changes` だけでは消費した行の値が取れない。テスト用の `scripts/sqlite-d1.mjs`（node:sqlite）でも `.first()` で動くことを Phase B で確認済み）。SELECT→DELETE に分けない（並行 2 リクエストで二重使用できる）。
   `purpose` 不一致・期限切れ・既消費・アカウント不一致はすべて同じ 403。
 - `register` の `account_id`・`user_handle` は**返った行から取る**。クライアントの申告は使わない（登録応答に userHandle は含まれないため）。
   `add-passkey` の `user_handle` は `accounts` の既存値を使い、返った行の値と一致することも確かめる。
@@ -434,7 +434,7 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 - `wv_` の注意（`shouldPromptVaultKeyBackup`）は従来どおり引き継ぎコードの保管でしか消えない。
 - 設定の引き継ぎコード節に「パスキーを失うと戻れません。引き継ぎコードも別に控えると安心です」を 1 行残す（決定 3）。
 
-## 8. 論点と決定（決める人＝利用者。2026-10-21 に 1・2・3・6 を決定）
+## 8. 論点と決定（決める人＝利用者。2026-10-21 に 1・2・3・6、2026-10-23 に 4・9 を決定）
 
 | # | 決定 | 設計への反映 |
 |---|---|---|
@@ -443,13 +443,24 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 | 3 | 結びつけたら未控えの帯と注意を**消す**。「パスキーを失うと戻れない」旨は設定に残す | §7.1（同期済みパスキーのときだけ消す。`wv_` の注意は別） |
 | 6 | **`wv_` は復旧対象外** | §3 のとおり。復旧後の AI キーは再入力 |
 | 5・7・8 | 本書の提案どおり（削除は結びつけと封筒だけ／「運営も読めません」とは書かず「同期サーバーは今までも鍵を受け取っています。保存のしかたが 1 つ増えます」とする／呼び名は「パスキーで控える」） | — |
+| 4 | **`ACCOUNT_KEK` は運営者が自分のパスワードマネージャに控える**。紛失時は全員が引き継ぎコードで戻る（2026-10-23 決定） | §5.3 |
+| 9 | **1 つの部屋は 1 つのアカウントにしか結びつけない**（単語帳の共有は JSON 経由で足りる。`wk_` 漏洩時に攻撃者のアカウントが恒久的に結びつく経路も塞ぐ）（2026-10-23 決定） | §4.1 の `account_rooms.room_id UNIQUE`。§4.2 の `link-room` は別アカウントからなら他と同じ 403 |
 
-**まだ決めていないこと（Phase B までに確認）**
+**まだ決めていないこと（Phase C までに確認）**
 
-- `ACCOUNT_KEK` の保管者（運営者本人のパスワードマネージャでよいか）と、紛失時の方針（「全員が引き継ぎコードで戻る」でよいか）。
-- 1 つの部屋を複数アカウントが結びつけてよいか（結びつけには `wk_` が要るので権限は増えないが、`wk_` 漏洩時に攻撃者のアカウントが
-  恒久的に結びつく。提案: 許容するが、設定の「結びつき一覧」で部屋側から見えるようにはしない＝仕様外）。
 - 検証用の部屋を本番ホストで作る手順（`docs/browser-e2e.md` の注意に従う）。
+
+**Phase B の実装で設計書に無かった判断（最も保守的な側に倒した）**
+
+- `rpId` は環境変数 `ACCOUNT_RP_ID`（既定 `wordbank.pages.dev`）。テストとプレビュー検証で `ACCOUNT_ORIGINS` と対にして差し替えるため。
+- 封筒の鍵とトークンの鍵は、`ACCOUNT_KEK` の各 `secret` から HKDF-SHA256 で用途別に導く（同じ鍵を AES-GCM と HMAC に兼用しない）。
+  トークンは先頭鍵だけで検証するので、KEK のローテーション直後は発行済みトークン（最長 10 分）が無効になる（再認証で足りる）。
+- `Origin` ヘッダの無い要求も 403（`feedback.js` は非ブラウザを通すが、パスキー操作に非ブラウザの正当な呼び出し元は無い）。
+  `Sec-Fetch-Site` が付いていれば `same-origin` のみ。`clientDataJSON.crossOrigin === true` も 403。
+- 封筒の `env_kid` が鍵リングに無い（旧鍵を早く外しすぎた）ときは、行を消さず 503（KEK を戻せば開ける）。
+- `delete-account` は `auth_challenges` のそのアカウントの行（未消費の add-passkey）も消す。レート制限は掛けない（2 分以内のトークン必須）。
+- 本文の上限 64KB、壊れた JSON・未知の op は 400、Content-Type 違いは 415（いずれも認証より前の形式エラーで、列挙の手掛かりにならない）。
+- `rooms` の語数は `states.state` の `words.length`（削除記録の扱いは Phase C で必要なら見直す）。破損行は `wordCount: null`（0 語と区別）。
 
 ## 9. 概算の作業量（【推測】。実装＋テスト＋レビュー対応を含む）
 
