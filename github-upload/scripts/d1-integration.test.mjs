@@ -47,10 +47,13 @@ test("migrations が実SQLiteへ順に適用でき、期待どおりの形にな
   const db = createTestDatabase();
   try {
     assert.deepEqual(tableNames(db), [
-      "feedback", "rate_limits", "rooms", "state_revisions", "states", "telemetry",
+      "account_rooms", "accounts", "auth_challenges", "feedback", "passkeys",
+      "rate_limits", "rooms", "state_revisions", "states", "telemetry",
     ]);
     assert.deepEqual(indexNames(db), [
+      "idx_auth_challenges_created",
       "idx_feedback_created",
+      "idx_passkeys_account",
       "idx_state_revisions_key_created",
       "idx_states_updated_at",
       "idx_telemetry_created",
@@ -65,7 +68,7 @@ test("migrations は何度適用しても壊れない（IF NOT EXISTS）", () =>
   const files = migrationFiles();
   const db = createTestDatabase({ only: [...files, ...files] });
   try {
-    assert.equal(tableNames(db).length, 6);
+    assert.equal(tableNames(db).length, 10);
   } finally {
     db.close();
   }
