@@ -103,7 +103,12 @@ function cleanText(value, maxLength) {
 // 貼られた時点で利用者の手は離れているので、こちら側で保存とメール送信の前に伏せる。
 // 拒否ではなく伏せ字にするのは、本文には本物の要望が混じっているため。
 // telemetry.js と同じ考え方だが、両APIは独立させる方針なので実装は別に持つ。
-const SECRET_PATTERN = /w(s|k|r|v)?_[0-9a-f]{16,}/gi;
+// wa_ はアカウントID。
+const SECRET_PATTERN = /w(s|k|r|v|a)?_[0-9a-f]{16,}/gi;
+// トークンは `{"accountId":` を base64url にした固定の頭（eyJhY2NvdW50SWQi）＋"."＋43 文字の HMAC。
+const ACCOUNT_TOKEN_PATTERN = /eyJhY2NvdW50SWQi[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{43}/g;
+// challenge はちょうど 43 文字の base64url。メールのローカル部・ドメイン・URL の一部は除くため前後の文字を見る。
+const CHALLENGE_PATTERN = /(^|[^A-Za-z0-9_.@/+-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_.@/+-])/g;
 const AI_KEY_PATTERNS = [
   /AIza[0-9A-Za-z_-]{20,}/g,          // Gemini
   /gsk_[0-9A-Za-z]{20,}/g,            // Groq
@@ -128,7 +133,9 @@ function redactSecrets(value) {
   let out = String(value || "")
     .replace(URL_QUERY_PATTERN, "$1?[伏せ字]")
     .replace(W_QUERY_PATTERN, "$1$2[伏せ字]")
-    .replace(SECRET_PATTERN, "[伏せ字]");
+    .replace(SECRET_PATTERN, "[伏せ字]")
+    .replace(ACCOUNT_TOKEN_PATTERN, "[伏せ字]")
+    .replace(CHALLENGE_PATTERN, "$1[伏せ字]");
   for (const pattern of AI_KEY_PATTERNS) out = out.replace(pattern, "[伏せ字]");
   return out;
 }

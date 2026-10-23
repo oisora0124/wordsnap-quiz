@@ -1,6 +1,6 @@
 # パスキーによる復旧（「パスキーで控える」）設計書
 
-作成: 2026-10-21 / 状態: **rev5・未実装**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol xhigh、
+作成: 2026-10-21 / 状態: **rev5・Phase B 実装済み（1.0.140、フラグ OFF）**。rev1 を orchestrated-review（Claude Sonnet ＋ Codex gpt-6.1-sol xhigh、
 Haiku→上位モデルで反証）に掛け、生き残った 29 件（高 0・中 18・低 11）を rev2 で反映。rev2 を Codex gpt-6.1-sol xhigh で
 再確認し、部分的 4 件と新規 6 件（高 3）を rev3 で反映。rev3 の再確認で残った高 3 件（既存 Undo・単語帳の合体・退避の再取り込み）を
 rev4 で反映。rev4 の再確認で残った 2 件（別タブの Undo、復旧の 409 再送が既存マージを通る）を rev5 で反映し、設計書の確認はここで打ち切る
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS passkeys (
 CREATE INDEX IF NOT EXISTS idx_passkeys_account ON passkeys (account_id);
 CREATE TABLE IF NOT EXISTS account_rooms (
   account_id  TEXT NOT NULL,
-  room_id     TEXT NOT NULL,                -- rooms.room_id（wr_…）。legacy ws_ は結びつけない（§4.4）
+  room_id     TEXT NOT NULL UNIQUE,         -- rooms.room_id（wr_…）。legacy ws_ は結びつけない（§4.4）。1 部屋 1 アカウント（§8 決定 9）
   secret_env  TEXT NOT NULL,                -- AES-GCM(wk_)。鍵は ACCOUNT_KEK 鍵リング、AAD = account_id||room_id
   env_kid     TEXT NOT NULL,
   linked_at   INTEGER NOT NULL,
@@ -137,7 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
 - `rooms` / `states` / `state_revisions` は**無変更**。部屋は無期限保持なので孤児は構造的に起きない。
 - 保持方針（`docs/data-retention.md` の表へ追記）: `accounts` / `passkeys` / `account_rooms` は**無期限**。
   `auth_challenges` は **10 分で期限切れ**。掃除は `*-options` の呼び出しごとに
-  `DELETE FROM auth_challenges WHERE created_at < ? LIMIT 100`（上限付き。`telemetry` の刈り込みと同じ）。
+  `DELETE FROM auth_challenges WHERE challenge IN (SELECT challenge FROM auth_challenges WHERE created_at <= ? ORDER BY created_at LIMIT 100)`（上限付き。`DELETE … LIMIT` は SQLite の既定ビルドで使えないので、`telemetry` の刈り込みと同じ副問い合わせの形にする）。
   期限の判定は掃除に頼らず、**消費時に必ず行う**（§4.3）。
 - `migrations/README.md`・`wrangler.jsonc` のコメントに 0008 を追記。`scripts/d1-integration.test.mjs` は
   `tableNames` の完全一致（:49-51）、`indexNames` の完全一致（:52-57）、**テーブル数 6 → 10**（:68）の 3 か所を更新する。
@@ -150,18 +150,18 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
 | op | 認証 | 動作 | 出力 |
 |---|---|---|---|
 | `register-options` | なし | `account_id`・`user_handle` を**サーバーで生成して challenge 行に保存** | `{rp:{id,name}, user:{id:user_handle, name:"WordBank", displayName:"WordBank"}, challenge, pubKeyCredParams:[-7,-257], authenticatorSelection:{residentKey:"required", userVerification:"required"}, attestation:"none", excludeCredentials:[]}` |
-| `register` | なし | challenge 消費（§4.3）→ 検証（§5.2）→ `accounts`（`user_handle` は challenge 行の値）＋`passkeys` を **1 batch** で INSERT | `{accountId, token}` |
+| `register` | なし | 解析・検証（§5.2。challenge は `clientDataJSON` を解析しないと得られない）→ challenge 消費（§4.3）→ `accounts`（`user_handle` は challenge 行の値）＋`passkeys` を **1 batch** で INSERT | `{accountId, token}` |
 | `add-passkey-options` | token（**2 分以内**） | challenge 行に `account_id = token.accountId` を保存。`excludeCredentials` に既存の credential_id | 同上 |
-| `add-passkey` | token（**2 分以内**） | challenge 消費の条件に `account_id = token.accountId` を含める（§4.3）→検証→`passkeys` INSERT（`user_handle` は accounts の既存値。**1 アカウント 10 本まで**、上限は INSERT 文の条件で原子的に） | `{ok}` |
+| `add-passkey` | token（**2 分以内**） | 解析・検証（§5.2）→ challenge 消費（条件に `account_id = token.accountId` を含める。§4.3）→`passkeys` INSERT（`user_handle` は accounts の既存値。**1 アカウント 10 本まで**、上限は INSERT 文の条件で原子的に） | `{ok}` |
 | `login-options` | なし | challenge 保存。`allowCredentials` は**空**（discoverable credential。ユーザー名入力無し＝列挙不能） | `{challenge, rpId, userVerification:"required"}` |
-| `login` | なし | challenge 消費→`credential_id` で passkey 取得→検証（§5.2。`userHandle` が `accounts.user_handle` と一致すること）→`sign_count`・`backed_up`・`last_used_at` 更新 | `{accountId, token, backedUp}` |
-| `link-room` | token | `matchRoomSecret`（§4.4。**副作用の無い照合**）に通った部屋だけ `INSERT OR IGNORE INTO account_rooms ... SELECT ... WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id=?) AND (SELECT COUNT(*) FROM account_rooms WHERE account_id=?) < 10`（アカウント存在と **1 アカウント 10 部屋まで**を同じ文で確認）。直後に封筒を開いて `wk_` と一致することを確かめてから `{ok}` | `{ok, backedUp}` |
-| `rooms` | token | 結びついた部屋の一覧。各部屋の `states.state` を読み、**語数・単語帳数・最終更新**を返す（state 本体は返さない。最大 10 部屋） | `[{roomId, linkedAt, stateRev, updatedAt, wordCount, deckCount}]` |
+| `login` | なし | `clientDataJSON` の解析→challenge 消費→`credential_id` で passkey 取得→署名検証（§5.2。`userHandle` が `accounts.user_handle` と一致すること）→`sign_count`・`backed_up`・`last_used_at` 更新 | `{accountId, token, backedUp}` |
+| `link-room` | token | `matchRoomSecret`（§4.4。**副作用の無い照合**）に通った部屋だけ `INSERT OR IGNORE INTO account_rooms ... SELECT ... WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id=?) AND (SELECT COUNT(*) FROM account_rooms WHERE account_id=?) < 10`（アカウント存在と **1 アカウント 10 部屋まで**を同じ文で確認。**別アカウントに結びつき済みの部屋は `room_id` の UNIQUE で無視され、他の失敗と同じ 403**）。直後に自分の行を読み、封筒を開いて `wk_` と一致することを確かめてから `{ok}`。`backedUp` は「アカウントに同期済み（BS=1）のパスキーが 1 本以上あるか」 | `{ok, backedUp}` |
+| `rooms` | token | 結びついた部屋の一覧。各部屋の `states.state` を読み、**語数・単語帳数・最終更新**を返す（state 本体は返さない。最大 10 部屋）。**最大 10 部屋の state を毎回解凍・パースするので、Phase C の前に大きな state 10 件で所要時間を測り、重ければ語数を `link-room` 時に保存する方式へ切り替える** | `[{roomId, linkedAt, stateRev, updatedAt, wordCount, deckCount}]` |
 | `recover-room` | token（**発行から 2 分以内**） | 自分に結びついた部屋なら封筒を開けて秘密を返す。アカウント存在を再確認 | `{roomId, secret}` |
 | `passkeys` | token | 一覧 `[{credentialId, createdAt, lastUsedAt, backedUp}]` | |
 | `remove-passkey` | token（2 分以内） | 最後の 1 つは消せない（アカウント削除を使う） | `{ok}` |
 | `unlink-room` | token（2 分以内） | `account_rooms` の行だけ DELETE | `{ok}` |
-| `delete-account` | token（2 分以内） | `accounts` / `passkeys` / `account_rooms` の行だけ DELETE（1 batch）。**`rooms` / `states` は触らない** | `{ok}` |
+| `delete-account` | token（2 分以内） | `accounts` / `passkeys` / `account_rooms` と、そのアカウントの未消費の `auth_challenges`（add-passkey）の行だけ DELETE（1 batch）。**`rooms` / `states` は触らない** | `{ok}` |
 
 `wordsnap-state.js` からは何も import しない。`account.js` は自前の `matchRoomSecret`（§4.4）とレート制限（§4.6）を持つ。
 `rateLimitClientKey` だけは既に export されているので使ってよい（挙動不変）。
@@ -171,7 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_auth_challenges_created ON auth_challenges (creat
 - 発行: 32byte 乱数。`INSERT INTO auth_challenges (challenge, purpose, account_id, user_handle, created_at)`。
 - 消費: **1 文で** `DELETE FROM auth_challenges WHERE challenge = ? AND purpose = ? AND created_at > ? [AND account_id = ?] RETURNING account_id, user_handle`
   （`?` = now − 10 分。`add-passkey` では `account_id = token.accountId` を条件に含める）を実行し、**返った行が 1 件**のときだけ続行
-  （D1 は `RETURNING` に対応。`meta.changes` だけでは消費した行の値が取れない）。SELECT→DELETE に分けない（並行 2 リクエストで二重使用できる）。
+  （D1 は `RETURNING` に対応。`meta.changes` だけでは消費した行の値が取れない。テスト用の `scripts/sqlite-d1.mjs`（node:sqlite）でも `.first()` で動くことを Phase B で確認済み）。SELECT→DELETE に分けない（並行 2 リクエストで二重使用できる）。
   `purpose` 不一致・期限切れ・既消費・アカウント不一致はすべて同じ 403。
 - `register` の `account_id`・`user_handle` は**返った行から取る**。クライアントの申告は使わない（登録応答に userHandle は含まれないため）。
   `add-passkey` の `user_handle` は `accounts` の既存値を使い、返った行の値と一致することも確かめる。
@@ -308,7 +308,7 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 | 列挙攻撃 | `login-options` はユーザー名を取らない。`login` 失敗・未知の credential・結びつけ失敗・challenge 不正はすべて同じ 403 |
 | D1 ダンプ・バックアップ | `secret_env` は `ACCOUNT_KEK` で封じる。**KEK も漏れると全封筒が一括で開く**（§5.3） |
 | XSS | 既存のハッシュ型 CSP（`docs/csp-hashes.md`）。`npm run sync:html` でハッシュが追従 |
-| 秘密の漏れ出し | テレメトリの `redactSecrets`（`functions/api/telemetry.js:57, 91`）と `feedback.js` の伏せ字、クライアント側の伏せ字処理（`index.html:20863` 付近）に `wa_`・トークン・challenge のパターンを追加（却下された指摘にあった「feedback.js は独立実装」も確認する） |
+| 秘密の漏れ出し | テレメトリの `redactSecrets`（`functions/api/telemetry.js:57, 91`）と `feedback.js` の伏せ字、クライアント側の伏せ字処理（`index.html:20863` 付近）に `wa_`・トークン・challenge のパターンを追加（却下された指摘にあった「feedback.js は独立実装」も確認する）。**Phase B ではサーバー側の 2 か所だけ。クライアント側は Phase C で行う**（Phase B ではクライアントがトークンを持たない） |
 | 無料枠の消費攻撃 | `*-options` と `register` の上限（§4.6）、`auth_challenges` の上限付き掃除 |
 | 端末固定のパスキー | `backed_up`（BS フラグ）を保存し、同期されていないパスキーしか無いアカウントには UI で警告（§7 Phase C） |
 
@@ -400,7 +400,7 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 |---|---|---|---|
 | **A. スパイク（本番に出さない）— 2026-10-23 完了・合格** | ブランチ `spike/passkey` の検証ページを iPhone ホーム画面アプリで操作: `create/get` が動くか（対応 iOS の下限）、Apple のパスキーの `sign_count`、BE/BS の値、**通信を挟んだ `get`**（click → fetch → get で transient activation が切れないか）、**バックグラウンドから戻った直後の `get`**、iCloud キーチェーンを切った状態の登録。採った生データを Node（Workers と同じ WebCrypto）で検証し、DER→r\|\|s 変換込みで署名が通ること | 上記が実機で確認でき、結果と生データ（フィクスチャ）を §2・§5.2・§6.2 に反映 | 捨てる。失敗なら B を落として §2 E 案を再検討 |
 | **B. サーバー（フラグ OFF）** | 0008、`account.js`、レート制限、redaction 追加、テスト。`ACCOUNTS_ENABLED` 未設定のまま配信 | `npm test` 緑。legacy スナップショット同一。本番で全 op が 503。不変条件 1・2 の記録テスト（鍵ローテーション込み）が緑 | Function を戻す（テーブルは残してよい） |
-| **C. クライアント（任意機能・試験的）** | 設定「データの保存・引き継ぎ」に「パスキーで控える（試験的・iPhone で最も確実）」節（対応環境のみ）。`adoptV2Room` の切り出しと 3 択の確認。復元案内に「パスキーで復元」（対応環境のみ）。パスキーの追加・一覧・削除。端末固定のパスキーしか無いときの警告。フラグ ON | 不変条件 1〜7 のテスト緑。非対応端末の表示要素数が不変。実機で 登録→消去→復元 成功。復元後の `stateRev` が消去前と一致。語のある端末で 3 択が出る | フラグ OFF（既存アカウントの復旧は 503。部屋は無傷。引き継ぎコードで戻れる）。クライアントの節は 503 を受けて「準備中」表示。**未控えの帯は §7.1 の規則で自動的に戻る** |
+| **C. クライアント（任意機能・試験的）** | 設定「データの保存・引き継ぎ」に「パスキーで控える（試験的・iPhone で最も確実）」節（対応環境のみ）。`adoptV2Room` の切り出しと 3 択の確認。復元案内に「パスキーで復元」（対応環境のみ）。パスキーの追加・一覧・削除。端末固定のパスキーしか無いときの警告。フラグ ON | 不変条件 1〜7 のテスト緑。非対応端末の表示要素数が不変。実機で 登録→消去→復元 成功。復元後の `stateRev` が消去前と一致。語のある端末で 3 択が出る。`rooms` の所要時間を大きな state 10 件で計測済み（§4.2） | フラグ OFF（既存アカウントの復旧は 503。部屋は無傷。引き継ぎコードで戻れる）。クライアントの節は 503 を受けて「準備中」表示。**未控えの帯は §7.1 の規則で自動的に戻る** |
 | **D. 導線** | 初回同期成功後の「引き継ぎコードを控えてください」の提示に「パスキーで控える」を第一候補として並べる。結びつけ成功と帯の関係は §7.1 | テレメトリで `account-register` / `account-recover-success` を観測。1 週間で復旧失敗の報告が無い | 提示順を戻すだけ |
 
 （Phase E メール回復は §8 決定 1 で不採用。）
@@ -434,7 +434,7 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 - `wv_` の注意（`shouldPromptVaultKeyBackup`）は従来どおり引き継ぎコードの保管でしか消えない。
 - 設定の引き継ぎコード節に「パスキーを失うと戻れません。引き継ぎコードも別に控えると安心です」を 1 行残す（決定 3）。
 
-## 8. 論点と決定（決める人＝利用者。2026-10-21 に 1・2・3・6 を決定）
+## 8. 論点と決定（決める人＝利用者。2026-10-21 に 1・2・3・6、2026-10-23 に 4・9 を決定）
 
 | # | 決定 | 設計への反映 |
 |---|---|---|
@@ -443,13 +443,25 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 | 3 | 結びつけたら未控えの帯と注意を**消す**。「パスキーを失うと戻れない」旨は設定に残す | §7.1（同期済みパスキーのときだけ消す。`wv_` の注意は別） |
 | 6 | **`wv_` は復旧対象外** | §3 のとおり。復旧後の AI キーは再入力 |
 | 5・7・8 | 本書の提案どおり（削除は結びつけと封筒だけ／「運営も読めません」とは書かず「同期サーバーは今までも鍵を受け取っています。保存のしかたが 1 つ増えます」とする／呼び名は「パスキーで控える」） | — |
+| 4 | **`ACCOUNT_KEK` は運営者が自分のパスワードマネージャに控える**。紛失時は全員が引き継ぎコードで戻る（2026-10-23 決定） | §5.3 |
+| 9 | **1 つの部屋は 1 つのアカウントにしか結びつけない**（単語帳の共有は JSON 経由で足りるため、最小構成にする。`wk_` が漏れて先に別アカウントへ結びつけられた場合、持ち主は引き継ぎコードで部屋を使い続けられるが、パスキーへの結びつけはできない。部屋の側から結びつけを外す op は Phase C 以降の課題）（2026-10-23 決定） | §4.1 の `account_rooms.room_id UNIQUE`。§4.2 の `link-room` は別アカウントからなら他と同じ 403 |
 
-**まだ決めていないこと（Phase B までに確認）**
+**まだ決めていないこと（Phase C までに確認）**
 
-- `ACCOUNT_KEK` の保管者（運営者本人のパスワードマネージャでよいか）と、紛失時の方針（「全員が引き継ぎコードで戻る」でよいか）。
-- 1 つの部屋を複数アカウントが結びつけてよいか（結びつけには `wk_` が要るので権限は増えないが、`wk_` 漏洩時に攻撃者のアカウントが
-  恒久的に結びつく。提案: 許容するが、設定の「結びつき一覧」で部屋側から見えるようにはしない＝仕様外）。
 - 検証用の部屋を本番ホストで作る手順（`docs/browser-e2e.md` の注意に従う）。
+
+**Phase B の実装で設計書に無かった判断（最も保守的な側に倒した）**
+
+- `rpId` は環境変数 `ACCOUNT_RP_ID`（既定 `wordbank.pages.dev`）。テストとプレビュー検証で `ACCOUNT_ORIGINS` と対にして差し替えるため。
+- 封筒の鍵とトークンの鍵は、`ACCOUNT_KEK` の各 `secret` から HKDF-SHA256 で用途別に導く（同じ鍵を AES-GCM と HMAC に兼用しない）。
+  トークンは先頭鍵だけで検証するので、KEK のローテーション直後は発行済みトークン（最長 10 分）が無効になる（再認証で足りる）。
+- `Origin` ヘッダの無い要求も 403（`feedback.js` は非ブラウザを通すが、パスキー操作に非ブラウザの正当な呼び出し元は無い）。
+  `Sec-Fetch-Site` が付いていれば `same-origin` のみ。`clientDataJSON.crossOrigin === true` も 403。
+- 封筒の `env_kid` が鍵リングに無い（旧鍵を早く外しすぎた）ときは、行を消さず 503（KEK を戻せば開ける）。
+- `delete-account` は `auth_challenges` のそのアカウントの行（未消費の add-passkey）も消す。レート制限は掛けない（2 分以内のトークン必須）。
+- 伏せ字（telemetry.js・feedback.js）は、トークンを固定の頭 `eyJhY2NvdW50SWQi`（`{"accountId"` の base64url）＋`.`＋43 文字で、challenge を前後が英数字・`.`・`@`・`/` でないちょうど 43 文字の base64url で伏せる（長いメールアドレスや URL を巻き込まないため）。
+- 本文の上限 64KB、壊れた JSON・未知の op は 400、Content-Type 違いは 415（いずれも認証より前の形式エラーで、列挙の手掛かりにならない）。
+- `rooms` の語数は `states.state` の `words.length`（削除記録の扱いは Phase C で必要なら見直す）。破損行は `wordCount: null`（0 語と区別）。
 
 ## 9. 概算の作業量（【推測】。実装＋テスト＋レビュー対応を含む）
 

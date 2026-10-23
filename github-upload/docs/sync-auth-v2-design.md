@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS rooms (
 2. **GET/PUT/履歴/復元**: 認可後、stateKeyで既存経路を呼ぶ。**応答の `syncId` フィールドには roomId を入れる**（現クライアントの `validSyncGetResponse/validSyncPutResponse` が syncId 一致を必須とするため。契約テストで固定）
 3. **強制上書き**: V2では初日から `?force=1` 必須（baseRev省略+forceなし＝422）。クライアントのV2エンドポイント生成は、`forcePushOverwrite` / `restoreFromRevision` 経路で `force=1` を付与する（該当2関数の改修をPhase 1のクライアント作業に含める）。**legacy経路のbaseRev省略の受理は無期限で不変**（rev1のPhase 2「90日後に428」は撤回。旧クライアントの消滅は判定不能）
 4. **upgrade**: `PUT ?sync=<legacyKey>&op=upgrade` + ヘッダ `x-room-key: <新secret>` + body `{roomId}`（secretの導出値をbodyに入れない）。
-   - **クライアントが** roomId/secret を生成し、**localStorageへ永続化してから**呼ぶ（応答喪失・保存失敗でも同じ値で何度でも再試行できる冪等設計。サーバーがsecretを発行・返却することはない）
+   - **クライアントが** roomId/secret を生成し、**localStorageへ永続化してから**呼ぶ（応答喪失・保存失敗でも同じ値で何度でも再試行できる冪等設計。create / upgrade では、サーバーがsecretを発行・返却することはない。本人のパスキー認証後に保存済みの secret を返す `recover-room` は別経路 = `DESIGN-2026-10-21-account-recovery.md`）
    - サーバー: `INSERT INTO rooms(room_id, state_key=<legacyKey>, auth_hash, ...)`（素のINSERT。`UNIQUE(state_key)` と room_id PK の制約違反はエラーコードで区別して下表へ変換）
    - **判定表（全ケースを網羅。「一致」は常にtiming-safe比較）**:
      | 状況 | 判定 | 応答 | クライアント動作 |
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS rooms (
   - `status: "pending"` で保存してから create / upgrade を呼ぶ。**サーバー200を受けて初めて `"active"` に更新**
   - 通信の優先順位は「**activeなv2資格情報があればV2、なければlegacy**」。pendingは通信経路を切り替えない（起動時にpendingが残っていてもlegacyで正常動作し、次の明示操作時に同じ値で再試行）
   - upgrade/createが**確定403/409**（別roomId競合＝他端末が先に移行済み、または認可不一致）を返したら、pending資格情報を破棄してlegacy継続＋「他の端末で移行済みです。引き継ぎコードで合流してください」を表示。ネットワークエラー・5xxでは破棄しない（再試行可能なまま）
-- V2資格情報の復旧経路: localStorage消去時は引き継ぎコード（`wr_xxx.wk_xxx`）が唯一の復旧手段。移行/発行完了画面とその後の設定画面で「このコードを必ず控えてください（紛失するとデータに二度とアクセスできません）」を明示し、コピーとダウンロード（テキストファイル）の両方を提供する
+- V2資格情報の復旧経路: localStorage消去時は引き継ぎコード（`wr_xxx.wk_xxx`）が復旧手段（パスキーで控えた部屋はパスキーでも戻れる = `DESIGN-2026-10-21-account-recovery.md`）。移行/発行完了画面とその後の設定画面で「このコードを必ず控えてください（紛失するとデータに二度とアクセスできません）」を明示し、コピーとダウンロード（テキストファイル）の両方を提供する
 - **新規発行**: 今後も既定はlegacyのまま（安全に倒す）。設定に「新方式（V2）で発行」を追加し、十分な運用実績後に既定をV2へ切替（別リリース判断）
 - **移行UI**: 設定「データの保存・引き継ぎ」内に「新方式へ移行」。移行後の引き継ぎコードは `wr_xxx.wk_xxx` 形式の1文字列（設定画面からいつでも再表示可＝R1解決）。他端末はコード貼り付けで合流
 - `?key=`・`?w=` にV2 secretを載せる経路は作らない。URL経由の引き継ぎはlegacy専用のまま
