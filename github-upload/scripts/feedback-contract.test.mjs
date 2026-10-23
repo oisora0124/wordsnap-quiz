@@ -391,6 +391,21 @@ test("本文・連絡先に貼られた秘密は保存前に伏せ字にする",
   assert.ok(row.message.includes("同期できません"), "本物の要望は残すこと");
 });
 
+test("アカウントID wa_・トークン・challenge も保存前に伏せ字にする", async () => {
+  const db = new FakeD1();
+  const wa = `wa_${"1".repeat(32)}`;
+  const token = `eyJ${"A".repeat(60)}.${"b".repeat(43)}`;
+  const challenge = "scQAMIKRnhdkFiK_Hfyt56-NMQtB3P0rLj-K7nNBTI0";
+  const { response } = await post(db, {
+    category: "bug",
+    message: `パスキーで戻れません。${wa} / ${token} / ${challenge} です。`,
+  });
+  assert.equal(response.status, 200);
+  const saved = db.inserted[0].message;
+  for (const secret of [wa, token.split(".")[0], token.split(".")[1], challenge]) assert.ok(!saved.includes(secret), secret);
+  assert.ok(saved.includes("パスキーで戻れません"), "本物の要望は残すこと");
+});
+
 test("秘密だけの投稿も受理する（伏せ字にしたうえで保存する）", async () => {
   const db = new FakeD1();
   const { response } = await post(db, { category: "other", message: `wk_${"a".repeat(60)}` });

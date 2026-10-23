@@ -56,7 +56,10 @@ const RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // wv_ はAIキー暗号化同期のvault key。封筒の復号鍵そのものなので、
 // 万一エラー文へ混ざっても保存・表示されないよう伏せる対象に含める。
-const SECRET_PATTERN = /w(s|k|r|v)?_[0-9a-f]{16,}/gi;
+// wa_ はアカウントID。アカウントのトークン・challenge は 43 文字以上の base64url の連なりなので、
+// 長さで伏せる（通常の英文やスタックにこの長さの連なりはまず現れない）。
+const SECRET_PATTERN = /w(s|k|r|v|a)?_[0-9a-f]{16,}/gi;
+const ACCOUNT_TOKEN_PATTERN = /[A-Za-z0-9_-]{43,}/g;
 // 終端に日本語の句読点・閉じ括弧も含める。日本語には単語間の空白が無いため、
 // 空白だけを終端にするとエラー文の後半まで丸ごと消える（feedback.js と同じ理由）。
 const URL_TERMINATORS = "\\s、。，．！？」』）】〕〉》・…";
@@ -92,7 +95,8 @@ function redactSecrets(value) {
   return String(value || "")
     .replace(URL_QUERY_PATTERN, "$1?[redacted]")
     .replace(W_QUERY_PATTERN, "$1$2[redacted]")
-    .replace(SECRET_PATTERN, "[redacted]");
+    .replace(SECRET_PATTERN, "[redacted]")
+    .replace(ACCOUNT_TOKEN_PATTERN, "[redacted]");
 }
 
 // Content-Typeは「essence（型/サブタイプ）」だけで判定する。部分一致だと

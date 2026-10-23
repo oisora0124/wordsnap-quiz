@@ -250,6 +250,20 @@ test("ws_, wk_, wr_, wv_ secrets and URL queries are redacted before storage", a
   assert.ok(saved.includes("[redacted]"));
 });
 
+test("アカウントID wa_・トークン・challenge も保存前に伏せる", async () => {
+  const db = new FakeD1();
+  const wa = `wa_${"1".repeat(32)}`;
+  const token = `eyJ${"A".repeat(60)}.${"b".repeat(43)}`;
+  const challenge = "scQAMIKRnhdkFiK_Hfyt56-NMQtB3P0rLj-K7nNBTI0";
+  const { response } = await post(db, {
+    events: [{ kind: "error", name: `account ${wa}`, detail: `token ${token} challenge ${challenge} at x.js:1` }],
+  });
+  assert.equal(response.status, 200);
+  const saved = `${db.inserted[0].name}\n${db.inserted[0].detail}`;
+  for (const secret of [wa, token.split(".")[0], token.split(".")[1], challenge]) assert.ok(!saved.includes(secret), secret);
+  assert.ok(saved.includes("at x.js:1"), "前後の文は残す");
+});
+
 test("クライアント側のredactionもwv_を伏せる（送信前に落とす）", () => {
   const html = readFileSync(join(here, "..", "publish", "index.html"), "utf8");
   const line = /const SECRET_PATTERN = \/w\(s\|k\|r\|v\)\?_\[0-9a-f\]\{16,\}\/gi;/.exec(html);
