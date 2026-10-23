@@ -398,12 +398,27 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 
 | Phase | 内容 | 受入条件 | ロールバック |
 |---|---|---|---|
-| **A. スパイク（本番に出さない）** | ブランチ `spike/passkey` の検証ページを iPhone ホーム画面アプリで操作: `create/get` が動くか（対応 iOS の下限）、Apple のパスキーの `sign_count`、BE/BS の値、**通信を挟んだ `get`**（click → fetch → get で transient activation が切れないか）、**バックグラウンドから戻った直後の `get`**、iCloud キーチェーンを切った状態の登録。採った生データを Node（Workers と同じ WebCrypto）で検証し、DER→r\|\|s 変換込みで署名が通ること | 上記が実機で確認でき、結果と生データ（フィクスチャ）を §2・§5.2・§6.2 に反映 | 捨てる。失敗なら B を落として §2 E 案を再検討 |
+| **A. スパイク（本番に出さない）— 2026-10-23 完了・合格** | ブランチ `spike/passkey` の検証ページを iPhone ホーム画面アプリで操作: `create/get` が動くか（対応 iOS の下限）、Apple のパスキーの `sign_count`、BE/BS の値、**通信を挟んだ `get`**（click → fetch → get で transient activation が切れないか）、**バックグラウンドから戻った直後の `get`**、iCloud キーチェーンを切った状態の登録。採った生データを Node（Workers と同じ WebCrypto）で検証し、DER→r\|\|s 変換込みで署名が通ること | 上記が実機で確認でき、結果と生データ（フィクスチャ）を §2・§5.2・§6.2 に反映 | 捨てる。失敗なら B を落として §2 E 案を再検討 |
 | **B. サーバー（フラグ OFF）** | 0008、`account.js`、レート制限、redaction 追加、テスト。`ACCOUNTS_ENABLED` 未設定のまま配信 | `npm test` 緑。legacy スナップショット同一。本番で全 op が 503。不変条件 1・2 の記録テスト（鍵ローテーション込み）が緑 | Function を戻す（テーブルは残してよい） |
 | **C. クライアント（任意機能・試験的）** | 設定「データの保存・引き継ぎ」に「パスキーで控える（試験的・iPhone で最も確実）」節（対応環境のみ）。`adoptV2Room` の切り出しと 3 択の確認。復元案内に「パスキーで復元」（対応環境のみ）。パスキーの追加・一覧・削除。端末固定のパスキーしか無いときの警告。フラグ ON | 不変条件 1〜7 のテスト緑。非対応端末の表示要素数が不変。実機で 登録→消去→復元 成功。復元後の `stateRev` が消去前と一致。語のある端末で 3 択が出る | フラグ OFF（既存アカウントの復旧は 503。部屋は無傷。引き継ぎコードで戻れる）。クライアントの節は 503 を受けて「準備中」表示。**未控えの帯は §7.1 の規則で自動的に戻る** |
 | **D. 導線** | 初回同期成功後の「引き継ぎコードを控えてください」の提示に「パスキーで控える」を第一候補として並べる。結びつけ成功と帯の関係は §7.1 | テレメトリで `account-register` / `account-recover-success` を観測。1 週間で復旧失敗の報告が無い | 提示順を戻すだけ |
 
 （Phase E メール回復は §8 決定 1 で不採用。）
+
+**Phase A の結果（2026-10-23、iPhone iOS 18.7 / Safari 27.0.1、ホーム画面アプリ）**
+
+| 項目 | 結果 |
+|---|---|
+| standalone で `navigator.credentials.create/get` | 動く（`platformAuthenticator: true`、`conditionalMediation: true`） |
+| 登録 | `fmt: none`、ES256（alg -7）、`transports: internal, hybrid`、UP=UV=1、**BE=BS=1**（iCloud キーチェーンへ同期済み） |
+| 認証 3 回（直後・再度・通信＋3 秒待ちのあと） | すべて署名検証 OK（Node の WebCrypto。DER→r\|\|s 変換で `crypto.subtle.verify` が通る）。`userHandle` 一致、discoverable credential で `allowCredentials: []` が動く |
+| `sign_count` | 登録・認証とも **常に 0**（設計どおり「減少しても拒否しない」） |
+| 通信を挟んだ `get` | `fetch` → 3 秒待ち → `get` で `NotAllowedError` は出なかった（transient activation は切れない） |
+| 所要時間 | 登録 5.3 秒、認証 1.9〜3.8 秒（Face ID 操作込み） |
+
+生データは `scripts/fixtures/passkey-iphone-2026-10-23.json`（公開鍵・署名のみ。秘密は含まない）。
+未確認のまま残るもの: 対応 iOS の下限（16.4 と推定）、iCloud キーチェーンを切った状態の登録（BE=0 のケース）、バックグラウンド復帰直後の `get`。
+いずれも Phase B の設計には影響しない（BE=0 は §5.2 の規則で扱う）。
 
 デプロイ順序は `migrations/README.md`「適用手順」と同じ: ローカル→`--remote` で 0008 → Function。
 
@@ -450,5 +465,5 @@ TypeError を握り潰して**無制限**になる。また失敗時は常に「
 
 ---
 
-本書で確認していないこと: iOS standalone での WebAuthn 可否（対応版の下限）、Apple パスキーの `sign_count` と BE/BS の実値、
-Related Origin Requests の対応状況、Cloudflare 側のメール送信機能の現状。いずれも Phase A または該当フェーズの着手前に一次情報で確かめる。
+本書で確認していないこと: 対応 iOS の下限、Related Origin Requests の対応状況、Cloudflare 側のメール送信機能の現状。
+Phase A で確認済み: iOS 18.7 standalone での WebAuthn、Apple パスキーの `sign_count`（常に 0）と BE/BS（ともに 1）、Workers と同じ WebCrypto での DER 署名の検証。
