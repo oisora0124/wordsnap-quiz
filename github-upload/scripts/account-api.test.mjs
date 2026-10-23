@@ -76,17 +76,25 @@ const FLAG = { UP: 0x01, UV: 0x04, BE: 0x08, BS: 0x10, AT: 0x40 };
 
 // Node の WebCrypto で P-256 鍵を持ち、attestationObject と assertion を組み立てる偽の認証器。
 class FakeAuthenticator {
-  static async create({ rpId = RP_ID, origin = ORIGIN, be = true, bs = true } = {}) {
+  static async create({ rpId = RP_ID, origin = ORIGIN, be = true, bs = true, rsaBits = 0, credIdLength = 20 } = {}) {
     const self = new FakeAuthenticator();
     self.rpId = rpId;
     self.origin = origin;
     self.be = be;
     self.bs = bs;
-    self.keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    self.rsa = rsaBits > 0;
+    self.keys = self.rsa
+      ? await crypto.subtle.generateKey(
+        { name: "RSASSA-PKCS1-v1_5", modulusLength: rsaBits, publicExponent: Uint8Array.of(1, 0, 1), hash: "SHA-256" },
+        true,
+        ["sign", "verify"],
+      )
+      : await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
     const jwk = await crypto.subtle.exportKey("jwk", self.keys.publicKey);
-    self.x = fromB64url(jwk.x);
-    self.y = fromB64url(jwk.y);
-    self.credId = crypto.getRandomValues(new Uint8Array(20));
+    self.cose = self.rsa
+      ? new Map([[1, 3], [3, -257], [-1, fromB64url(jwk.n)], [-2, fromB64url(jwk.e)]])
+      : new Map([[1, 2], [3, -7], [-1, 1], [-2, fromB64url(jwk.x)], [-3, fromB64url(jwk.y)]]);
+    self.credId = crypto.getRandomValues(new Uint8Array(credIdLength));
     self.id = b64url(self.credId);
     return self;
   }
@@ -107,7 +115,9 @@ class FakeAuthenticator {
 
   async makeCredential(options, o = {}) {
     this.userHandle = options.user.id;
-    const cose = cbor(new Map([[1, 2], [3, o.alg ?? -7], [-1, 1], [-2, this.x], [-3, this.y]]));
+    const coseMap = new Map(this.cose);
+    if (o.alg !== undefined) coseMap.set(3, o.alg);
+    const cose = cbor(coseMap);
     const count = new Uint8Array(4);
     new DataView(count.buffer).setUint32(0, o.signCount ?? 0);
     const authData = concat(
@@ -118,10 +128,14 @@ class FakeAuthenticator {
       Uint8Array.of(this.credId.length >> 8, this.credId.length & 255),
       this.credId,
       cose,
+      o.authTrailing ?? new Uint8Array(0),
     );
-    const attestation = cbor(new Map([["fmt", o.fmt ?? "none"], ["attStmt", new Map()], ["authData", authData]]));
+    const attestation = concat(
+      cbor(new Map([["fmt", o.fmt ?? "none"], ["attStmt", o.attStmt ?? new Map()], ["authData", authData]])),
+      o.attTrailing ?? new Uint8Array(0),
+    );
     return {
-      id: this.id,
+      id: o.id ?? this.id,
       type: "public-key",
       response: {
         clientDataJSON: b64url(this.clientData("webauthn.create", options.challenge, o)),
@@ -133,20 +147,33 @@ class FakeAuthenticator {
   async getAssertion(challenge, o = {}) {
     const count = new Uint8Array(4);
     new DataView(count.buffer).setUint32(0, o.signCount ?? 0);
-    const authData = concat(await sha256(enc.encode(o.rpId ?? this.rpId)), Uint8Array.of(this.flags(o)), count);
+    const authData = concat(
+      await sha256(enc.encode(o.rpId ?? this.rpId)),
+      Uint8Array.of(this.flags(o)),
+      count,
+      o.authTrailing ?? new Uint8Array(0),
+    );
     const clientData = this.clientData("webauthn.get", challenge, o);
     const raw = new Uint8Array(await crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" },
+      this.rsa ? { name: "RSASSA-PKCS1-v1_5" } : { name: "ECDSA", hash: "SHA-256" },
       this.keys.privateKey,
       concat(authData, await sha256(clientData)),
     ));
+    let signature = this.rsa ? raw : rawToDer(raw);
+    if (o.derPad) {
+      // r の INTEGER に余計な 0x00 を足した非最短の DER（数値としては同じ）
+      const rLen = signature[3];
+      const r = concat(Uint8Array.of(0), signature.slice(4, 4 + rLen));
+      const body = concat(Uint8Array.of(0x02, r.length), r, signature.slice(4 + rLen));
+      signature = concat(Uint8Array.of(0x30, body.length), body);
+    }
     return {
       id: this.id,
       type: "public-key",
       response: {
         clientDataJSON: b64url(clientData),
         authenticatorData: b64url(authData),
-        signature: b64url(rawToDer(raw)),
+        signature: b64url(signature),
         userHandle: o.userHandle ?? this.userHandle,
       },
     };
@@ -167,15 +194,15 @@ function makeEnv(db, overrides = {}) {
   };
 }
 
-async function call(env, op, body = {}, { token, ip = "203.0.113.10", origin = ORIGIN, method = "POST" } = {}) {
-  const headers = { "content-type": "application/json", "CF-Connecting-IP": ip };
+async function call(env, op, body = {}, { token, ip = "203.0.113.10", origin = ORIGIN, method = "POST", headers: extra = {}, rawBody } = {}) {
+  const headers = { "content-type": "application/json", "CF-Connecting-IP": ip, ...extra };
   if (origin) headers.Origin = origin;
   if (token) headers.authorization = `Bearer ${token}`;
   const response = await accountRequest({
     request: new Request(`${ORIGIN}/api/account`, {
       method,
       headers,
-      body: method === "POST" ? JSON.stringify({ op, ...body }) : undefined,
+      body: method === "POST" ? (rawBody ?? JSON.stringify({ op, ...body })) : undefined,
     }),
     env,
   });
@@ -456,6 +483,12 @@ test("登録の異常系: rpIdHash・origin・type・fmt・UP/UV・BS=1&BE=0・a
   await expectRegisterDenied("origin 不一致", { origin: "https://evil.example" });
   await expectRegisterDenied("type 不一致", { type: "webauthn.get" });
   await expectRegisterDenied("crossOrigin", { crossOrigin: true });
+  await expectRegisterDenied("fmt=none で attStmt が非空", { attStmt: new Map([["sig", Uint8Array.of(1, 2, 3)]]) });
+  await expectRegisterDenied("credential.id と authData の ID の不一致", { id: b64url(new Uint8Array(20)) });
+  await expectRegisterDenied("authData 末尾の余分なバイト", { authTrailing: Uint8Array.of(0) });
+  await expectRegisterDenied("attestationObject 末尾の余分なバイト", { attTrailing: Uint8Array.of(0) });
+  await expectRegisterDenied("認証・トークンが受け付けない短い credential ID", {}, { authOpts: { credIdLength: 8 } });
+  await expectRegisterDenied("RSA の鍵長不足（1024 bit）", {}, { authOpts: { rsaBits: 1024 } });
   await expectRegisterDenied("未知 fmt", { fmt: "packed" });
   await expectRegisterDenied("UP 無し", { flags: FLAG.UV });
   await expectRegisterDenied("UV 無し", { flags: FLAG.UP });
@@ -485,6 +518,13 @@ test("認証の異常系: rpIdHash・origin・type・UP/UV・BE 不一致・user
       ["BS=1 かつ BE=0", { flags: FLAG.UP | FLAG.UV | FLAG.BS }],
       ["BE 不一致", { flags: FLAG.UP | FLAG.UV }],
       ["userHandle 不一致", { userHandle: b64url(new Uint8Array(32)) }],
+      // 認証データとして形の整った attested credential data を付けても、認証時の AT は拒否する
+      ["AT フラグあり", {
+        flags: FLAG.UP | FLAG.UV | FLAG.BE | FLAG.BS | FLAG.AT,
+        authTrailing: concat(new Uint8Array(16), Uint8Array.of(0, auth.credId.length), auth.credId, cbor(auth.cose)),
+      }],
+      ["authenticatorData 末尾の余分なバイト", { authTrailing: Uint8Array.of(0) }],
+      ["非最短の DER 署名", { derPad: true }],
     ];
     for (const [index, [name, o]] of cases.entries()) {
       const res = await signIn(env, auth, o, `192.0.2.${index}`);
@@ -596,13 +636,19 @@ test("トークン: 改ざん・期限切れ・delete-account 後・2 分超の�
     const credential = await (await FakeAuthenticator.create()).makeCredential(addOptions.data);
     await withClock(3 * MINUTE, async () => {
       assert.equal((await call(env, "rooms", {}, { token })).status, 200, "読み取りは 10 分まで");
-      for (const op of ["recover-room", "add-passkey-options", "remove-passkey", "unlink-room", "delete-account"]) {
+      for (const op of ["recover-room", "add-passkey-options", "unlink-room", "delete-account"]) {
         assert.equal((await call(env, op, { roomId: room.roomId, credentialId: auth.id }, { token })).status, 403, `${op}: 2 分超`);
       }
       assert.equal((await call(env, "add-passkey", { credential }, { token })).status, 403, "add-passkey: 2 分超");
     });
     // 同じ要求が 2 分以内なら通る＝拒否の理由はトークンの古さ
     assert.equal((await call(env, "add-passkey", { credential }, { token })).status, 200);
+    // パスキーが 2 本ある状態で remove-passkey も 2 分で切れることを単独で確かめる
+    await withClock(3 * MINUTE, async () => {
+      assert.equal((await call(env, "remove-passkey", { credentialId: credential.id }, { token })).status, 403, "remove-passkey: 2 分超");
+    });
+    assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM passkeys").get().n, 2, "2 分超の remove-passkey で消えた");
+    assert.equal((await call(env, "remove-passkey", { credentialId: credential.id }, { token })).status, 200);
     assert.equal((await call(env, "recover-room", { roomId: room.roomId }, { token })).status, 200);
     await withClock(11 * MINUTE, async () => {
       assert.equal((await call(env, "rooms", {}, { token })).status, 403, "10 分で失効");
@@ -824,6 +870,95 @@ test("期限切れの challenge は *-options の呼び出しで上限付きで�
     for (let i = 0; i < 150; i += 1) insert.run(`old${i}`, Date.now() - 20 * MINUTE);
     await call(env, "login-options");
     assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM auth_challenges").get().n, 51, "100 件だけ消して新しい 1 件が残る");
+  } finally {
+    db.close();
+  }
+});
+
+// ---- 追加の境界 ----
+
+test("RS256（RSA 2048）でも登録→認証が通る", async () => {
+  const db = createTestDatabase();
+  try {
+    const env = makeEnv(db);
+    const auth = await FakeAuthenticator.create({ rsaBits: 2048 });
+    const { accountId } = await signUp(env, { authenticator: auth });
+    assert.equal(db.db.prepare("SELECT alg FROM passkeys").get().alg, -257);
+    const res = await signIn(env, auth);
+    assert.equal(res.status, 200, JSON.stringify(res.data));
+    assert.equal(res.data.accountId, accountId);
+  } finally {
+    db.close();
+  }
+});
+
+test("Sec-Fetch-Site が same-origin 以外は 403。op・ID が文字列でなければ 400 / 403（503 にしない）", async () => {
+  const db = createTestDatabase();
+  try {
+    const env = makeEnv(db);
+    for (const site of ["cross-site", "same-site", "none"]) {
+      assert.equal((await call(env, "login-options", {}, { headers: { "Sec-Fetch-Site": site } })).status, 403, site);
+    }
+    assert.equal((await call(env, "login-options", {}, { headers: { "Sec-Fetch-Site": "same-origin" } })).status, 200);
+    for (const op of [["rooms"], { a: 1 }, 1, null]) {
+      const res = await call(env, null, {}, { rawBody: JSON.stringify({ op }) });
+      assert.deepEqual(res, { status: 400, data: { error: "unknown op" } }, JSON.stringify(op));
+    }
+    const room = await createRoom(db);
+    const { token, accountId } = await signUp(env);
+    for (const [op, body] of [
+      ["link-room", { roomId: [room.roomId], secret: room.secret }],
+      ["link-room", { roomId: room.roomId, secret: [room.secret] }],
+      ["recover-room", { roomId: [room.roomId] }],
+      ["unlink-room", { roomId: { x: 1 } }],
+      ["remove-passkey", { credentialId: ["x".repeat(20)] }],
+    ]) {
+      assert.equal((await call(env, op, body, { token })).status, 403, `${op} ${JSON.stringify(body)}`);
+    }
+    const counted = db.db.prepare("SELECT COUNT(*) AS n FROM rate_limits WHERE rl_key LIKE 'acct-recover-%'").get().n;
+    assert.equal(counted, 0, "形式違いで recover の枠を消費した");
+    assert.ok(accountId);
+  } finally {
+    db.close();
+  }
+});
+
+test("レート制限: 窓が明けると再び許可。acct-recover-acct の 24 時間窓は 1 時間では開かない", async () => {
+  const db = createTestDatabase();
+  try {
+    const env = makeEnv(db);
+    for (let i = 0; i < 20; i += 1) assert.equal((await call(env, "login-options", {}, { ip: "10.6.0.1" })).status, 200);
+    assert.equal((await call(env, "login-options", {}, { ip: "10.6.0.1" })).status, 429);
+    await withClock(11 * MINUTE, async () => {
+      assert.equal((await call(env, "login-options", {}, { ip: "10.6.0.1" })).status, 200, "10 分窓が明けても 429");
+    });
+
+    const room = await createRoom(db);
+    const { token, accountId } = await signUp(env);
+    assert.equal((await call(env, "link-room", room, { token })).status, 200);
+    const setAcct = db.db.prepare("INSERT OR REPLACE INTO rate_limits (rl_key, window_start, count) VALUES (?, ?, 20)");
+    setAcct.run(`acct-recover-acct:${accountId}`, Date.now() - 2 * 60 * MINUTE);
+    assert.equal((await call(env, "recover-room", { roomId: room.roomId }, { token })).status, 429, "1 時間で開いた");
+    setAcct.run(`acct-recover-acct:${accountId}`, Date.now() - 25 * 60 * MINUTE);
+    assert.equal((await call(env, "recover-room", { roomId: room.roomId }, { token })).status, 200, "24 時間後も開かない");
+  } finally {
+    db.close();
+  }
+});
+
+test("recover-room は rate_limits への書き込みだけが失敗しても 503（読み取りは成功する状況）", async () => {
+  const db = createTestDatabase();
+  try {
+    const env = makeEnv(db);
+    const room = await createRoom(db);
+    const { token } = await signUp(env);
+    assert.equal((await call(env, "link-room", room, { token })).status, 200);
+    db.db.exec(`
+      CREATE TRIGGER block_rl_insert BEFORE INSERT ON rate_limits BEGIN SELECT RAISE(ABORT, 'blocked'); END;
+      CREATE TRIGGER block_rl_update BEFORE UPDATE ON rate_limits BEGIN SELECT RAISE(ABORT, 'blocked'); END;
+    `);
+    assert.equal((await call(env, "recover-room", { roomId: room.roomId }, { token })).status, 503);
+    assert.equal((await call(env, "rooms", {}, { token })).status, 200, "fail-open の op は動く");
   } finally {
     db.close();
   }

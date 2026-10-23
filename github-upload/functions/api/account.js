@@ -129,6 +129,7 @@ function constantTimeEqual(a, b) {
   return diff === 0;
 }
 
+const isString = (value) => typeof value === "string";
 const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
 const sha256 = async (bytes) => new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 
@@ -280,7 +281,12 @@ function derToRawSignature(der) {
     if (length < 1 || length > 33 || offset + 2 + length > der.byteLength) throw new Deny();
     let value = der.subarray(offset + 2, offset + 2 + length);
     offset += 2 + length;
-    while (value.byteLength > 1 && value[0] === 0) value = value.subarray(1);
+    // DER の INTEGER は最短表現で正。負数・余計な 0 埋めは不正な署名として扱う。
+    if (value[0] & 0x80) throw new Deny();
+    if (value.byteLength > 1 && value[0] === 0) {
+      if (!(value[1] & 0x80)) throw new Deny();
+      value = value.subarray(1);
+    }
     if (value.byteLength > 32) throw new Deny();
     const out = new Uint8Array(32);
     out.set(value, 32 - value.byteLength);
@@ -297,7 +303,9 @@ async function verifyRegistration(credential, rpId, origins) {
   if (!response || typeof response !== "object") throw new Deny();
   const clientDataBytes = b64urlDecode(response.clientDataJSON);
   const clientData = parseClientData(clientDataBytes, "webauthn.create", origins);
-  const attestation = decodeCbor(b64urlDecode(response.attestationObject));
+  const attestationBytes = b64urlDecode(response.attestationObject);
+  const attestation = decodeCbor(attestationBytes);
+  if (attestation.offset !== attestationBytes.byteLength) throw new Deny();
   const att = attestation.value;
   if (!(att instanceof Map)) throw new Deny();
   if (att.get("fmt") !== "none") throw new Deny();
@@ -308,6 +316,8 @@ async function verifyRegistration(credential, rpId, origins) {
   const parsed = await parseAuthenticatorData(authData, rpId, { expectCredential: true });
   const { alg } = await importCoseKey(parsed.coseKey.map);
   const credentialId = b64urlEncode(parsed.credentialId);
+  // 認証・トークンが受け付けない長さの ID で登録させない（入れないアカウントを作らない）。
+  if (!CREDENTIAL_ID_PATTERN.test(credentialId)) throw new Deny();
   if (credential.id !== undefined && credential.id !== credentialId) throw new Deny();
   return {
     challenge: clientData.challenge,
@@ -791,7 +801,7 @@ const OPS = {
     if (!syncRing) throw new Unavailable();
     try {
       const { roomId, secret } = body;
-      if (!ROOM_ID_PATTERN.test(roomId || "") || !ROOM_SECRET_PATTERN.test(secret || "")) {
+      if (!isString(roomId) || !ROOM_ID_PATTERN.test(roomId) || !isString(secret) || !ROOM_SECRET_PATTERN.test(secret)) {
         await matchRoomSecret(null, DUMMY_ROOM_ID, "", syncRing);
         throw new Deny();
       }
@@ -855,9 +865,10 @@ const OPS = {
 
   async "recover-room"(ctx, body) {
     const auth = await authenticate(ctx, { fresh: true });
+    // 形式違いは fail-closed の枠を消費する前に弾く。
+    if (!isString(body.roomId) || !ROOM_ID_PATTERN.test(body.roomId)) throw new Deny();
     await limit(ctx, "acct-recover-ip", ctx.ip);
     await limit(ctx, "acct-recover-acct", auth.accountId);
-    if (!ROOM_ID_PATTERN.test(body.roomId || "")) throw new Deny();
     const row = await ctx.db
       .prepare("SELECT room_id, secret_env, env_kid FROM account_rooms WHERE account_id = ? AND room_id = ?")
       .bind(auth.accountId, body.roomId)
@@ -886,7 +897,7 @@ const OPS = {
   async "remove-passkey"(ctx, body) {
     const auth = await authenticate(ctx, { fresh: true });
     await limit(ctx, "acct-write", auth.accountId);
-    if (typeof body.credentialId !== "string" || !CREDENTIAL_ID_PATTERN.test(body.credentialId)) throw new Deny();
+    if (!isString(body.credentialId) || !CREDENTIAL_ID_PATTERN.test(body.credentialId)) throw new Deny();
     // 最後の 1 本は消さない（アカウントへ入れなくなる。消すなら delete-account）。
     const result = await ctx.db
       .prepare(
@@ -901,7 +912,7 @@ const OPS = {
   async "unlink-room"(ctx, body) {
     const auth = await authenticate(ctx, { fresh: true });
     await limit(ctx, "acct-write", auth.accountId);
-    if (!ROOM_ID_PATTERN.test(body.roomId || "")) throw new Deny();
+    if (!isString(body.roomId) || !ROOM_ID_PATTERN.test(body.roomId)) throw new Deny();
     const result = await ctx.db
       .prepare("DELETE FROM account_rooms WHERE account_id = ? AND room_id = ?")
       .bind(auth.accountId, body.roomId)
@@ -978,7 +989,7 @@ export async function onRequest({ request, env }) {
     return json({ error: "invalid json" }, 400);
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "invalid body" }, 400);
-  const handler = Object.prototype.hasOwnProperty.call(OPS, body.op) ? OPS[body.op] : null;
+  const handler = isString(body.op) && Object.prototype.hasOwnProperty.call(OPS, body.op) ? OPS[body.op] : null;
   if (!handler) return json({ error: "unknown op" }, 400);
 
   const ctx = {

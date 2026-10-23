@@ -394,7 +394,7 @@ test("本文・連絡先に貼られた秘密は保存前に伏せ字にする",
 test("アカウントID wa_・トークン・challenge も保存前に伏せ字にする", async () => {
   const db = new FakeD1();
   const wa = `wa_${"1".repeat(32)}`;
-  const token = `eyJ${"A".repeat(60)}.${"b".repeat(43)}`;
+  const token = `${Buffer.from(JSON.stringify({ accountId: wa, cid: "x".repeat(27), iat: 1, exp: 2 })).toString("base64url")}.${"b".repeat(43)}`;
   const challenge = "scQAMIKRnhdkFiK_Hfyt56-NMQtB3P0rLj-K7nNBTI0";
   const { response } = await post(db, {
     category: "bug",
@@ -455,4 +455,15 @@ test("先頭や行頭の w= も伏せる", async () => {
   assert.ok(!saved.includes("abc123def456ghi789"), "先頭の w= を伏せること");
   assert.ok(!saved.includes("xyz789012345"), "行頭の w= も伏せること");
   assert.ok(saved.includes("を貼りました"), "本文は残すこと");
+});
+
+test("伏せ字は長いメールアドレス・URL を巻き込まない（連絡先が読めること）", async () => {
+  const db = new FakeD1();
+  const email = `${"a".repeat(50)}@example.com`;
+  const dotted = `${"b".repeat(43)}.${"c".repeat(43)}@example.com`;
+  const url = `https://wordbank.pages.dev/${"p".repeat(43)}/page`;
+  const { response } = await post(db, { category: "bug", message: `画面が崩れます ${url}`, contact: `${email} ${dotted}` });
+  assert.equal(response.status, 200);
+  assert.equal(db.inserted[0].contact, `${email} ${dotted}`);
+  assert.ok(db.inserted[0].message.includes(url));
 });
