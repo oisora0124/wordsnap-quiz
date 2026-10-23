@@ -19909,6 +19909,9 @@ const syncState = {
   syncedGen: 0,
   // 端末への保存（localStorage・IndexedDB）の途中の件数。0 でなければ退避の追加・復旧の確定を始めない。
   persistInFlight: 0,
+  // 編集検出用の世代（保存の入口で進める）と、送信が通った時点の値。違えば未送信の編集がある（ガード専用）。
+  persistEditGen: 0,
+  syncedEditGen: 0,
   // PUT送信中に届いた送信要求の保留フラグ（1回分だけ予約し、完了後に消化する）
   pushQueued: false,
   // 【キー切替対策】同期リクエストの世代番号。キー切替（別リンク採用・接続先変更・
@@ -20074,12 +20077,15 @@ function persistAppState(options = {}) {
   if (options.sync !== false) scheduleSyncPush();
 }
 
-// 端末の内容が appState に入った時点（保存の入口）で、同期的に編集世代を進め、保存中の件数を数える。
-// 送信の予約は従来どおり保存のあと（scheduleSyncPush）。IndexedDB の保存を待つ間も
-// 「未送信の変更がある」「保存の途中」と分かるようにし、退避の追加・復旧の確定がその変更を置換で消さないようにする。
+// 端末の内容が appState に入った時点（保存の入口）で、同期的に「編集検出用の世代」を進め、保存中の件数を数える。
+// これは退避の追加・復旧の確定のガード専用。送信予約用の世代（dirtyGen）は従来どおり保存成功後の
+// scheduleSyncPush でだけ進める（入口で dirtyGen を進めると、応答待ち中の PUT の finally が再送を予約し、
+// 保存に失敗して取り消される変更まで送ってしまう）。
 function beginLocalPersist(options = {}) {
   syncState.persistInFlight = (Number(syncState.persistInFlight) || 0) + 1;
-  if (options.sync !== false && !syncState.applyingRemote) syncState.dirtyGen += 1;
+  if (options.sync !== false && !syncState.applyingRemote) {
+    syncState.persistEditGen = (Number(syncState.persistEditGen) || 0) + 1;
+  }
 }
 
 function endLocalPersist() {
@@ -22392,7 +22398,9 @@ async function appendBackupWords(words) {
     setPasskeyStatus("退避の単語を追加するには、新方式（引き継ぎコード）で同期している必要があります。", "error");
     return false;
   }
-  const unsent = (Number(syncState.dirtyGen) || 0) !== (Number(syncState.syncedGen) || 0);
+  const unsent =
+    (Number(syncState.dirtyGen) || 0) !== (Number(syncState.syncedGen) || 0) ||
+    (Number(syncState.persistEditGen) || 0) !== (Number(syncState.syncedEditGen) || 0);
   if (
     syncState.pushing || syncState.pushQueued || syncState.pulling || syncState.pushTimer || syncState.retryTimer ||
     unsent || (Number(syncState.persistInFlight) || 0) > 0
@@ -22427,6 +22435,7 @@ async function appendBackupWords(words) {
       syncState.applyingRemote = false;
     }
     syncState.syncedGen = syncState.dirtyGen;
+    syncState.syncedEditGen = Number(syncState.persistEditGen) || 0;
     clearUndo();
     recordVerifiedSync(credential.roomId, appState.words.length);
     await deleteRecoveryBackup();
@@ -24146,6 +24155,8 @@ async function pushWordsnapState(options = {}) {
   syncState.retryTimer = 0;
   // この送信のボディに乗るのは現時点の世代までの変更。送信中に世代が進んだら再送する。
   const sentGen = syncState.dirtyGen;
+  // この送信の本文に乗る編集（appState に入っている分）の世代。ガード用に成功時だけ記録する。
+  const sentEditGen = Number(syncState.persistEditGen) || 0;
   const requestGen = syncState.requestGen;
   const requestedId = identity.expectedSyncId;
   const retryAttempt = Math.max(0, Number(options.retryAttempt) || 0);
@@ -24160,6 +24171,7 @@ async function pushWordsnapState(options = {}) {
     syncState.rev = Number(result.stateRev) || syncState.rev;
     syncState.connected = true;
     syncState.syncedGen = Math.max(Number(syncState.syncedGen) || 0, sentGen);
+    syncState.syncedEditGen = Math.max(Number(syncState.syncedEditGen) || 0, sentEditGen);
     // 段階4: 送信が通ったので、この保存先への保存を検証済みとして記録する。
     // 保存先は「応答のsyncIdと照合済み」の値を最優先する。呼び出し前のスナップショットでは、
     // gzip圧縮のawaitを跨いで別タブが資格情報を切り替えた場合に実際の送信先とずれる。

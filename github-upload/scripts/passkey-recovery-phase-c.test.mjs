@@ -1073,7 +1073,7 @@ test("反例(2): 候補の保存が IndexedDB を待っている間は、退避�
   ctx.appState.words.push(word("z", "zeta", "rd"));
   const saving = ctx.persistAppStateChecked();
   assert.equal(ctx.syncState.persistInFlight, 1, "保存の途中を数える");
-  assert.notEqual(ctx.syncState.dirtyGen, ctx.syncState.syncedGen, "入口で同期的に編集世代を進める");
+  assert.notEqual(ctx.syncState.persistEditGen, ctx.syncState.syncedEditGen || 0, "入口で同期的に編集検出用の世代を進める");
   assert.equal(await ctx.appendBackupWords([word("b", "backup", "x")]), false, "始めない");
   assert.deepEqual(ctx.requests, [], "送信しない");
   assert.ok(ctx.appState.words.some((w) => w.term === "zeta"), "保存中の語が残る");
@@ -1190,4 +1190,144 @@ test("通常経路: 同期先が一定なら pull・push・409 の合流と再�
   assert.ok(ctx.calls.includes("merge"), "409 は従来どおり合流する");
   assert.equal(ctx.calls.filter((c) => c === "put").length, 2, "合流後に再送する");
   assert.ok(!reloadMessage(ctx.calls));
+});
+
+// ---- N1: 編集検出用の世代と送信予約用の世代を分ける（実物の送信予約経路で確かめる）----
+
+function persistPushSandbox() {
+  const timers = [];
+  const puts = [];
+  let releasePut = null;
+  let releaseIdb = null;
+  const ctx = {
+    timers,
+    puts,
+    appState: { words: [{ term: "keep" }], decks: [], deletions: {}, trash: [] },
+    syncState: {
+      connected: true, pushing: false, pulling: false, rev: 3, dirtyGen: 0, syncedGen: 0, requestGen: 0,
+      pushQueued: false, pushTimer: 0, retryTimer: 0, applyingRemote: false, abortControllers: new Set(),
+      persistInFlight: 0, persistEditGen: 0, syncedEditGen: 0,
+    },
+    window: {
+      setTimeout: (fn) => { timers.push(fn); return timers.length; },
+      clearTimeout: () => {},
+    },
+    STORAGE_KEY: "state",
+    localStorage: { setItem: () => { if (ctx.localFails) throw new Error("quota"); } },
+    idb: { set: () => new Promise((r) => { releaseIdb = r; }) },
+    sanitizeDeletions: (d) => d || {},
+    sanitizeTrash: (t) => t || [],
+    showRuntimeStorageWarning: () => {},
+    syncRequestRoute: () => ({ expectedSyncId: ROOM_A }),
+    syncServerAvailable: () => true,
+    // 送信内容は送る瞬間の appState（buildSyncPayloadState と同じく呼ばれた時点で作る）
+    syncPutState: async () => {
+      puts.push(JSON.parse(JSON.stringify(ctx.appState)));
+      if (ctx.holdPut) await new Promise((r) => { releasePut = r; });
+      return { stateRev: 4 + puts.length, verifiedSyncTarget: ROOM_A };
+    },
+    recordVerifiedSync: () => {},
+    setSyncStatus: () => {},
+    isStaleSyncError: () => false,
+    validSyncGetResponse: () => true,
+    applyMergedRemoteState: () => true,
+    scheduleSyncRetry: () => {},
+  };
+  run(ctx, [
+    "let storageWriteGeneration = 0;",
+    extractFunction("beginLocalPersist"),
+    extractFunction("endLocalPersist"),
+    extractFunction("persistAppStateCheckedOnce"),
+    extractFunction("persistAppStateChecked"),
+    extractFunction("scheduleSyncPush"),
+    extractFunction("pushWordsnapState"),
+  ]);
+  ctx.releasePut = () => releasePut();
+  ctx.releaseIdb = (ok) => releaseIdb(ok);
+  // 予約済みの送信を順に走らせる（400ms 待ちの代わり）
+  ctx.flushTimers = async () => {
+    while (timers.length) {
+      await timers.shift()();
+    }
+  };
+  return ctx;
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+test("N1(a): 応答待ちの PUT の間に保存しても、IndexedDB の完了前には再送を予約せず、完了後に 1 回だけ予約する", async () => {
+  const ctx = persistPushSandbox();
+  ctx.holdPut = true;
+  const inflight = ctx.pushWordsnapState();
+  await tick();
+  // 取り込み（置換）と同じ形: appState を変えてから保存の完了を待つ
+  ctx.appState.words.push({ term: "imported" });
+  const saving = ctx.persistAppStateChecked();
+  ctx.releasePut();
+  await inflight;
+  assert.equal(ctx.timers.length, 0, "保存が終わる前の変更で再送を予約しない");
+  ctx.holdPut = false;
+  ctx.releaseIdb(true);
+  assert.equal(await saving, true);
+  assert.equal(ctx.timers.length, 1, "保存成功後に 1 回だけ予約する");
+  await ctx.flushTimers();
+  assert.equal(ctx.puts.length, 2);
+  assert.ok(ctx.puts[1].words.some((w) => w.term === "imported"));
+  assert.equal(ctx.timers.length, 0, "同じ内容の余分な PUT を出さない");
+});
+
+test("N1(b): 保存に失敗して取り消した変更は、一度も送られない", async () => {
+  const ctx = persistPushSandbox();
+  ctx.localFails = true;
+  ctx.holdPut = true;
+  const inflight = ctx.pushWordsnapState();
+  await tick();
+  ctx.appState.deletions = { "d1 x": Date.now() }; // 取り込みの置換が付ける削除記録
+  ctx.appState.words = [];
+  const saving = ctx.persistAppStateChecked();
+  ctx.releasePut();
+  await inflight;
+  ctx.holdPut = false;
+  await ctx.flushTimers(); // IndexedDB の保存が 400ms より長くかかった場合
+  ctx.releaseIdb(false);
+  const persisted = await saving;
+  assert.equal(persisted, false);
+  // 呼び出し側（取り込み）の取り消しと同じ
+  ctx.appState.words = [{ term: "keep" }];
+  ctx.appState.deletions = {};
+  await ctx.flushTimers();
+  for (const sent of ctx.puts) {
+    assert.deepEqual(plain(sent.deletions), {}, "取り消した削除記録を送らない");
+    assert.ok(sent.words.some((w) => w.term === "keep"));
+  }
+});
+
+test("N1(c): 退避の追加・復旧の確定のガードは、保存待ちの間（送信予約の世代が動かなくても）拒否する", async () => {
+  const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
+  let releaseIdb;
+  ctx.idb.set = (key) => (key === "state" ? new Promise((r) => { releaseIdb = () => r(true); }) : Promise.resolve(true));
+  Object.assign(ctx, {
+    STORAGE_KEY: "state",
+    sanitizeDeletions: (d) => d || {},
+    sanitizeTrash: (t) => t || [],
+    showRuntimeStorageWarning: () => {},
+    scheduleSyncPush: () => {},
+  });
+  run(ctx, [
+    "let storageWriteGeneration = 0;",
+    extractFunction("beginLocalPersist"),
+    extractFunction("endLocalPersist"),
+    extractFunction("persistAppStateCheckedOnce"),
+    extractFunction("persistAppStateChecked"),
+  ]);
+  ctx.appState.words.push(word("z", "zeta", "rd"));
+  const saving = ctx.persistAppStateChecked();
+  assert.equal(ctx.syncState.dirtyGen, 0, "送信予約の世代は入口では動かない");
+  assert.equal(await ctx.appendBackupWords([word("b", "backup", "x")]), false, "保存の途中は始めない");
+  releaseIdb();
+  await saving;
+  assert.equal(await ctx.appendBackupWords([word("b", "backup", "x")]), false, "保存後も未送信の編集があれば始めない");
+  assert.deepEqual(ctx.requests, []);
+  ctx.syncState.syncedEditGen = ctx.syncState.persistEditGen; // 通常の送信が通った
+  assert.equal(await ctx.appendBackupWords([word("b", "backup", "x")]), true);
 });
