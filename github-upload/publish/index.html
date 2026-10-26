@@ -19909,6 +19909,10 @@ const syncState = {
   syncedGen: 0,
   // 端末への保存（localStorage・IndexedDB）の途中の件数。0 でなければ退避の追加・復旧の確定を始めない。
   persistInFlight: 0,
+  // 取り消しうる保存（persistAppStateChecked）の途中の件数と、その間に止めた通常送信の引数。
+  // 保存前の変更を送ると、失敗して取り消しても同期先に残るため、終わるまで新しい送信を始めない。
+  checkedPersistInFlight: 0,
+  pushHeld: null,
   // 編集検出用の世代（保存の入口で進める）と、送信が通った時点の値。違えば未送信の編集がある（ガード専用）。
   persistEditGen: 0,
   syncedEditGen: 0,
@@ -20081,26 +20085,44 @@ function persistAppState(options = {}) {
 // これは退避の追加・復旧の確定のガード専用。送信予約用の世代（dirtyGen）は従来どおり保存成功後の
 // scheduleSyncPush でだけ進める（入口で dirtyGen を進めると、応答待ち中の PUT の finally が再送を予約し、
 // 保存に失敗して取り消される変更まで送ってしまう）。
-function beginLocalPersist(options = {}) {
+function beginLocalPersist(options = {}, checked = false) {
   syncState.persistInFlight = (Number(syncState.persistInFlight) || 0) + 1;
+  if (checked) syncState.checkedPersistInFlight = (Number(syncState.checkedPersistInFlight) || 0) + 1;
   if (options.sync !== false && !syncState.applyingRemote) {
     syncState.persistEditGen = (Number(syncState.persistEditGen) || 0) + 1;
   }
 }
 
-function endLocalPersist() {
+function endLocalPersist(checked = false) {
   syncState.persistInFlight = Math.max(0, (Number(syncState.persistInFlight) || 0) - 1);
+  if (!checked) return;
+  syncState.checkedPersistInFlight = Math.max(0, (Number(syncState.checkedPersistInFlight) || 0) - 1);
+  if (typeof resumeHeldSyncPush === "function") resumeHeldSyncPush();
 }
 
 // identity切替では、切替先stateの耐久保存を確認してから旧資格情報の破棄を確定する。
 // 通常保存のタイミングや送信挙動は変えず、native→legacy切替だけがこのawait可能版を使う。
 async function persistAppStateChecked(options = {}) {
-  if (typeof beginLocalPersist === "function") beginLocalPersist(options);
+  if (typeof beginLocalPersist === "function") beginLocalPersist(options, true);
   try {
     return await persistAppStateCheckedOnce(options);
   } finally {
-    if (typeof endLocalPersist === "function") endLocalPersist();
+    if (typeof endLocalPersist === "function") endLocalPersist(true);
   }
+}
+
+// 保存中に止めた通常送信を、保存とその後の取り消しが済んだ状態で送り直す。
+// タイマー経由なのは、呼び出し側の取り消し（await の直後に同期的に行う）を先に終わらせるため。
+function resumeHeldSyncPush() {
+  const held = syncState.pushHeld;
+  if (!held || (Number(syncState.checkedPersistInFlight) || 0) > 0) return;
+  syncState.pushHeld = null;
+  // 保存成功後の予約が既にあれば、それがこの時点の状態を送る（同じ内容を二重に送らない）。
+  if (syncState.pushTimer) return;
+  syncState.pushTimer = window.setTimeout(() => {
+    syncState.pushTimer = 0;
+    pushWordsnapState(held);
+  }, 400);
 }
 
 async function persistAppStateCheckedOnce(options) {
@@ -20125,8 +20147,11 @@ async function persistAppStateCheckedOnce(options) {
   if (writeGeneration === storageWriteGeneration) {
     showRuntimeStorageWarning(!localSaved && !idbSaved);
   }
-  if (options.sync !== false) scheduleSyncPush();
-  return localSaved || idbSaved;
+  // 送信の予約は保存できたときだけ。失敗時は呼び出し側が取り消すので、送るべき変更が残らない
+  // （それ以前の未送信分は、止めていた送信の再開で送る）。
+  const saved = localSaved || idbSaved;
+  if (saved && options.sync !== false) scheduleSyncPush();
+  return saved;
 }
 
 function defaultState() {
@@ -21171,6 +21196,7 @@ function bumpSyncRequestGen() {
   syncState.pushTimer = 0;
   syncState.retryTimer = 0;
   syncState.pushQueued = false;
+  syncState.pushHeld = null;
   for (const controller of syncState.abortControllers) {
     try {
       controller.abort();
@@ -24148,6 +24174,15 @@ async function pushWordsnapState(options = {}) {
     // 送信中の呼び出しは黙って捨てず、完了後に送り直す予約に変える
     // （PUT中の変更が送られず「最新です」と誤表示されるのを防ぐ）
     syncState.pushQueued = true;
+    return;
+  }
+  if ((Number(syncState.checkedPersistInFlight) || 0) > 0) {
+    // 取り消しうる保存の途中は送らず、保存が終わってから送る（resumeHeldSyncPush）。
+    const prev = syncState.pushHeld || {};
+    syncState.pushHeld = {
+      force: Boolean(prev.force || options.force),
+      retryAttempt: Math.max(Number(prev.retryAttempt) || 0, Number(options.retryAttempt) || 0),
+    };
     return;
   }
   syncState.pushing = true;
