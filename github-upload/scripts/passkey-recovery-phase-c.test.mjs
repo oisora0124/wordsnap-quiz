@@ -1061,6 +1061,7 @@ test("反例(2): 候補の保存が IndexedDB を待っている間は、退避�
     sanitizeTrash: (t) => t || [],
     showRuntimeStorageWarning: () => {},
     scheduleSyncPush: () => { ctx.syncState.dirtyGen += 1; },
+    window: { setTimeout: () => 0, clearTimeout: () => {} }, // 保存待ちの上限（10 秒）は扱わない
   });
   run(ctx, [
     "let storageWriteGeneration = 0;",
@@ -1209,7 +1210,8 @@ function persistPushSandbox() {
       persistInFlight: 0, persistEditGen: 0, syncedEditGen: 0,
     },
     window: {
-      setTimeout: (fn) => { timers.push(fn); return timers.length; },
+      // 保存待ちの上限（10 秒）のタイマーは扱わない（送信の予約だけを数える）
+      setTimeout: (fn, ms) => { if (ms >= 10000) return 0; timers.push(fn); return timers.length; },
       clearTimeout: () => {},
     },
     STORAGE_KEY: "state",
@@ -1312,6 +1314,7 @@ test("N1(c): 退避の追加・復旧の確定のガードは、保存待ちの�
     sanitizeTrash: (t) => t || [],
     showRuntimeStorageWarning: () => {},
     scheduleSyncPush: () => {},
+    window: { setTimeout: () => 0, clearTimeout: () => {} }, // 保存待ちの上限（10 秒）は扱わない
   });
   run(ctx, [
     "let storageWriteGeneration = 0;",

@@ -19909,10 +19909,11 @@ const syncState = {
   syncedGen: 0,
   // 端末への保存（localStorage・IndexedDB）の途中の件数。0 でなければ退避の追加・復旧の確定を始めない。
   persistInFlight: 0,
-  // 取り消しうる保存（persistAppStateChecked）の途中の件数と、その間に止めた通常送信の引数。
-  // 保存前の変更を送ると、失敗して取り消しても同期先に残るため、終わるまで新しい送信を始めない。
+  // 取り消しうる保存（persistAppStateChecked）の途中の件数と、その間に止めた通常の送信・取得（引数と同期先）。
+  // 保存前の変更を送ると、失敗して取り消しても同期先に残る。保存中に合流すると、取り消しが合流分まで捨てる。
   checkedPersistInFlight: 0,
   pushHeld: null,
+  pullHeld: null,
   // 編集検出用の世代（保存の入口で進める）と、送信が通った時点の値。違えば未送信の編集がある（ガード専用）。
   persistEditGen: 0,
   syncedEditGen: 0,
@@ -20097,7 +20098,7 @@ function endLocalPersist(checked = false) {
   syncState.persistInFlight = Math.max(0, (Number(syncState.persistInFlight) || 0) - 1);
   if (!checked) return;
   syncState.checkedPersistInFlight = Math.max(0, (Number(syncState.checkedPersistInFlight) || 0) - 1);
-  if (typeof resumeHeldSyncPush === "function") resumeHeldSyncPush();
+  if (typeof resumeHeldSync === "function") resumeHeldSync();
 }
 
 // identity切替では、切替先stateの耐久保存を確認してから旧資格情報の破棄を確定する。
@@ -20111,19 +20112,56 @@ async function persistAppStateChecked(options = {}) {
   }
 }
 
-// 保存中に止めた通常送信を、保存とその後の取り消しが済んだ状態で送り直す。
+function holdSyncPush(options, syncId) {
+  const prev = syncState.pushHeld?.options || {};
+  syncState.pushHeld = {
+    requestGen: syncState.requestGen,
+    syncId,
+    options: {
+      force: Boolean(prev.force || options.force),
+      retryAttempt: Math.max(Number(prev.retryAttempt) || 0, Number(options.retryAttempt) || 0),
+    },
+  };
+}
+
+function holdSyncPull(options, syncId) {
+  const prev = syncState.pullHeld?.options;
+  syncState.pullHeld = {
+    requestGen: syncState.requestGen,
+    syncId,
+    options: { silent: Boolean(options.silent && (!prev || prev.silent)) },
+  };
+}
+
+// 保留した時点と同期先・世代が違えば送らない（切替の失敗復元などで、別の部屋へ古い内容を送らない）。
+function heldSyncTargetMatches(held) {
+  return held.requestGen === syncState.requestGen && held.syncId === syncRequestRoute().expectedSyncId;
+}
+
+// 保存中に止めた通常の取得・送信を、保存とその後の取り消しが済んだ状態で再開する。
 // タイマー経由なのは、呼び出し側の取り消し（await の直後に同期的に行う）を先に終わらせるため。
-function resumeHeldSyncPush() {
-  const held = syncState.pushHeld;
-  if (!held || (Number(syncState.checkedPersistInFlight) || 0) > 0) return;
+function resumeHeldSync() {
+  if ((Number(syncState.checkedPersistInFlight) || 0) > 0) return;
+  const push = syncState.pushHeld;
+  const pull = syncState.pullHeld;
   syncState.pushHeld = null;
-  // 保存成功後の予約が既にあれば、それがこの時点の状態を送る（同じ内容を二重に送らない）。
-  if (syncState.pushTimer) return;
+  syncState.pullHeld = null;
+  if (pull) {
+    window.setTimeout(() => {
+      if (heldSyncTargetMatches(pull)) pullWordsnapState(pull.options);
+    }, 0);
+  }
+  if (!push) return;
+  // 背面では 400ms 待つと凍結されうるので、flushPendingSyncPush と同じくすぐ送る。
+  const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+  // 保存成功後の予約は置き換える（同じ内容を二重に送らない）。
+  window.clearTimeout(syncState.pushTimer);
   syncState.pushTimer = window.setTimeout(() => {
     syncState.pushTimer = 0;
-    pushWordsnapState(held);
-  }, 400);
+    if (heldSyncTargetMatches(push)) pushWordsnapState(push.options);
+  }, hidden ? 0 : 400);
 }
+
 
 async function persistAppStateCheckedOnce(options) {
   appState.deletions = sanitizeDeletions(appState.deletions, Date.now());
@@ -20139,16 +20177,25 @@ async function persistAppStateCheckedOnce(options) {
     // IndexedDB側の完了を待って、両方失敗かを下で確定する。
   }
   let idbSaved = false;
+  let idbTimer = 0;
   try {
-    idbSaved = (await idb.set(STORAGE_KEY, json)) === true;
+    // IndexedDB が応答しないまま（iOS で open が返らない等）だと、保存中の件数が戻らず通常の同期が止まり続けるため
+    // 10 秒で打ち切り、localStorage の結果で成否を決める。
+    const timeout = new Promise((resolve) => {
+      idbTimer = window.setTimeout(() => resolve(false), 10000);
+    });
+    idbSaved = (await Promise.race([idb.set(STORAGE_KEY, json), timeout])) === true;
   } catch {
     idbSaved = false;
+  } finally {
+    window.clearTimeout(idbTimer);
   }
   if (writeGeneration === storageWriteGeneration) {
     showRuntimeStorageWarning(!localSaved && !idbSaved);
   }
-  // 送信の予約は保存できたときだけ。失敗時は呼び出し側が取り消すので、送るべき変更が残らない
-  // （それ以前の未送信分は、止めていた送信の再開で送る）。
+  // 送信の予約は保存できたときだけ。失敗時は呼び出し側が取り消す（保存中は合流も止めているので、取り消し後は
+  // 保存前の状態に戻る）。取り消せずに今の状態を残す分岐（元に戻すの合流分岐）の分と、それ以前の未送信分は、
+  // 止めていた送信の再開で送る。
   const saved = localSaved || idbSaved;
   if (saved && options.sync !== false) scheduleSyncPush();
   return saved;
@@ -21197,6 +21244,7 @@ function bumpSyncRequestGen() {
   syncState.retryTimer = 0;
   syncState.pushQueued = false;
   syncState.pushHeld = null;
+  syncState.pullHeld = null;
   for (const controller of syncState.abortControllers) {
     try {
       controller.abort();
@@ -24177,12 +24225,8 @@ async function pushWordsnapState(options = {}) {
     return;
   }
   if ((Number(syncState.checkedPersistInFlight) || 0) > 0) {
-    // 取り消しうる保存の途中は送らず、保存が終わってから送る（resumeHeldSyncPush）。
-    const prev = syncState.pushHeld || {};
-    syncState.pushHeld = {
-      force: Boolean(prev.force || options.force),
-      retryAttempt: Math.max(Number(prev.retryAttempt) || 0, Number(options.retryAttempt) || 0),
-    };
+    // 取り消しうる保存の途中は送らず、保存が終わってから送る（resumeHeldSync）。
+    holdSyncPush(options, identity.expectedSyncId);
     return;
   }
   syncState.pushing = true;
@@ -24236,6 +24280,12 @@ async function pushWordsnapState(options = {}) {
         // 別タブが同期先を変えた後の 409 は合流しない（復旧先へ古い端末状態を混ぜない）。
         handedOff = true;
         return;
+      } else if ((Number(syncState.checkedPersistInFlight) || 0) > 0) {
+        // 保存待ちの間は合流しない（取り消しが合流分まで捨てるため）。保存後の再送で、もう一度 409 から合流する。
+        holdSyncPush({ force: true, retryAttempt }, requestedId);
+        syncState.pushQueued = false;
+        handedOff = true;
+        return;
       } else {
         syncState.rev = Number(error.data.stateRev) || syncState.rev;
         applyMergedRemoteState(error.data.state);
@@ -24274,6 +24324,11 @@ async function pullWordsnapState(options = {}) {
   }
   if (syncState.pulling) return false;
   if (typeof syncTargetChangedElsewhere === "function" && syncTargetChangedElsewhere()) return false;
+  if ((Number(syncState.checkedPersistInFlight) || 0) > 0) {
+    // 保存待ちの間は合流しない（取り消しが合流分まで捨てるため）。保存後に取り直す。
+    holdSyncPull(options, identity.expectedSyncId);
+    return false;
+  }
   syncState.pulling = true;
   if (!options.silent) setSyncStatus("サーバーから読み込んでいます…");
   try {
@@ -24287,6 +24342,10 @@ async function pullWordsnapState(options = {}) {
     );
     if (requestedId !== syncRequestRoute().expectedSyncId) return false;
     if (typeof syncTargetChangedElsewhere === "function" && syncTargetChangedElsewhere()) return false;
+    if ((Number(syncState.checkedPersistInFlight) || 0) > 0) {
+      holdSyncPull(options, requestedId);
+      return false;
+    }
     const remoteRev = Number(remote.stateRev) || 0;
     // サーバーが state を返してきた（＝未変更ではない）なら、rev が上がった時だけでなく
     // 下がった時（D1のバックアップ復元・rev再採番など）も取り込む。remoteRev===syncState.rev の
@@ -24353,6 +24412,11 @@ function armDangerButton(button, armedLabel, timeoutMs = 4000) {
 async function forcePushOverwrite() {
   if (!syncRequestRoute().expectedSyncId || !syncServerAvailable()) {
     setSyncStatus("サーバー保存が使えない状態です（https のリンクから開いてください）。", "error");
+    return;
+  }
+  // 保存待ちの内容は取り消されうるので、それで同期先を上書きしない。
+  if ((Number(syncState.checkedPersistInFlight) || 0) > 0) {
+    setSyncStatus("この端末への保存の途中です。保存の完了を待ってから、もう一度押してください。", "error");
     return;
   }
   if (!armDangerButton(elements.syncForcePushButton, "もう一度押すと上書き確定")) {
@@ -24507,6 +24571,12 @@ async function restoreFromRevision(rev) {
   }
   if (!Number.isInteger(rev) || rev <= 0) {
     setSyncStatus("復元する版を確認できませんでした。履歴を読み直してください。", "error");
+    return;
+  }
+  // 保存待ちの取り消しが、復元した版を上書きして戻すため。
+  if ((Number(syncState.checkedPersistInFlight) || 0) > 0) {
+    setRestoreHistoryStatus("この端末への保存の途中です。保存の完了を待ってから、もう一度押してください。");
+    setSyncStatus("この端末への保存の途中です。保存の完了を待ってから、もう一度押してください。", "error");
     return;
   }
   const button = elements.restoreHistoryList?.querySelector(`[data-restore-rev="${rev}"]`);
@@ -24665,6 +24735,8 @@ async function restoreNativeV2AfterFailedLegacySwitch(
   previousSnapshot,
 ) {
   try {
+    // 切替中に保留・予約された送信を、元の V2 の部屋へ持ち越さない（rev と appState を戻す前に走りうるため）。
+    bumpSyncRequestGen();
     localStorage.removeItem(SYNC_ID_KEY);
     syncState.id = "";
     writeV2Credential(credential);
