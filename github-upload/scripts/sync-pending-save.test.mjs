@@ -89,8 +89,14 @@ function sandbox() {
       setItem: () => { if (ctx.localFails) throw new Error("quota"); },
       removeItem: () => {},
     },
-    // 保存の完了はテストが決める（finishIdb(true/false)、または返さない）
-    idb: { set: (key) => new Promise((r) => { idbWaits.push({ key, done: r }); }) },
+    // 保存の完了はテストが決める（finishIdb(true/false)、または返さない）。true で完了した内容を idbStore に残す
+    idbWaits,
+    idbStore: new Map(),
+    idb: {
+      set: (key, value) => new Promise((r) => {
+        idbWaits.push({ key, value, done: (ok) => { if (ok === true) ctx.idbStore.set(key, value); r(ok); } });
+      }),
+    },
     sanitizeDeletions: (d) => d || {},
     sanitizeTrash: (t) => t || [],
     showRuntimeStorageWarning: () => {},
@@ -140,6 +146,11 @@ function sandbox() {
     renderV2CredentialUi: () => {},
     applySyncIdentityUi: () => {},
     renderAll: () => {},
+    // 過去の版の復元が置き換えまで進んだときに使う（復元の途中の中止を確かめるため）
+    snapshotState: () => copy(ctx.appState),
+    offerUndo: () => {},
+    invalidatePersonalFactorCache: () => {},
+    selectedIds: new Set(),
     removeSyncIdFromUrl: () => {},
     startSyncPolling: () => {},
   };
@@ -313,6 +324,22 @@ test("(f) 強制上書き・過去の版の復元は、保存待ちの間は受�
   await imp.saving;
   await ctx.forcePushOverwrite();
   assert.equal(ctx.puts.length, 1, "保存後は従来どおり上書きする");
+
+  // 版の取得を待つ間に保存が始まったら、取得後に置き換えず中止する
+  const ctx2 = sandbox();
+  ctx2.holdGet = true;
+  const restoring = ctx2.restoreFromRevision(2);
+  await settle();
+  assert.deepEqual(ctx2.gets, ["GET"]);
+  const imp2 = importReplace(ctx2);
+  ctx2.holdGet = false;
+  ctx2.releaseGet();
+  await restoring;
+  assert.match(ctx2.status, /保存の完了を待って/);
+  assert.deepEqual(ctx2.puts, [], "保存待ちの間に過去の版で同期先を上書きしない");
+  assert.deepEqual(ctx2.appState.words, [{ term: "imported" }], "appState を置き換えない");
+  ctx2.finishIdb(true);
+  await imp2.saving;
 });
 
 test("(g) 保留した送信・取得は、再開時に同期先が変わっていたら行わず、同期先の切り替えで捨てる", async () => {
@@ -373,6 +400,32 @@ test("(i) IndexedDB が応答しなくても、10 秒で localStorage の結果�
     assert.equal(ctx.syncState.checkedPersistInFlight, 0, "件数を戻す");
     await ctx.clock.advance(400);
     assert.equal(ctx.puts.length, 1, "通常の同期が止まり続けない");
+  }
+
+  // 打ち切った書き込みが取り消しの後に遅れて書けても、IndexedDB に取り消した内容を残さない
+  for (const laterPersist of [false, true]) {
+    const ctx = sandbox();
+    ctx.localFails = true;
+    const imp = importReplace(ctx);
+    await ctx.clock.advance(10000);
+    assert.equal(await imp.saving, false);
+    imp.rollback(); // 呼び出し側（取り込み）の取り消し
+    const gen = ctx.syncState.dirtyGen;
+    if (laterPersist) ctx.persistAppStateChecked({ sync: false }); // 遅れた完了の前に次の保存が始まった
+    assert.equal(ctx.idbWaits.length, laterPersist ? 2 : 1);
+    ctx.finishIdb(true); // 打ち切った書き込み（削除記録入り）が遅れて書けた
+    await settle();
+    assert.ok(JSON.parse(ctx.idbStore.get("state")).deletions[TOMBSTONE], "いったんは取り消した内容が書かれる");
+    assert.equal(ctx.idbWaits.length, 1, laterPersist ? "後の保存があれば上書きしない" : "いまの状態で上書きする");
+    ctx.finishIdb(true);
+    await ctx.clock.advance(1000);
+    const stored = JSON.parse(ctx.idbStore.get("state"));
+    assert.equal(stored.deletions[TOMBSTONE], undefined, "IndexedDB に取り消した削除記録を残さない");
+    assert.deepEqual(stored.words, [{ term: "keep" }], "取り消し後の状態が残る");
+    assert.equal(ctx.idbWaits.length, 0, "上書きは 1 回だけ");
+    assert.equal(ctx.syncState.dirtyGen, gen, "上書きで送信を予約しない");
+    assert.deepEqual(ctx.puts, []);
+    assert.equal(ctx.clock.pending.size, 0);
   }
 });
 

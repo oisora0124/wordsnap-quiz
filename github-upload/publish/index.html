@@ -20178,13 +20178,19 @@ async function persistAppStateCheckedOnce(options) {
   }
   let idbSaved = false;
   let idbTimer = 0;
+  let idbWrite = null;
+  let idbTimedOut = false;
   try {
     // IndexedDB が応答しないまま（iOS で open が返らない等）だと、保存中の件数が戻らず通常の同期が止まり続けるため
     // 10 秒で打ち切り、localStorage の結果で成否を決める。
     const timeout = new Promise((resolve) => {
-      idbTimer = window.setTimeout(() => resolve(false), 10000);
+      idbTimer = window.setTimeout(() => {
+        idbTimedOut = true;
+        resolve(false);
+      }, 10000);
     });
-    idbSaved = (await Promise.race([idb.set(STORAGE_KEY, json), timeout])) === true;
+    idbWrite = idb.set(STORAGE_KEY, json);
+    idbSaved = (await Promise.race([idbWrite, timeout])) === true;
   } catch {
     idbSaved = false;
   } finally {
@@ -20198,6 +20204,21 @@ async function persistAppStateCheckedOnce(options) {
   // 止めていた送信の再開で送る。
   const saved = localSaved || idbSaved;
   if (saved && options.sync !== false) scheduleSyncPush();
+  // 打ち切った書き込みは止まらずに続く。失敗として返すと呼び出し側は取り消す（appState と localStorage は保存前）ので、
+  // その後に遅れて書けると IndexedDB だけに取り消した内容（削除記録・新しい savedAt）が残り、次の起動で
+  // そちらが新しいとして復元され、次の同期で削除記録が送られる。遅れて書けたら、いまの appState
+  // （取り消し後、または取り消しを取り下げて残した状態）で上書きする。後の保存が始まっていれば、同じ store の
+  // トランザクションは作成順に進むのでそちらが後に書かれる。上書きは不要。localStorage に書けて成功を返した
+  // ときは取り消しが起きず、遅れた書き込みも localStorage と同じ内容なので上書きしない。送信は予約しない
+  // （内容は呼び出し側が決めた状態で、送る分は保存・再開の経路で送る）。失敗は他の IndexedDB 操作と同じく無視する。
+  if (idbTimedOut && !saved && idbWrite) {
+    idbWrite
+      .then((lateSaved) => {
+        if (lateSaved !== true || writeGeneration !== storageWriteGeneration) return;
+        return idb.set(STORAGE_KEY, JSON.stringify(appState));
+      })
+      .catch(() => {});
+  }
   return saved;
 }
 
@@ -24595,6 +24616,12 @@ async function restoreFromRevision(rev) {
   syncState.pushQueued = false;
   try {
     const remote = await syncRequest("GET", null, { revision: rev });
+    // 取得を待つ間に保存（取り込み等）が始まっていたら、ここで置き換えると保存失敗の取り消しで戻されるので中止する。
+    if ((Number(syncState.checkedPersistInFlight) || 0) > 0) {
+      setRestoreHistoryStatus("この端末への保存の途中です。保存の完了を待ってから、もう一度押してください。");
+      setSyncStatus("この端末への保存の途中です。保存の完了を待ってから、もう一度押してください。", "error");
+      return;
+    }
     const localSnapshot = snapshotState();
     syncState.connected = true;
     syncState.applyingRemote = true;
