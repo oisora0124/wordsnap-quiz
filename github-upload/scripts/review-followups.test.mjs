@@ -336,6 +336,7 @@ test("OGP: 本番の素のURLと既存アイコンを指し、説明文は descr
 // 5. 匿名統計の説明
 // ============================================================================
 test("匿名統計の説明: 送信先（/api/telemetry）と内容・含まないものを明記し、実装と一致する", () => {
+  assert.match(extractFunction("optedOut"), /\.wordbank\.pages\.dev/);
   const desc = html.match(/<p class="settings-desc">品質改善のため[^<]*<\/p>/)?.[0];
   assert.ok(desc, "説明文が見つからない");
   assert.match(desc, /\/api\/telemetry/);
