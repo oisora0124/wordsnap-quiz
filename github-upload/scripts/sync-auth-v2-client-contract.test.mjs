@@ -382,6 +382,7 @@ test("native切替先stateはlocalStorageかIndexedDBの保存成功をawaitし�
       scheduleSyncPush() {
         throw new Error("sync:falseでは呼ばないこと");
       },
+      window: { setTimeout: () => 0, clearTimeout: () => {} },
     };
     vm.runInNewContext(checkedPersistenceSource(), context);
     const saved = await context.persistAppStateChecked({ sync: false });
