@@ -171,13 +171,17 @@ function adoptSandbox({ localWords = [], localTrash = [], remoteState, choose = 
     document: fakeDocument(),
     appState: { words: localWords.map((w) => ({ ...w })), decks: [{ id: "l1", name: "単語帳1" }], deletions: {}, trash: localTrash },
     elements: { syncV2JoinInput: { value: "" } },
-    syncState: { applyingRemote: false, dirtyGen: 0, syncedGen: 0 },
+    syncState: { applyingRemote: false, dirtyGen: 0, syncedGen: 0, requestGen: 0 },
     stopSyncPolling: () => calls.push(["stopPolling"]),
     startSyncPolling: () => calls.push(["startPolling"]),
-    bumpSyncRequestGen: () => calls.push(["bumpGen"]),
+    bumpSyncRequestGen: () => { ctx.syncState.requestGen += 1; calls.push(["bumpGen"]); },
+    scheduleSyncPush: () => calls.push(["schedulePush"]),
     syncServerAvailable: () => true,
     normalizeStreak: (v) => v || null,
-    getActiveV2Credential: () => ({ roomId: ROOM_A, secret: SECRET }),
+    activeCredential: { roomId: ROOM_A, secret: SECRET },
+    getActiveV2Credential: () => ctx.activeCredential,
+    syncRequestRoute: () => ({ expectedSyncId: ctx.activeCredential?.roomId || "" }),
+    syncTargetHalted: false,
     setPasskeyStatus: (m, mode) => calls.push(["passkeyStatus", m, mode || ""]),
     pushWordsnapState: () => calls.push(["push"]),
     setV2Busy: () => {},
@@ -221,6 +225,10 @@ function adoptSandbox({ localWords = [], localTrash = [], remoteState, choose = 
     extractConst("SYNC_GZ_BASE64_LIMIT"),
     "let recoveryGeneration = 0;",
     extractFunction("stateSignature"),
+    extractFunction("syncSendGuardHolds"),
+    extractFunction("emptyEnrich"),
+    extractFunction("mergeEnrichData"),
+    extractFunction("formatPasskeyDate"),
     extractFunction("readUndoEpoch"),
     extractFunction("advanceUndoEpoch"),
     extractFunction("lockUiForRecovery"),
@@ -360,7 +368,7 @@ test("退避の追加: 未送信の変更があれば始めず、通常の送信
   for (const patch of [{ dirtyGen: 3, syncedGen: 2 }, { retryTimer: 5 }, { pushTimer: 1 }, { pushing: true }]) {
     const ctx = adoptSandbox({ localWords: [word("l1", "zebra", "l1")], remoteState: REMOTE() });
     Object.assign(ctx.syncState, patch);
-    assert.equal(await ctx.appendBackupWords([word("b", "backup", "x")]), false, JSON.stringify(patch));
+    assert.equal(await ctx.appendBackupWords({ state: { words: [word("b", "backup", "x")] } }), false, JSON.stringify(patch));
     assert.deepEqual(ctx.requests, [], "送信しない");
     assert.match(ctx.calls.find(([k]) => k === "passkeyStatus")[1], /先に同期を完了/);
   }
@@ -374,7 +382,7 @@ test("退避の追加: 送信の間に端末の内容が変わったら置き換
     if (options.method === "PUT") ctx.appState.words.push(word("l2", "late", "l1"));
     return original(url, options);
   };
-  assert.equal(await ctx.appendBackupWords([word("b", "backup", "x")]), false);
+  assert.equal(await ctx.appendBackupWords({ state: { words: [word("b", "backup", "x")] } }, { stored: true }), false);
   assert.ok(ctx.appState.words.some((w) => w.term === "late"), "途中の変更を消さない");
   assert.ok(ctx.idb.store.has("wordsnap-recovery-backup:v1"), "退避は残す");
   assert.deepEqual(ctx.document.controls.map((c) => c.disabled), [false, true], "UI のロックは戻す");
@@ -382,13 +390,180 @@ test("退避の追加: 送信の間に端末の内容が変わったら置き換
 
 test("退避の追加: 成功したら appendLocalWords の規則で足し、退避を消し、UI を戻す", async () => {
   const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
-  await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify({ kind: "wordsnap-recovery-backup", savedAt: Date.now(), state: { words: [] } }));
-  assert.equal(await ctx.appendBackupWords([word("b", "backup", "x"), word("a", "Apple", "x")]), true);
+  const stored = { kind: "wordsnap-recovery-backup", savedAt: Date.now(), state: { words: [word("b", "backup", "x"), word("a", "Apple", "x")] } };
+  await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(stored));
+  assert.equal(await ctx.appendBackupWords(stored, { stored: true }), true);
   assert.deepEqual(plain(ctx.appState.words.map((w) => w.term)), ["apple", "backup"]);
   assert.equal(ctx.idb.store.has("wordsnap-recovery-backup:v1"), false, "退避を消す");
   assert.ok(ctx.calls.some(([k]) => k === "clearUndo"));
   assert.ok(ctx.calls.some(([k]) => k === "stopPolling") && ctx.calls.some(([k]) => k === "startPolling"));
   assert.deepEqual(ctx.document.controls.map((c) => c.disabled), [false, true]);
+});
+
+// ---- 退避と復旧の後始末（1.0.143）----
+
+const STORED_BACKUP = (extra = {}) => ({
+  kind: "wordsnap-recovery-backup", version: 1, savedAt: Date.now() - DAY, state: { words: [word("o1", "old", "x")], trash: [] }, ...extra,
+});
+
+test("退避の追加: 送信の間に別のタブで同期先・資格情報が変わったら、保存も退避の削除もしない", async () => {
+  const cases = {
+    "別タブが別の部屋へ切り替えて停止": (ctx) => {
+      ctx.activeCredential = { roomId: ROOM_B, secret: SECRET };
+      ctx.syncTargetHalted = true;
+      ctx.syncState.requestGen += 1;
+    },
+    "停止だけ（syncTargetHalted）": (ctx) => { ctx.syncTargetHalted = true; },
+    "同じ部屋で秘密だけ変わった": (ctx) => { ctx.activeCredential = { roomId: ROOM_A, secret: `wk_${"2".repeat(60)}` }; },
+  };
+  for (const [name, change] of Object.entries(cases)) {
+    const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
+    const stored = STORED_BACKUP();
+    await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(stored));
+    const before = JSON.stringify(ctx.appState);
+    const original = ctx.v2Fetch;
+    ctx.v2Fetch = async (url, options) => {
+      if (options.method === "PUT") change(ctx);
+      return original(url, options);
+    };
+    assert.equal(await ctx.appendBackupWords(stored, { stored: true }), false, name);
+    assert.equal(JSON.stringify(ctx.appState), before, `${name}: 旧い部屋の結果で置き換えない`);
+    assert.ok(!ctx.calls.some(([k]) => k === "persist"), `${name}: 保存しない`);
+    assert.ok(ctx.idb.store.has("wordsnap-recovery-backup:v1"), `${name}: 退避を消さない`);
+    assert.match(ctx.calls.filter(([k]) => k === "passkeyStatus").at(-1)[1], /同期先が別のタブで変わった/, name);
+  }
+});
+
+test("退避の追加: JSON ファイルから追加しても、保存済みの別の退避は消さない", async () => {
+  const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
+  await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(STORED_BACKUP()));
+  const file = { kind: "wordsnap-recovery-backup", savedAt: Date.now(), state: { words: [word("f1", "file", "x")] } };
+  assert.equal(await ctx.appendBackupWords(file), true);
+  assert.deepEqual(plain(ctx.appState.words.map((w) => w.term)), ["apple", "file"]);
+  assert.ok(ctx.idb.store.has("wordsnap-recovery-backup:v1"), "保存済みの退避は残す");
+  const message = ctx.calls.filter(([k]) => k === "passkeyStatus").at(-1)[1];
+  assert.match(message, /保存済みの退避は変えていません/);
+  assert.doesNotMatch(message, /削除しました/);
+});
+
+test("退避の追加: 追加の間に新しい退避ができていたら、それは消さない", async () => {
+  const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
+  const stored = STORED_BACKUP();
+  await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(stored));
+  const original = ctx.v2Fetch;
+  ctx.v2Fetch = async (url, options) => {
+    if (options.method === "PUT") await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(STORED_BACKUP({ savedAt: Date.now() })));
+    return original(url, options);
+  };
+  assert.equal(await ctx.appendBackupWords(stored, { stored: true }), true);
+  assert.ok(ctx.idb.store.has("wordsnap-recovery-backup:v1"));
+});
+
+test("退避の追加: 退避にゴミ箱があれば、語を足しても退避は消さない（ゴミ箱を失わない）", async () => {
+  const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
+  const stored = STORED_BACKUP({ state: { words: [word("o1", "old", "x")], trash: [{ id: "t1", word: word("y", "yacht", "x"), deletedAt: 1 }] } });
+  await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(stored));
+  assert.equal(await ctx.appendBackupWords(stored, { stored: true }), true);
+  assert.deepEqual(plain(ctx.appState.words.map((w) => w.term)), ["apple", "old"]);
+  const kept = JSON.parse(ctx.idb.store.get("wordsnap-recovery-backup:v1"));
+  assert.equal(kept.state.trash.length, 1, "ゴミ箱の入った退避が残る");
+  assert.match(ctx.calls.filter(([k]) => k === "passkeyStatus").at(-1)[1], /ゴミ箱の 1 語は追加していないため、退避は残しています/);
+});
+
+test("退避の追加: サーバーの結果で置き換えても、手元の enrich（辞書データ）は保つ", async () => {
+  const examples = [{ en: "An apple a day.", ja: "1日1個のりんご" }];
+  const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd", { enrich: { examples, etymology: "古英語" } })], remoteState: REMOTE() });
+  assert.equal(await ctx.appendBackupWords({ state: { words: [word("f1", "file", "x")] } }), true);
+  const apple = ctx.appState.words.find((w) => w.id === "r1");
+  assert.deepEqual(plain(apple.enrich.examples), examples);
+  assert.equal(apple.enrich.etymology, "古英語");
+  assert.ok(!ctx.requests.find((r) => r.method === "PUT").body.state.words.some((w) => w.enrich), "送る state には enrich を入れない");
+});
+
+test("復旧: 前回の退避が残っていれば、上書きで消えることを 3 択で知らせる", async () => {
+  for (const hasPrevious of [true, false]) {
+    let text = "";
+    const ctx = adoptSandbox({ localWords: [word("l1", "zebra", "l1")], remoteState: REMOTE(), choose: async (opts) => { text = opts.text; return null; } });
+    if (hasPrevious) await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(STORED_BACKUP()));
+    const outcome = {};
+    await ctx.adoptV2Room(CREDENTIAL, { onBeforeReplace: ctx.recoveryBeforeReplace(CREDENTIAL, outcome, ctx.choose) });
+    if (hasPrevious) {
+      assert.match(text, /退避（1 語）が残っています。進めるとこの退避は上書きされて消えます/);
+      assert.match(text, /「JSON で書き出す」/);
+      assert.equal(JSON.parse(ctx.idb.store.get("wordsnap-recovery-backup:v1")).state.words[0].term, "old", "やめたら前回の退避はそのまま");
+    } else {
+      assert.doesNotMatch(text, /上書き/);
+    }
+  }
+});
+
+// recoverWithPasskey を通しで走らせる（パスキー・通信・描画だけ差し替え）。
+function recoverFlowSandbox({ mode = "replace", putStatus = 200, onChoose = () => {} } = {}) {
+  const ctx = adoptSandbox({ localWords: [word("l1", "zebra", "l1")], remoteState: REMOTE(), putStatus });
+  Object.assign(ctx, {
+    passkeyBusy: false,
+    recoverPersistedSettled: true,
+    passkeySession: { token: "token", backedUp: true },
+    passkeyRecoveredCode: "",
+    undoSuspended: false,
+    capturePasskeyFocusOrigin: () => {},
+    v2RecoveryBarrierStatus: () => "ready",
+    setPasskeyBusy: () => {},
+    passkeyToken: async () => "token",
+    accountApi: async (op, body) => (op === "rooms" ? [{ roomId: ROOM_A, wordCount: 1 }] : { roomId: body.roomId, secret: SECRET }),
+    askPasskeyDialog: async (opts) => {
+      if (/どの部屋/.test(opts.title)) return ROOM_A;
+      onChoose(ctx);
+      return mode;
+    },
+    sortRecoveryRooms: (rooms) => rooms,
+    passkeyRoomLabel: (room) => room.roomId,
+    passkeyError: (code) => new Error(code),
+    passkeyErrorMessage: (error) => String(error?.message || error),
+    acquireIdentityClaim: async () => "claim",
+    releaseIdentityClaim: () => {},
+    setUndoControlsDisabled: () => {},
+    writePasskeyLinked: () => {},
+    renderV2RecoveryNotice: () => {},
+    renderPasskeySection: () => {},
+    restorePasskeyFocus: () => {},
+    trackUsage: () => {},
+  });
+  vm.runInContext(extractFunction("recoverWithPasskey"), ctx);
+  return ctx;
+}
+
+test("復旧の後始末: 成功後、setV2Busy と renderAll が決めるボタンはロック時点の古い値に戻さない", async () => {
+  const ctx = recoverFlowSandbox({ mode: "replace" });
+  // controls[0] = 合流ボタン（setV2Busy が決める）、controls[1] = 復習ボタン（renderAll が語の有無で決める）
+  const [join, review] = ctx.document.controls;
+  join.disabled = false;
+  ctx.setV2Busy = (busy) => { ctx.syncState.v2Busy = busy; join.disabled = busy; ctx.calls.push(["v2Busy", busy]); };
+  ctx.renderAll = () => { review.disabled = ctx.appState.words.length === 0; ctx.calls.push(["renderAll"]); };
+  ctx.appState.words = [];
+  ctx.appState.trash = [{ id: "t1", word: word("y", "yacht", "l1"), deletedAt: 1 }]; // 3 択を経てロックさせる
+  review.disabled = true;
+  let lockedJoin = null;
+  const original = ctx.lockUiForRecovery;
+  ctx.lockUiForRecovery = () => { lockedJoin = join.disabled; return original(); };
+  await ctx.recoverWithPasskey();
+  assert.equal(lockedJoin, true, "ロックは setV2Busy(true) の後に控える（順序の再現）");
+  const order = ctx.calls.map(([k, v]) => (k === "v2Busy" ? `v2Busy:${v}` : k)).filter((k) => /^v2Busy|renderAll$/.test(k));
+  assert.deepEqual(order.slice(0, 3), ["v2Busy:true", "renderAll", "v2Busy:false"], "置換後に renderAll・setV2Busy(false) が走ってから控えを戻す");
+  assert.deepEqual(ctx.appState.words.map((w) => w.term), ["apple"]);
+  assert.equal(join.disabled, false, "合流ボタンは押せる");
+  assert.equal(review.disabled, false, "復習ボタンは今の語数で決まる");
+  assert.equal(ctx.document.body.getAttribute("aria-busy"), null);
+});
+
+test("復旧の後始末: 失敗して元の部屋を使い続けるとき、未送信の編集があれば送信を予約し直す", async () => {
+  for (const edited of [true, false]) {
+    const ctx = recoverFlowSandbox({ mode: "replace", putStatus: 500, onChoose: (c) => { if (edited) c.syncState.dirtyGen += 1; } });
+    await ctx.recoverWithPasskey();
+    assert.ok(ctx.calls.some(([k]) => k === "bumpGen"), "送信予約を捨てた");
+    assert.ok(ctx.calls.some(([k]) => k === "startPolling"));
+    assert.equal(ctx.calls.some(([k]) => k === "schedulePush"), edited, `未送信=${edited}`);
+  }
 });
 
 test("退避: 30 日を過ぎたら読まずに消す", async () => {
@@ -823,6 +998,8 @@ function recoverSandbox({ adoptResult, outcomeValue = "ok", settled = true, barr
     passkeyRoomLabel: () => "label",
     syncServerAvailable: () => true,
     startSyncPolling: () => calls.push("startPolling"),
+    syncState: { dirtyGen: 0, syncedGen: 0 },
+    scheduleSyncPush: () => calls.push("schedulePush"),
     trackUsage: (name) => usage.push(name),
     writePasskeyLinked: (roomId) => calls.push(`linked:${roomId}`),
   };

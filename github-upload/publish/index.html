@@ -7269,7 +7269,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.142</span>
+        <span class="app-footer-version">バージョン 1.0.143</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7446,7 +7446,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.142";
+  const APP_REV = "1.0.143";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -22397,6 +22397,9 @@ function restoreUiAfterRecovery(lock) {
   for (const { control, disabled } of lock.snapshot) control.disabled = disabled;
   if (lock.ariaBusy === null) document.body.removeAttribute("aria-busy");
   else document.body.setAttribute("aria-busy", lock.ariaBusy);
+  // 控えた値はロック時点のもの（復旧では setV2Busy(true) の後）。setV2Busy・renderAll が決める押せる状態は今の状態で決め直す。
+  setV2Busy(Boolean(syncState.v2Busy));
+  renderAll();
 }
 
 // 送信を始める前の共通の準備。通常同期を止め、送信予約を捨て、UI を止める。
@@ -22422,9 +22425,14 @@ function recoveryBeforeReplace(credential, outcome, choose = askPasskeyDialog) {
     let mode = "replace";
     if (hasLocalContent(appState)) {
       const trashNote = trashCount > 0 ? `（ゴミ箱に ${trashCount} 語）` : "";
+      // 退避は 1 件だけ（上書き）。前回の退避を黙って失わないよう、残っていれば先に知らせる。
+      const previous = await readRecoveryBackup();
+      const previousNote = previous
+        ? ` ※ ${formatPasskeyDate(previous.savedAt)} の退避（${previous.state.words.length} 語）が残っています。進めるとこの退避は上書きされて消えます。残すときは「やめる」を選び、「復旧前の退避」の「JSON で書き出す」で先に保存してください。`
+        : "";
       mode = await choose({
         title: "この端末の単語をどうしますか？",
-        text: `この端末に ${localCount} 語${trashNote}、復旧先に ${remoteCount} 語あります。どれを選んでも、置き換える前のこの端末の内容は「退避」として残ります。`,
+        text: `この端末に ${localCount} 語${trashNote}、復旧先に ${remoteCount} 語あります。どれを選んでも、置き換える前のこの端末の内容は「退避」として残ります。${previousNote}`,
         choices: [
           { value: "replace", label: `この端末の ${localCount} 語を捨てて、復旧先（${remoteCount} 語）を採用` },
           { value: "append", label: "この端末の語を復旧先へ追加（新しい単語帳に入ります）" },
@@ -22487,7 +22495,11 @@ function recoveryBeforeReplace(credential, outcome, choose = askPasskeyDialog) {
 
 // 退避の語を、今の部屋へ appendLocalWords と同じ規則で足す（送信も復旧専用の再送）。
 // 未送信の変更があるときは始めない（結果で置き換えると、端末だけの未送信の語が消えるため）。
-async function appendBackupWords(words) {
+// backup は退避の記録。stored が真（IndexedDB に保存済みの退避そのもの）のときだけ、成功後にその退避を消す。
+// 退避のゴミ箱は追加の対象にしないので、ゴミ箱が残る退避は消さない（書き出せるように残す）。
+async function appendBackupWords(backup, { stored = false } = {}) {
+  const words = backup?.state?.words || [];
+  const trashCount = Array.isArray(backup?.state?.trash) ? backup.state.trash.length : 0;
   const credential = getActiveV2Credential();
   if (!credential) {
     setPasskeyStatus("退避の単語を追加するには、新方式（引き継ぎコード）で同期している必要があります。", "error");
@@ -22507,10 +22519,18 @@ async function appendBackupWords(words) {
   }
   const fingerprint = stateSignature(appState);
   const lock = beginRecoveryCommit();
+  // 送信を始めた時点の同期先・世代（別タブの切り替えや syncTargetHalted で崩れる）。
+  const sendGuard = { gen: syncState.requestGen, target: String(syncRequestRoute().expectedSyncId || "") };
   try {
     const result = await commitRecoveryAppend(credential, words);
     if (!result.ok) {
       setPasskeyStatus("退避の単語を保存できませんでした。退避はそのまま残っています。もう一度お試しください。", "error");
+      return false;
+    }
+    // 送信の間に別のタブが同期先・資格情報を切り替えていたら、旧い部屋の結果を保存しない（退避も消さない）。
+    const now = getActiveV2Credential();
+    if (!syncSendGuardHolds(sendGuard) || now?.roomId !== credential.roomId || now?.secret !== credential.secret) {
+      setPasskeyStatus("保存の途中で同期先が別のタブで変わったため、表示の切り替えを中止しました。退避は残しています。このタブを再読み込みしてください。", "error");
       return false;
     }
     // 送信の間に端末の内容が変わっていたら置き換えない（次の通常同期で、追加分はサーバーから届く）。
@@ -22521,7 +22541,12 @@ async function appendBackupWords(words) {
     syncState.rev = result.stateRev;
     syncState.applyingRemote = true;
     try {
+      // サーバーの state には enrich が無い。手元の辞書データは通常同期と同じく mergeEnrichData で保つ。
+      const localEnrich = new Map(appState.words.map((word) => [word.id, word.enrich]));
       appState = normalizeState(result.state);
+      for (const word of appState.words) {
+        if (localEnrich.has(word.id)) word.enrich = mergeEnrichData(localEnrich.get(word.id), word.enrich);
+      }
       invalidatePersonalFactorCache();
       currentQuiz = null;
       selectedIds.clear();
@@ -22533,14 +22558,21 @@ async function appendBackupWords(words) {
     syncState.syncedEditGen = Number(syncState.persistEditGen) || 0;
     clearUndo();
     recordVerifiedSync(credential.roomId, appState.words.length);
-    await deleteRecoveryBackup();
-    renderAll();
-    setPasskeyStatus(
-      result.addedCount > 0
-        ? `✓ 退避から ${result.addedCount} 語を新しい単語帳に追加しました（退避は削除しました）。`
-        : "退避の単語はすべて今の単語帳にありました（追加はありません。退避は削除しました）。",
-      "live",
-    );
+    // 描画は finally の restoreUiAfterRecovery が行う。
+    // 追加の間に新しい退避ができていたら消さない（保存時刻で同じ退避かを確かめる）。
+    let note = "";
+    if (stored && trashCount > 0) {
+      note = `ゴミ箱の ${trashCount} 語は追加していないため、退避は残しています。必要なら「JSON で書き出す」で控えてから削除してください。`;
+    } else if (stored && (await readRecoveryBackup())?.savedAt === backup.savedAt) {
+      await deleteRecoveryBackup();
+      note = "退避は削除しました。";
+    } else if (!stored) {
+      note = "保存済みの退避は変えていません。";
+    }
+    const head = result.addedCount > 0
+      ? `✓ 退避から ${result.addedCount} 語を新しい単語帳に追加しました。`
+      : "退避の単語はすべて今の単語帳にありました（追加はありません）。";
+    setPasskeyStatus(`${head}${note}`, "live");
     return true;
   } catch {
     setPasskeyStatus("退避の単語を追加できませんでした。退避はそのまま残っています。", "error");
@@ -23127,7 +23159,11 @@ async function recoverWithPasskey() {
     setPasskeyStatus(passkeyErrorMessage(error), "error");
   } finally {
     // 切り替えなかったときは、止めた通常同期を元の同期先で再開する（切り替えたときは activateV2Credential が再開済み）。
-    if (outcome !== "ok" && result.lock && syncServerAvailable() && !syncTargetHalted) startSyncPolling();
+    // beginRecoveryCommit が捨てた送信予約は、未送信の編集があれば予約し直す（ポーリングは変更なしだと送らない）。
+    if (outcome !== "ok" && result.lock && syncServerAvailable() && !syncTargetHalted) {
+      startSyncPolling();
+      if ((Number(syncState.dirtyGen) || 0) > (Number(syncState.syncedGen) || 0)) scheduleSyncPush();
+    }
     setPasskeyBusy(false);
     renderPasskeySection();
     restorePasskeyFocus();
@@ -23402,12 +23438,12 @@ const PASSKEY_SECTION_HTML =
   '<input type="file" accept="application/json,.json" data-passkey="backup-input" aria-label="退避の JSON ファイル" hidden />' +
   '</div>';
 
-async function runBackupAppend(words) {
+async function runBackupAppend(backup, options) {
   if (passkeyBusy) return;
   capturePasskeyFocusOrigin();
   setPasskeyBusy(true);
   try {
-    await appendBackupWords(words);
+    await appendBackupWords(backup, options);
   } finally {
     setPasskeyBusy(false);
     renderPasskeySection();
@@ -23447,7 +23483,7 @@ function buildPasskeySection() {
   });
   on("backup-append", async () => {
     const backup = await readRecoveryBackup();
-    if (backup) await runBackupAppend(backup.state.words);
+    if (backup) await runBackupAppend(backup, { stored: true });
   });
   on("backup-delete", async (event) => {
     if (!armDangerButton(event.currentTarget, "もう一度押すと退避を削除")) return;
@@ -23471,7 +23507,7 @@ function buildPasskeySection() {
       setPasskeyStatus("復旧前の退避の JSON ではありません。通常のバックアップは「JSONを読み込む」から読み込んでください。", "error");
       return;
     }
-    await runBackupAppend(backup.state.words);
+    await runBackupAppend(backup);
   });
   // 節を開いたときに、認証済みの間だけ静かに結びつきを確かめ直す（アカウントを持つ端末だけの通信）。
   section.addEventListener("toggle", () => {
