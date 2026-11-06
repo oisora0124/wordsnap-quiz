@@ -4,3 +4,5 @@ _grok-review-prompt.txt
 _review-codex*.md
 .wrangler/
 github-upload/.wrangler/
+# テレメトリのレポート出力（数値を含むので入れない。docs/TELEMETRY-REVIEW-2026-11.md）
+telemetry-out/
