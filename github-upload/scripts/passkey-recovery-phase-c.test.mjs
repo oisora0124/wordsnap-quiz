@@ -140,8 +140,19 @@ function fakeIdb() {
     store,
     fail: false,
     async set(k, v) { if (this.fail) return false; store.set(k, v); return true; },
-    async get(k) { return store.has(k) ? store.get(k) : null; },
+    checkFail: false,
+    afterGet: null, // get の直後（削除より前）に別タブが書く、を再現する
+    async get(k) { const v = store.has(k) ? store.get(k) : null; if (this.afterGet) await this.afterGet(); return v; },
+    async getChecked(k) { return this.checkFail ? { ok: false, present: false, value: null } : { ok: true, present: store.has(k), value: store.get(k) ?? null }; },
     async delete(k) { store.delete(k); return true; },
+    // 本物と同じく照合と削除を 1 つのトランザクションで（間に書き込みを挟まない）
+    // 別タブの書き込み（afterGet）は、トランザクションの外＝照合と削除が済んだ後にしか入れない。
+    async deleteIf(k, matches) {
+      const hit = matches(store.get(k) ?? null);
+      if (hit) store.delete(k);
+      if (this.afterGet) await this.afterGet();
+      return hit;
+    },
   };
 }
 
@@ -182,6 +193,7 @@ function adoptSandbox({ localWords = [], localTrash = [], remoteState, choose = 
     getActiveV2Credential: () => ctx.activeCredential,
     syncRequestRoute: () => ({ expectedSyncId: ctx.activeCredential?.roomId || "" }),
     syncTargetHalted: false,
+    syncTargetChangedElsewhere: () => ctx.syncTargetHalted,
     setPasskeyStatus: (m, mode) => calls.push(["passkeyStatus", m, mode || ""]),
     pushWordsnapState: () => calls.push(["push"]),
     setV2Busy: () => {},
@@ -237,6 +249,8 @@ function adoptSandbox({ localWords = [], localTrash = [], remoteState, choose = 
     extractFunction("hasLocalContent"),
     extractFunction("parseRecoveryBackup"),
     extractFunction("readRecoveryBackup"),
+    extractFunction("probeRecoveryBackup"),
+    extractFunction("deleteRecoveryBackupIfSavedAt"),
     extractFunction("deleteRecoveryBackup"),
     extractFunction("appendBackupWords"),
     extractFunction("validSyncGetResponse"),
@@ -457,6 +471,91 @@ test("退避の追加: 追加の間に新しい退避ができていたら、そ
   };
   assert.equal(await ctx.appendBackupWords(stored, { stored: true }), true);
   assert.ok(ctx.idb.store.has("wordsnap-recovery-backup:v1"));
+  assert.match(ctx.calls.filter(([k]) => k === "passkeyStatus").at(-1)[1], /退避は残しています/);
+});
+
+test("退避の追加: 照合の読み取りと削除の間に別タブが新しい退避を書いても消さない（照合と削除は 1 トランザクション）", async () => {
+  const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
+  const stored = STORED_BACKUP();
+  await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(stored));
+  const newer = STORED_BACKUP({ savedAt: Date.now() });
+  ctx.idb.afterGet = async () => { ctx.idb.afterGet = null; await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(newer)); };
+  assert.equal(await ctx.appendBackupWords(stored, { stored: true }), true);
+  assert.equal(JSON.parse(ctx.idb.store.get("wordsnap-recovery-backup:v1")).savedAt, newer.savedAt, "新しい退避が残る");
+});
+
+test("本物の idb.deleteIf: 1 つの readwrite トランザクションで照合し、一致したときだけ消す", { timeout: 3000 }, async () => {
+  const start = html.indexOf("const idb = {");
+  const source = html.slice(start, html.indexOf("\nlet storageWriteGeneration", start));
+  const run1 = async (stored, { abort = false } = {}) => {
+    const kv = new Map([["k", stored]]);
+    const txs = [];
+    const indexedDB = {
+      open() {
+        const req = { onsuccess: null, onerror: null, onupgradeneeded: null };
+        req.result = {
+          transaction(name, mode) {
+            const tx = { mode, ops: [], oncomplete: null, onerror: null, onabort: null };
+            txs.push(tx);
+            tx.objectStore = () => ({
+              get(key) {
+                tx.ops.push("get");
+                const r = { onsuccess: null, onerror: null, result: kv.get(key) };
+                queueMicrotask(() => {
+                  r.onsuccess?.();
+                  // 要求の後始末が済んでから完了（または中断）を知らせる
+                  setTimeout(() => (abort ? tx.onabort?.() : tx.oncomplete?.()), 0);
+                });
+                return r;
+              },
+              delete(key) { tx.ops.push("delete"); if (!abort) kv.delete(key); },
+            });
+            return tx;
+          },
+        };
+        queueMicrotask(() => req.onsuccess?.());
+        return req;
+      },
+    };
+    const context = { indexedDB, queueMicrotask, setTimeout, Promise };
+    vm.runInNewContext(`${source}\nglobalThis.__idb = idb;`, context);
+    const deleted = await context.__idb.deleteIf("k", (raw) => raw === "old");
+    return { deleted, kv, txs };
+  };
+  const hit = await run1("old");
+  assert.equal(hit.deleted, true);
+  assert.equal(hit.kv.has("k"), false);
+  assert.deepEqual(hit.txs.map((t) => [t.mode, t.ops.join(",")]), [["readwrite", "get,delete"]], "照合と削除は同じトランザクション");
+  const miss = await run1("newer");
+  assert.equal(miss.deleted, false);
+  assert.equal(miss.kv.get("k"), "newer");
+  const aborted = await run1("old", { abort: true });
+  assert.equal(aborted.deleted, false, "中断したら消したことにしない");
+});
+
+test("退避の追加: 始める時点で別タブの切り替えにより止まっていたら、PUT を送らない", async () => {
+  const ctx = adoptSandbox({ localWords: [word("r1", "apple", "rd")], remoteState: REMOTE() });
+  const stored = STORED_BACKUP();
+  await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(stored));
+  ctx.syncTargetHalted = true;
+  assert.equal(await ctx.appendBackupWords(stored, { stored: true }), false);
+  assert.deepEqual(ctx.requests, [], "GET も PUT も送らない");
+  assert.ok(ctx.idb.store.has("wordsnap-recovery-backup:v1"));
+  assert.ok(!ctx.calls.some(([k]) => k === "stopPolling"), "通常同期の停止・UI ロックにも入らない");
+  assert.match(ctx.calls.filter(([k]) => k === "passkeyStatus").at(-1)[1], /同期先が別のタブで変わった/);
+});
+
+test("復旧: 前回の退避があるかを読めなければ、上書きを伴う 3 択へ進まず中止する", async () => {
+  const ctx = adoptSandbox({ localWords: [word("l1", "zebra", "l1")], remoteState: REMOTE(), choose: async () => "replace" });
+  await ctx.idb.set("wordsnap-recovery-backup:v1", JSON.stringify(STORED_BACKUP()));
+  ctx.idb.checkFail = true;
+  const outcome = {};
+  await ctx.adoptV2Room(CREDENTIAL, { onBeforeReplace: ctx.recoveryBeforeReplace(CREDENTIAL, outcome, ctx.choose) });
+  assert.equal(outcome.value, "fail");
+  assert.ok(!ctx.calls.some(([k]) => k === "choose"), "3 択を出さない");
+  assert.deepEqual(ctx.requests.map((r) => r.method), ["GET"], "PUT しない");
+  assert.equal(JSON.parse(ctx.idb.store.get("wordsnap-recovery-backup:v1")).state.words[0].term, "old", "前回の退避を上書きしない");
+  assert.match(ctx.calls.filter(([k]) => k === "status").at(-1)[1], /確認できなかったため、復旧を中止しました/);
 });
 
 test("退避の追加: 退避にゴミ箱があれば、語を足しても退避は消さない（ゴミ箱を失わない）", async () => {

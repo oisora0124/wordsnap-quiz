@@ -20044,6 +20044,42 @@ const idb = {
       }
     });
   },
+  // 値が matches を満たすときだけ消す。照合と削除を同じ readwrite トランザクションで行う
+  // （読んでから消すまでの間に、別タブが書いた新しい値を消さない）。消したときだけ true。
+  async deleteIf(key, matches) {
+    const db = await this.open();
+    if (!db) return false;
+    return new Promise((resolve) => {
+      let settled = false;
+      let deleted = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        resolve(ok && deleted);
+      };
+      try {
+        const tx = db.transaction("kv", "readwrite");
+        tx.oncomplete = () => finish(true);
+        tx.onerror = () => finish(false);
+        tx.onabort = () => finish(false);
+        const store = tx.objectStore("kv");
+        const req = store.get(key);
+        req.onsuccess = () => {
+          let hit = false;
+          try {
+            hit = matches(req.result ?? null) === true;
+          } catch {
+            hit = false;
+          }
+          if (!hit) return;
+          store.delete(key);
+          deleted = true;
+        };
+      } catch {
+        finish(false);
+      }
+    });
+  },
 };
 
 let storageWriteGeneration = 0;
@@ -22347,6 +22383,40 @@ async function readRecoveryBackup(now = Date.now()) {
   }
 }
 
+// 上書きの警告用。readRecoveryBackup と違い、IndexedDB を読めなかったことを null に畳まない（ok: false）。
+// 中身が壊れている・期限切れのときは「退避なし」と同じ（readRecoveryBackup でも読めず、書き出せない）。
+async function probeRecoveryBackup(now = Date.now()) {
+  let probe;
+  try {
+    probe = await idb.getChecked(RECOVERY_BACKUP_KEY);
+  } catch {
+    return { ok: false, backup: null };
+  }
+  if (!probe?.ok) return { ok: false, backup: null };
+  try {
+    const backup = probe.value ? parseRecoveryBackup(JSON.parse(probe.value)) : null;
+    const live = backup && now - (Number(backup.savedAt) || 0) <= RECOVERY_BACKUP_TTL_MS;
+    return { ok: true, backup: live ? backup : null };
+  } catch {
+    return { ok: true, backup: null };
+  }
+}
+
+// 保存時刻が savedAt の退避のときだけ消す（追加の間に別タブが保存した新しい退避は消さない）。
+async function deleteRecoveryBackupIfSavedAt(savedAt) {
+  try {
+    return await idb.deleteIf(RECOVERY_BACKUP_KEY, (raw) => {
+      try {
+        return Boolean(raw) && JSON.parse(raw)?.savedAt === savedAt;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
 async function deleteRecoveryBackup() {
   try {
     await idb.delete(RECOVERY_BACKUP_KEY);
@@ -22426,7 +22496,13 @@ function recoveryBeforeReplace(credential, outcome, choose = askPasskeyDialog) {
     if (hasLocalContent(appState)) {
       const trashNote = trashCount > 0 ? `（ゴミ箱に ${trashCount} 語）` : "";
       // 退避は 1 件だけ（上書き）。前回の退避を黙って失わないよう、残っていれば先に知らせる。
-      const previous = await readRecoveryBackup();
+      // 読めなかったときは「退避なし」と区別できないので、上書きを伴う選択肢へ進ませない。
+      const { ok: previousReadable, backup: previous } = await probeRecoveryBackup();
+      if (!previousReadable) {
+        outcome.value = "fail";
+        setV2Status("以前の退避が残っているかを確認できなかったため、復旧を中止しました（上書きで消さないため）。アプリを開き直してから、もう一度お試しください。", "error");
+        return null;
+      }
       const previousNote = previous
         ? ` ※ ${formatPasskeyDate(previous.savedAt)} の退避（${previous.state.words.length} 語）が残っています。進めるとこの退避は上書きされて消えます。残すときは「やめる」を選び、「復旧前の退避」の「JSON で書き出す」で先に保存してください。`
         : "";
@@ -22505,6 +22581,11 @@ async function appendBackupWords(backup, { stored = false } = {}) {
     setPasskeyStatus("退避の単語を追加するには、新方式（引き継ぎコード）で同期している必要があります。", "error");
     return false;
   }
+  // 別のタブで同期先が変わって止まっているタブからは送らない（送り先が今の同期先と限らない）。
+  if (syncTargetChangedElsewhere()) {
+    setPasskeyStatus("同期先が別のタブで変わったため、退避の単語を追加できません。このタブを再読み込みしてください。退避は残しています。", "error");
+    return false;
+  }
   const unsent =
     (Number(syncState.dirtyGen) || 0) !== (Number(syncState.syncedGen) || 0) ||
     (Number(syncState.persistEditGen) || 0) !== (Number(syncState.syncedEditGen) || 0);
@@ -22563,10 +22644,11 @@ async function appendBackupWords(backup, { stored = false } = {}) {
     let note = "";
     if (stored && trashCount > 0) {
       note = `ゴミ箱の ${trashCount} 語は追加していないため、退避は残しています。必要なら「JSON で書き出す」で控えてから削除してください。`;
-    } else if (stored && (await readRecoveryBackup())?.savedAt === backup.savedAt) {
-      await deleteRecoveryBackup();
+    } else if (stored && (await deleteRecoveryBackupIfSavedAt(backup.savedAt))) {
       note = "退避は削除しました。";
-    } else if (!stored) {
+    } else if (stored) {
+      note = "退避は残しています（新しい退避がある、または削除できませんでした）。";
+    } else {
       note = "保存済みの退避は変えていません。";
     }
     const head = result.addedCount > 0
