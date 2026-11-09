@@ -36,6 +36,11 @@ D1 の `states` には `appState` が丸ごと入っている。単語・履歴�
 | `account_rooms` | アカウントと部屋の結びつき＋`wk_` の封筒（`ACCOUNT_KEK` で暗号化） | **無期限**（`unlink-room` / `delete-account` でだけ消える） | 同上。部屋（`rooms` / `states`）はどの操作でも消えない |
 | `auth_challenges` | WebAuthn の challenge | **10 分**。`*-options` のたびに最大 100 行ずつ掃除 | 期限は消費時に必ず判定するので、掃除が遅れても安全 |
 
+`states` の「無期限」は、**行そのものと、現役の単語・履歴・学習状態**を休眠を理由に消さないという意味である。
+行の中のゴミ箱（30 日）と削除記録（最長 90 日）は、利用者に伝えている期限どおりに掃除してよい。
+いまは端末が次に保存・同期したときにだけ掃除されるので、休眠した行には期限切れ分が残る。
+これをサーバー側で掃除する処理は未実装（`docs/WORDBANK-RECONSTRUCTION-ROADMAP.md`）。入れるときも行は消さない。
+
 ## アカウントの削除と D1 の Time Travel（1.0.140 で追加）
 
 設計: `DESIGN-2026-10-21-account-recovery.md` §5.3。
