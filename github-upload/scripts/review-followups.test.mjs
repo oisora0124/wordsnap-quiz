@@ -397,3 +397,37 @@ test("サンプル単語帳の説明: レベルの目安が6サンプル分あ�
   assert.ok(sourceNote, "サンプルの収録方針が無い");
   assert.ok(sourceNote[1].includes("公式リストや過去問の集計でもありません"));
 });
+
+// ============================================================================
+// 9. 初回導線と設定の先頭
+// ============================================================================
+test("初回導線と設定の先頭: 復元・サンプル・コード状態の案内を短く前へ出す", () => {
+  assert.match(html, /<div id="settingsCodeStatus" class="settings-code-status" hidden>/);
+  const codeStatus = extractFunction("renderSettingsCodeStatus");
+  assert.match(codeStatus, /isV2Native/);
+  assert.match(codeStatus, /isV2CodeSavedFor/);
+  assert.match(codeStatus, /shouldPromptVaultKeyBackup/);
+  assert.match(extractFunction("renderV2RecoveryNotice"), /renderSettingsCodeStatus\(identity\);/);
+  assert.match(extractFunction("shouldPromptV2CodeBackup"), /appState\?\.words\?\.length > 0/);
+
+  const recoveryPrompt = html.match(/<div id="recoveryPromptText">([\s\S]*?)<\/div>/)?.[1];
+  assert.ok(recoveryPrompt, "復元案内が無い");
+  assert.match(recoveryPrompt, /<details class="recovery-prompt-more">/);
+  const moreEnd = recoveryPrompt.indexOf("</details>");
+  const reverseWarning = recoveryPrompt.indexOf("この端末の新しいコードを別端末に入れる（逆向き）と");
+  assert.ok(moreEnd >= 0, "戻し方の折りたたみが閉じていない");
+  assert.ok(reverseWarning > moreEnd, "逆向きの警告は折りたたみの外で見える");
+
+  assert.match(html, /<p id="importFirstRunHint" class="settings-desc" hidden>/);
+  assert.match(extractFunction("syncImportFirstRunHint"), /firstRunSampleState === "idle"/);
+  // 復元で単語が戻ったら、自動で開いた分を閉じる
+  assert.match(extractFunction("syncImportFirstRunHint"), /firstRunSampleState === "opened"[\s\S]*?sampleDetails\.open = false/);
+  // ダイアログ内の折りたたみにキーボードで届く
+  assert.match(html, /const DIALOG_FOCUSABLE_SELECTOR =[\s\S]{0,200}summary,/);
+  assert.match(extractFunction("renderAll"), /syncImportFirstRunHint\(\);/);
+
+  const legacyMore = html.match(/<details class="sync-detail-more" data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">([\s\S]*?)<\/details>/);
+  assert.ok(legacyMore, "旧方式の詳しい説明が無い");
+  assert.match(legacyMore[1], /別の保存先を新しく作る場合は/);
+  assert.match(legacyMore[1], /「新方式へ移行」は引き継ぎ方法を追加する操作で/);
+});

@@ -690,3 +690,51 @@ test("帯: 個人リンクを持つ人・単語が無い人には出さない", 
     assert.equal(context.elements.v2BackupStrip.hidden, true, name);
   }
 });
+
+// ---- 設定タブの先頭: 引き継ぎコードを控えたかどうかを 1 行で出す（1.0.146） ----
+function withSettingsCodeStatus(context) {
+  context.elements.settingsCodeStatus = { hidden: true };
+  context.elements.settingsCodeStatusText = { textContent: "" };
+  context.elements.settingsCodeStatusButton = { textContent: "" };
+  context.renderV2RecoveryNotice();
+  return context.elements;
+}
+
+test("設定の先頭: 新方式で未控えなら促し、控えたら控え済みになる", () => {
+  const { context } = makeRecoveryUx({ identity: NATIVE, words: 3, verifiedSyncTarget: ROOM_A });
+  const el = withSettingsCodeStatus(context);
+  assert.equal(el.settingsCodeStatus.hidden, false);
+  assert.match(el.settingsCodeStatusText.textContent, /まだ控えていません/);
+  assert.equal(el.settingsCodeStatusButton.textContent, "今すぐ控える");
+  context.markV2CodeSavedFor(ROOM_A);
+  assert.match(el.settingsCodeStatusText.textContent, /控え済み/);
+  assert.equal(el.settingsCodeStatusButton.textContent, "コードを確認");
+});
+
+test("設定の先頭: 単語が 0 件でも状態は出す（上部の警告帯は従来どおり出さない）", () => {
+  const { context } = makeRecoveryUx({ identity: NATIVE, words: 0 });
+  const el = withSettingsCodeStatus(context);
+  assert.equal(el.settingsCodeStatus.hidden, false);
+  assert.match(el.settingsCodeStatusText.textContent, /まだ控えていません/);
+  assert.equal(el.v2BackupStrip.hidden, true);
+});
+
+test("設定の先頭: 個人リンクを持つ人（旧方式・移行済み）には出さない", () => {
+  for (const [name, identity] of [["legacy", LEGACY], ["upgrade済みV2", UPGRADED]]) {
+    const { context } = makeRecoveryUx({ identity, words: 50, verifiedSyncTarget: ROOM_A });
+    assert.equal(withSettingsCodeStatus(context).settingsCodeStatus.hidden, true, name);
+  }
+});
+
+test("設定の先頭: 金庫鍵を発行して控えが古くなったら、控え済みと表示しない", () => {
+  const { context } = makeRecoveryUx({
+    identity: NATIVE,
+    words: 3,
+    verifiedSyncTarget: ROOM_A,
+    stored: JSON.stringify([ROOM_A]),
+    activeCredential: { roomId: ROOM_A, vaultKey: "k".repeat(43) },
+  });
+  const el = withSettingsCodeStatus(context);
+  assert.equal(context.shouldPromptVaultKeyBackup(), true);
+  assert.match(el.settingsCodeStatusText.textContent, /まだ控えていません/);
+});
