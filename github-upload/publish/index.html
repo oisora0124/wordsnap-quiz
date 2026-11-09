@@ -7307,7 +7307,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.146</span>
+        <span class="app-footer-version">バージョン 1.0.147</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7492,7 +7492,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.146";
+  const APP_REV = "1.0.147";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -18458,6 +18458,10 @@ const dirtyPanels = new Set();
 const SAVED_LIST_PAGE_SIZE = 100;
 // 案2: 現在DOM化する上限件数（検索・並び替え・フィルタ・単語帳が変わると先頭に戻す）
 let savedListVisibleCount = SAVED_LIST_PAGE_SIZE;
+// 確認画面（手順 2）で一度に DOM 化する候補の件数。超えた分は「さらに表示」で足す。
+// 候補ごとに入力欄が 2 つあるので、1500 候補を一度に描くと入力欄が 3000 個になる。
+const CANDIDATE_PAGE_SIZE = 200;
+let candidateVisibleCount = CANDIDATE_PAGE_SIZE;
 // 番号ジャンプ時に表示する100件窓の先頭（0始まり）。通常は0で「さらに表示」を維持する。
 let savedListWindowStart = 0;
 // 案2: ページングを先頭に戻すべきか判定するための「表示条件」の合成キー
@@ -29210,7 +29214,8 @@ function renderCandidates(options = {}) {
 
   elements.candidateList.className = "word-list";
   elements.candidateList.innerHTML = "";
-  candidates.forEach((candidate, index) => {
+  const shown = Math.min(candidates.length, candidateVisibleCount);
+  candidates.slice(0, shown).forEach((candidate, index) => {
     // 「候補1」「候補2」…と番号で固有化する（見出し語は入力中に変わりうるため、
     // 混乱しないよう番号ベースで一貫させる）。role="group" でひとまとまりとして
     // 読み上げられるようにし、見出しテキストは視覚的には隠す。
@@ -29235,6 +29240,18 @@ function renderCandidates(options = {}) {
     `;
     elements.candidateList.append(row);
   });
+
+  if (shown < candidates.length) {
+    const more = document.createElement("div");
+    more.className = "word-list-more";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.setAttribute("data-show-more-candidates", "true");
+    button.textContent = `さらに表示（残り${candidates.length - shown}件）`;
+    more.append(button);
+    elements.candidateList.append(more);
+  }
 
   resolveCefrBadges(elements.candidateList);
 }
@@ -37932,6 +37949,7 @@ elements.parseButton.addEventListener("click", () => {
     (elements.saveDeckSelect && elements.saveDeckSelect.value) || appState.decks[0]?.id;
   const result = parseVocabulary(elements.ocrText.value, targetDeckId);
   candidates = result.candidates;
+  candidateVisibleCount = CANDIDATE_PAGE_SIZE;
   // 候補タブを dirty にして、タブ切替時に一度だけ描画する。
   // 先に描画してから setActiveStep() でも描画すると、大量入力時に二重構築になる。
   dirtyPanels.add("candidates");
@@ -38000,6 +38018,16 @@ elements.candidateList.addEventListener("input", (event) => {
 });
 
 elements.candidateList.addEventListener("click", (event) => {
+  const moreButton = event.target.closest("[data-show-more-candidates]");
+  if (moreButton) {
+    const firstNewIndex = candidateVisibleCount;
+    candidateVisibleCount += CANDIDATE_PAGE_SIZE;
+    renderCandidates({ force: true });
+    // 押したボタンがあった位置に出た先頭の候補へフォーカスを引き継ぐ。
+    elements.candidateList.querySelector(`[data-index="${firstNewIndex}"][data-field="term"]`)?.focus();
+    return;
+  }
+
   const removeButton = event.target.closest("[data-remove]");
   if (!removeButton) return;
   const index = Number(removeButton.dataset.remove);
@@ -39667,6 +39695,7 @@ elements.clearAllButton.addEventListener("click", () => {
   appState.deletions = deletions;
   appState.trash = sanitizeTrash(trash, deletedAt);
   candidates = [];
+  candidateVisibleCount = CANDIDATE_PAGE_SIZE;
   clearAutoNextTimer();
   clearSavedReviewProgress();
   reviewSession = null;
