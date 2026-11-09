@@ -2696,6 +2696,22 @@ textarea:focus-visible {
   padding-left: 1.2em;
 }
 
+.settings-code-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.settings-code-status p {
+  flex: 1 1 12rem;
+  margin: 0;
+}
+
 .deck-tab:hover {
   color: var(--ink);
   background: var(--surface-3);
@@ -6269,7 +6285,8 @@ accurate 正確な"
         </div>
         <!-- サンプル単語集：タブ型チップ。押すと下の入力欄の末尾に追記される -->
         <!-- 折りたたみ：普段は1行だけ。開くとレベル別のチップが現れる -->
-        <details class="sample-details">
+        <p id="importFirstRunHint" class="settings-desc" hidden>🔰 はじめての方へ：下のサンプル単語帳から 1 つ選び、「単語リストに変換」を押すと、確認 → 保存 → クイズへ進めます。</p>
+        <details id="sampleDetails" class="sample-details">
           <summary>📚 サンプル単語帳を追加</summary>
           <div class="sample-chips" role="group" aria-label="サンプル単語集を追加">
             <button class="sample-chip" type="button" data-sample="jhs1500">中学基礎1500</button>
@@ -6710,6 +6727,11 @@ accurate 正確な"
           <span class="pill subtle">この端末に保存</span>
         </div>
 
+        <div id="settingsCodeStatus" class="settings-code-status" hidden>
+          <p id="settingsCodeStatusText" role="status"></p>
+          <button id="settingsCodeStatusButton" class="secondary" type="button">コードを確認</button>
+        </div>
+
         <div class="settings-accordion">
           <h3 class="settings-group-title">学習</h3>
 
@@ -6942,13 +6964,16 @@ accurate 正確な"
                   <p data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
                     今の個人キーのデータをそのまま引き継ぎコード方式へ移行できます（移行後も個人リンクはそのまま使えます）。
                   </p>
-                  <p data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
-                    別の保存先を新しく作る場合は「新方式（V2）で発行」。発行するとこの端末は新しい保存先へ切り替わり、個人リンクへの保存は止まります。
-                  </p>
-                  <p data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
-                    「新方式へ移行」は引き継ぎ方法を追加する操作で、漏れた個人キーを無効化するものではありません。
-                    個人キーを知られた可能性がある場合は、下の「旧方式（個人キー・個人リンク）の操作」にある「新しい個人キーを発行」を使ってください。
-                  </p>
+                  <details class="sync-detail-more" data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
+                    <summary>詳しく（別の保存先を作る場合・個人キーが漏れた場合）</summary>
+                    <p data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
+                      別の保存先を新しく作る場合は「新方式（V2）で発行」。発行するとこの端末は新しい保存先へ切り替わり、個人リンクへの保存は止まります。
+                    </p>
+                    <p data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
+                      「新方式へ移行」は引き継ぎ方法を追加する操作で、漏れた個人キーを無効化するものではありません。
+                      個人キーを知られた可能性がある場合は、下の「旧方式（個人キー・個人リンク）の操作」にある「新しい個人キーを発行」を使ってください。
+                    </p>
+                  </details>
                   <div class="sync-v2-actions" data-sync-identity-ui="legacy" data-sync-v2-state="unmigrated">
                     <button id="syncV2UpgradeButton" class="secondary" type="button">新方式へ移行</button>
                     <button id="syncV2CreateButton" class="ghost" type="button">新方式（V2）で発行</button>
@@ -7282,7 +7307,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.145</span>
+        <span class="app-footer-version">バージョン 1.0.146</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7328,15 +7353,23 @@ accurate 正確な"
           <h2 id="recoveryPromptTitle">以前にWordBankを使っていましたか？</h2>
           <div id="recoveryPromptText">
             <p>
-              この端末には保存された単語がありません。以前使っていたのに単語が見当たらない場合、
-              端末側の保存が消えた可能性があります。
-              <strong>データ自体はサーバーに残っていることが多く、次のどれかで戻せます。</strong>
+              <strong>初めての方は「新しく始める」を選んでください。</strong>サンプル単語帳ですぐにクイズを試せます。
             </p>
-            <ul class="recovery-prompt-list">
-              <li><strong>引き継ぎコード</strong>を控えている（テキスト・JSON・iPhoneのパスワード）→「コードで復元」から貼り付けるか、入力欄でパスワードの自動入力を使います。</li>
-              <li><strong>同期していた別の端末</strong>がある → その端末の設定で引き継ぎコードを表示し、この端末に入力します。<strong>逆向き（この端末の新しいコードを別端末に入れる）は、別端末の単語も消えるのでしないでください。</strong></li>
-              <li><strong>個人リンク</strong>（…?w=… のURL）をブックマーク等に残している → そのリンクを開き直します。</li>
-            </ul>
+            <p>
+              以前使っていたのに単語が見当たらない場合は、端末側の保存が消えた可能性があります。
+              データ自体はサーバーに残っていることが多く、「コードで復元」などで戻せます。
+            </p>
+            <details class="recovery-prompt-more">
+              <summary>戻し方を詳しく見る</summary>
+              <ul class="recovery-prompt-list">
+                <li><strong>引き継ぎコード</strong>を控えている（テキスト・JSON・iPhoneのパスワード）→「コードで復元」から貼り付けるか、入力欄でパスワードの自動入力を使います。</li>
+                <li><strong>同期していた別の端末</strong>がある → その端末の設定で引き継ぎコードを表示し、この端末に入力します。</li>
+                <li><strong>個人リンク</strong>（…?w=… のURL）をブックマーク等に残している → そのリンクを開き直します。</li>
+              </ul>
+            </details>
+            <p>
+              <strong>別の端末に単語が残っている方へ：この端末の新しいコードを別端末に入れる（逆向き）と、別端末の単語も消えるので、しないでください。</strong>
+            </p>
             <p class="v2-announce-note">
               「新しく始める」を選んでも、サーバー側の以前のデータは消えません。
               あとからでも設定の「データの保存・引き継ぎ」で復元できます。
@@ -7459,7 +7492,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.145";
+  const APP_REV = "1.0.146";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
@@ -18095,6 +18128,8 @@ const elements = {
   importClearButton: document.querySelector("#importClearButton"),
   ocrText: document.querySelector("#ocrText"),
   parseButton: document.querySelector("#parseButton"),
+  importFirstRunHint: document.querySelector("#importFirstRunHint"),
+  sampleDetails: document.querySelector("#sampleDetails"),
   saveParsedButton: document.querySelector("#saveParsedButton"),
   saveDeckSelect: document.querySelector("#saveDeckSelect"),
   candidateList: document.querySelector("#candidateList"),
@@ -18260,6 +18295,9 @@ const elements = {
   syncV2ShowCodeButton: document.querySelector("#syncV2ShowCodeButton"),
   v2BackupStrip: document.querySelector("#v2BackupStrip"),
   v2BackupStripButton: document.querySelector("#v2BackupStripButton"),
+  settingsCodeStatus: document.querySelector("#settingsCodeStatus"),
+  settingsCodeStatusText: document.querySelector("#settingsCodeStatusText"),
+  settingsCodeStatusButton: document.querySelector("#settingsCodeStatusButton"),
   recoveryPromptBackdrop: document.querySelector("#recoveryPromptBackdrop"),
   recoveryPromptDialog: document.querySelector("#recoveryPromptDialog"),
   recoveryPromptRestoreButton: document.querySelector("#recoveryPromptRestoreButton"),
@@ -19460,7 +19498,7 @@ function renderTutorialStep() {
 // 対象をその都度DOMから引くので、ダイアログにボタンを足しても自動で追従する。
 const DIALOG_FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),' +
-  ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  ' textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
 function dialogFocusables(dialog) {
   if (!dialog?.querySelectorAll) return [];
@@ -19687,6 +19725,8 @@ function openSyncV2Section() {
   elements.syncV2Section?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 }
 elements.v2BackupStripButton?.addEventListener("click", openSyncV2Section);
+
+elements.settingsCodeStatusButton?.addEventListener("click", openSyncV2Section);
 
 // 引き継ぎコードを控えていない間だけ、設定タブ以外の上部に帯を出す
 function syncV2BackupStripVisibility() {
@@ -21794,6 +21834,24 @@ function shouldPromptVaultKeyBackup() {
   return !isV2CodeSavedFor(credential);
 }
 
+// 設定タブの先頭に、引き継ぎコードを控えたかどうかを 1 行で出す（新方式の利用者だけ）。
+// renderV2RecoveryNotice と同じ範囲に置く（scripts/sync-v2-recovery-ux.test.mjs がこの範囲を切り出して実行する）。
+function renderSettingsCodeStatus(identity = syncRequestRoute()) {
+  const box = elements.settingsCodeStatus;
+  if (!box) return;
+  const show = Boolean(identity?.isV2Native && identity.roomId);
+  box.hidden = !show;
+  if (!show) return;
+  const protectedByPasskey = typeof passkeyLinkProtects === "function" && passkeyLinkProtects(identity.roomId);
+  const saved = !shouldPromptVaultKeyBackup() && (isV2CodeSavedFor(identity.roomId) || protectedByPasskey);
+  const text = saved
+    ? "✅ 引き継ぎコードは控え済みです。"
+    : "⚠️ 引き継ぎコードをまだ控えていません。控えておくと、端末の保存が消えても単語を戻せます。";
+  // role="status" なので、文言が変わるときだけ書き換える（定期的な再描画で同じ文を読み上げさせない）。
+  if (elements.settingsCodeStatusText.textContent !== text) elements.settingsCodeStatusText.textContent = text;
+  elements.settingsCodeStatusButton.textContent = saved ? "コードを確認" : "今すぐ控える";
+}
+
 function renderV2RecoveryNotice(identity = syncRequestRoute()) {
   const notice = elements.syncV2RecoveryNotice;
   const vaultNotice = elements.syncV2VaultNotice;
@@ -21805,6 +21863,7 @@ function renderV2RecoveryNotice(identity = syncRequestRoute()) {
   const card = elements.syncV2NoticeCard;
   if (card) card.hidden = !(prompt || vaultPrompt);
   syncV2BackupStripVisibility();
+  renderSettingsCodeStatus(identity);
   if (elements.syncV2NoticeHeadline && (prompt || vaultPrompt)) {
     const strong = document.createElement("strong");
     let tail;
@@ -36245,7 +36304,25 @@ function gradeQuiz(choiceId, dontKnow = false, options = {}) {
 // 非表示パネルは dirty（要再描画）として記録し、タブ切替時（setActiveStep）に描画する。
 // データが変わる場所（saveState・同期反映など）は従来どおり renderAll() を呼べばよく、
 // 「どのタブへ移っても最新の内容が見える」ことは dirty フラグが保証する。
+// 単語が 0 件の間は、取り込み画面でサンプル単語帳を前面に出す。開くのは最初の 1 回だけ（利用者が閉じたら従う）。
+// 起動直後は端末内の復元より先に描画が走るので、復元待ちの既存利用者でも一度 0 件に見える。
+// 単語が入ったら、こちらで開いた分は閉じる（"idle" → "opened" → "done"。"done" の後は触らない）。
+let firstRunSampleState = "idle";
+function syncImportFirstRunHint() {
+  const empty = !(appState?.words?.length > 0);
+  if (elements.importFirstRunHint) elements.importFirstRunHint.hidden = !empty;
+  if (!elements.sampleDetails) return;
+  if (empty && firstRunSampleState === "idle") {
+    firstRunSampleState = "opened";
+    elements.sampleDetails.open = true;
+  } else if (!empty && firstRunSampleState === "opened") {
+    firstRunSampleState = "done";
+    elements.sampleDetails.open = false;
+  }
+}
+
 function renderAll() {
+  syncImportFirstRunHint();
   // 共通・軽量: ヘッダーの🔥ピル、複数パネルにまたがる単語帳UI（保存先セレクト・
   // デッキバー・出題スコープ・内訳）、クイズ設定の単語帳セレクト。
   // populateQuizDeckSelect は起動直後の restoreLastQuizSettings が選択肢に依存する
