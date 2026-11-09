@@ -39,7 +39,7 @@ const ROLES = {
   // 利用上限を早く使い切らないよう、予備は同じ格の旧世代にとどめ、重い gpt-6-astra は自動では選ばない。
   worker_default: ["gpt-6-luna", "gpt-5.6-luna"], // 主力実装・整形・量産（GPT-6 世代に Terra は無いので Luna が担う）
   worker_hard: ["gpt-6-sol", "gpt-5.6-sol"], // 技術難所の実装
-  reviewer: ["gpt-6-sol", "gpt-5.6-sol"], // 差分レビュー（別モデルで反証）
+  reviewer: ["gpt-6.1-sol", "gpt-6-sol"], // 差分レビュー（別モデルで反証）。第一候補は gpt-6.1-sol、予備は gpt-6-sol
   orchestrator: ["gpt-6-sol", "gpt-5.6-sol"], // 直接処理する場合の旗艦
   bulk: ["gpt-6-luna", "gpt-5.6-luna"], // 高ボリューム・cost-sensitive
 };
@@ -122,7 +122,7 @@ function routeModels(mode, t) {
     case "C":
     {
       // 比較の審査は最上位（レビュアーの第一候補）が担い、独立案は作成者と別モデルになるよう残りから出す。
-      // 案出しは「主力1体＋上位の予備1体」。世代の違う2案になり、比較の独立性も保てる。
+      // 案出しは「主力1体＋上位1体」。互いに別モデルで、レビュアーとも分ける。
       const reviewer = pickOr(ROLES.reviewer, "reviewer").slice(0, 1);
       const main = pickOr(ROLES.worker_default, "worker", reviewer).slice(0, 1);
       const hard = pickOr(ROLES.worker_hard, "worker", [...reviewer, ...main]).slice(0, 1);
