@@ -382,3 +382,18 @@ test("個人リンクをコピー: 秘密を扱う操作の見た目で、渡し
   // 同じ並びの「今すぐ読み込む」（安全な操作）は主ボタン相当のままにしない＝secondary のまま
   assert.match(html, /<button id="syncPullButton" class="secondary"/);
 });
+
+// ============================================================================
+// 8. サンプル単語帳の説明
+// ============================================================================
+test("サンプル単語帳の説明: レベルの目安が6サンプル分あり、収録方針を明記する", () => {
+  const levelList = html.match(/<ul class="settings-desc sample-level-list"[^>]*>([\s\S]*?)<\/ul>/);
+  assert.ok(levelList, "サンプルのレベル説明が無い");
+  const levelItems = levelList[1].match(/<li>/g) || [];
+  const sampleButtons = html.match(/<button\b[^>]*data-sample=/g) || [];
+  assert.equal(levelItems.length, 6);
+  assert.equal(levelItems.length, sampleButtons.length);
+  const sourceNote = html.match(/<p class="settings-desc sample-source-note">([^<]*)<\/p>/);
+  assert.ok(sourceNote, "サンプルの収録方針が無い");
+  assert.ok(sourceNote[1].includes("公式リストや過去問の集計でもありません"));
+});
