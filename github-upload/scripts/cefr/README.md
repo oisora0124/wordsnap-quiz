@@ -74,3 +74,8 @@ CEFRは実行時に Datamuse の `md=f`（使用頻度）を1語ずつ引き、`
 `queueMetadataPrefetch()` に保存済み全語を直接渡してはいけない。全語を対象に
 できるのは `startPrefetchAllIfEnabled()` の中だけで、そこで設定を確かめている。
 `scripts/check-release.mjs` がこの呼び分けを検査する。
+
+## サンプルを入れ替えたとき
+
+取り込み画面のサンプル説明（`sample-level-list`）に、各サンプルの推定レベルの中心帯の割合を書いている（1.0.145）。
+サンプルを増やしたり入れ替えたりしたら、この割合も `BUILTIN_LEVEL_GROUPS` で測り直して文言を直す。

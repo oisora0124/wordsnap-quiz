@@ -2691,6 +2691,11 @@ textarea:focus-visible {
   border-color: var(--action-bg);
 }
 
+.sample-level-list {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.2em;
+}
+
 .deck-tab:hover {
   color: var(--ink);
   background: var(--surface-3);
@@ -6274,7 +6279,15 @@ accurate 正確な"
             <button class="sample-chip" type="button" data-sample="toeic1500">TOEIC頻出1500</button>
             <button class="sample-chip" type="button" data-sample="ielts1500">IELTS頻出1500</button>
           </div>
-          <p class="settings-desc sample-source-note">これらの単語集は WordBank が独自に選定したもので、特定の教材や市販単語帳の転載ではありません。訳語は一般的な語義を短くまとめたもので、文脈により異なる訳になることがあります。</p>
+          <ul class="settings-desc sample-level-list" aria-label="各サンプルのレベルの目安">
+            <li><strong>中学基礎</strong>：中学校の教科書レベルを想定した基本の語。推定レベルは A1〜B1 が約8割。</li>
+            <li><strong>大学受験標準</strong>：大学入試の標準レベルを想定。A2〜B2 が約9割。</li>
+            <li><strong>英検準1級</strong>：英検準1級レベルを想定した、やや硬い語。B2〜C1 が約7割。</li>
+            <li><strong>早慶レベル</strong>：難関大の長文を想定した難しめの語。C1〜C2 が約8割。</li>
+            <li><strong>TOEIC頻出</strong>：仕事やオフィスの場面の語が中心。A2〜B2 が約8割。</li>
+            <li><strong>IELTS頻出</strong>：学術的な文章の語が中心。A2〜B2 が約8割。</li>
+          </ul>
+          <p class="settings-desc sample-source-note">これらの単語集は WordBank が独自に選定したもので、特定の教材や市販単語帳の転載ではありません。試験の公式リストや過去問の集計でもありません。どれも 1500 語で、1 語につき短い訳を 1 つだけ載せています（熟語・例文・音声・派生語は入っていません）。レベル（A1〜C2）は単語の使われる頻度からアプリが推定した目安です。訳語は一般的な語義を短くまとめたもので、文脈により異なる訳になることがあります。</p>
         </details>
         <p id="status" class="status" role="status">単語と訳を貼り付けるか、写真を端末内OCRで読み取れます（1行に「英単語 意味」）。</p>
         <!-- 変換結果が「すべて保存済み」だったときだけ表示する導線。次の変換操作で自動的に消える。 -->
@@ -7269,7 +7282,7 @@ accurate 正確な"
       </section>
       <footer class="app-footer" aria-label="アプリ情報">
         <span>WordBank</span>
-        <span class="app-footer-version">バージョン 1.0.144</span>
+        <span class="app-footer-version">バージョン 1.0.145</span>
         <span class="app-footer-note">
           ここが古い版のときは、アプリを一度終了して開き直すと最新になります。
         </span>
@@ -7446,7 +7459,7 @@ const WordBankTelemetry = (() => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   // フッターの表示バージョンと必ず同じ値にする（check-release.mjs が一致を強制）。
   // 利用者が「バージョン 1.0.74」と伝えてきたら、そのまま telemetry.app_rev で絞り込める。
-  const APP_REV = "1.0.144";
+  const APP_REV = "1.0.145";
   const USAGE_NAMES = new Set([
     "quiz-answer",
     "flashcard-answer",
