@@ -431,3 +431,17 @@ test("初回導線と設定の先頭: 復元・サンプル・コード状態の
   assert.match(legacyMore[1], /別の保存先を新しく作る場合は/);
   assert.match(legacyMore[1], /「新方式へ移行」は引き継ぎ方法を追加する操作で/);
 });
+
+// ============================================================================
+// 10. 確認画面の段階表示
+// ============================================================================
+test("確認画面の段階表示: 200件ずつ描画し、さらに表示後は次の候補へフォーカスする", () => {
+  assert.match(html, /const CANDIDATE_PAGE_SIZE = 200;/);
+  const render = extractFunction("renderCandidates");
+  assert.match(render, /candidateVisibleCount/);
+  assert.match(render, /data-show-more-candidates/);
+  assert.match(render, /aria-label="候補\$\{n\} の単語"/);
+
+  assert.match(html, /candidateVisibleCount \+= CANDIDATE_PAGE_SIZE;[\s\S]*?renderCandidates\(\{ force: true \}\);/);
+  assert.match(html, /candidates = result\.candidates;\s*candidateVisibleCount = CANDIDATE_PAGE_SIZE;/);
+});
